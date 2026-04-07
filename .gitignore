@@ -7,3 +7,11 @@ PRD.md
 
 # Claude Code workspace
 .claude/
+
+# Build artifacts
+/bin/
+*.test
+*.out
+coverage.txt
+dist/
+

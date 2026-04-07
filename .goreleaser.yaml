@@ -1,0 +1,141 @@
+# goreleaser config for helmdeck — see ADR 002, ADR 030, T102.
+#
+# Builds two binaries (control-plane, helmdeck-mcp) for the standard
+# desktop/server matrix, signs everything with cosign keyless OIDC, and
+# publishes a multi-arch OCI image of the bridge to ghcr.io. The control
+# plane image is built separately by Dockerfile + buildx in T104; this
+# config focuses on the binaries and the bridge image which together
+# back the v0.3 release (ADR 030).
+version: 2
+
+project_name: helmdeck
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: control-plane
+    main: ./cmd/control-plane
+    binary: control-plane
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+    goos:    [linux, darwin]
+    goarch:  [amd64, arm64]
+
+  - id: helmdeck-mcp
+    main: ./cmd/helmdeck-mcp
+    binary: helmdeck-mcp
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+    goos:    [linux, darwin, windows]
+    goarch:  [amd64, arm64]
+
+archives:
+  - id: control-plane
+    ids: [control-plane]
+    name_template: "control-plane_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+  - id: helmdeck-mcp
+    ids: [helmdeck-mcp]
+    name_template: "helmdeck-mcp_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^chore:'
+      - '^test:'
+
+dockers:
+  - id: helmdeck-mcp-amd64
+    ids: [helmdeck-mcp]
+    image_templates:
+      - "ghcr.io/tosin2013/helmdeck-mcp:{{ .Version }}-amd64"
+      - "ghcr.io/tosin2013/helmdeck-mcp:latest-amd64"
+    use: buildx
+    dockerfile: deploy/docker/helmdeck-mcp.Dockerfile
+    goos: linux
+    goarch: amd64
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.source=https://github.com/tosin2013/helmdeck"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+
+  - id: helmdeck-mcp-arm64
+    ids: [helmdeck-mcp]
+    image_templates:
+      - "ghcr.io/tosin2013/helmdeck-mcp:{{ .Version }}-arm64"
+      - "ghcr.io/tosin2013/helmdeck-mcp:latest-arm64"
+    use: buildx
+    dockerfile: deploy/docker/helmdeck-mcp.Dockerfile
+    goos: linux
+    goarch: arm64
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.source=https://github.com/tosin2013/helmdeck"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+
+docker_manifests:
+  - name_template: "ghcr.io/tosin2013/helmdeck-mcp:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/tosin2013/helmdeck-mcp:{{ .Version }}-amd64"
+      - "ghcr.io/tosin2013/helmdeck-mcp:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/tosin2013/helmdeck-mcp:latest"
+    image_templates:
+      - "ghcr.io/tosin2013/helmdeck-mcp:latest-amd64"
+      - "ghcr.io/tosin2013/helmdeck-mcp:latest-arm64"
+
+signs:
+  - cmd: cosign
+    args:
+      - "sign-blob"
+      - "--yes"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+    artifacts: checksum
+
+docker_signs:
+  - cmd: cosign
+    args:
+      - "sign"
+      - "--yes"
+      - "${artifact}@${digest}"
+    artifacts: manifests
+
+release:
+  github:
+    owner: tosin2013
+    name: helmdeck
+  draft: false
+  prerelease: auto

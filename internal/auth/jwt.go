@@ -146,6 +146,30 @@ func FromContext(ctx context.Context) *Claims {
 	return c
 }
 
+// holder is a mutable carrier that lets outer middleware (audit) observe
+// claims that auth attached on the way in. Go contexts are immutable, so
+// we share a pointer to a struct instead.
+type holder struct{ claims *Claims }
+type holderKey struct{}
+
+// WithHolder seeds the request context with an empty claims holder. Outer
+// middleware that needs to know whether auth succeeded should call this
+// before delegating to the auth middleware, then read HolderFromContext
+// after the chain returns.
+func WithHolder(ctx context.Context) context.Context {
+	return context.WithValue(ctx, holderKey{}, &holder{})
+}
+
+// HolderFromContext returns the claims auth Middleware attached via the
+// holder, or nil if no holder was seeded or auth never ran.
+func HolderFromContext(ctx context.Context) *Claims {
+	h, _ := ctx.Value(holderKey{}).(*holder)
+	if h == nil {
+		return nil
+	}
+	return h.claims
+}
+
 // Middleware returns an http.Handler middleware that requires a valid
 // bearer token on requests whose path is matched by protectedPath. Paths
 // not matched by the predicate are passed through unchanged so /healthz
@@ -166,6 +190,9 @@ func Middleware(iss *Issuer, protectedPath func(path string) bool) func(http.Han
 			if err != nil {
 				writeUnauthorized(w, "invalid_token", err.Error())
 				return
+			}
+			if h, ok := r.Context().Value(holderKey{}).(*holder); ok {
+				h.claims = claims
 			}
 			ctx := context.WithValue(r.Context(), contextKey{}, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))

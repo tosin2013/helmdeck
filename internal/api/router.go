@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/tosin2013/helmdeck/internal/audit"
 	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/session"
 )
@@ -22,6 +23,7 @@ type Deps struct {
 	Version string
 	Runtime session.Runtime // optional; nil disables /api/v1/sessions
 	Issuer  *auth.Issuer    // optional; nil disables /api/v1/* JWT enforcement (dev mode)
+	Audit   audit.Writer    // optional; nil uses audit.Discard
 }
 
 // IsProtectedPath returns true for paths the auth middleware must guard.
@@ -47,10 +49,20 @@ func NewRouter(deps Deps) http.Handler {
 
 	registerSessionRoutes(mux, deps)
 
+	if deps.Audit == nil {
+		deps.Audit = audit.Discard{}
+	}
+
 	var handler http.Handler = mux
+	// Innermost: auth attaches claims (or rejects with 401).
 	if deps.Issuer != nil {
 		handler = auth.Middleware(deps.Issuer, IsProtectedPath)(handler)
 	}
+	// Outer: audit sees the final response code, including auth-rejected
+	// requests, so failed-auth attempts are part of the security trail.
+	// Successful requests still carry claims because auth runs first and
+	// the recorded handler chain populates the context before audit reads it.
+	handler = auditMiddleware(deps.Audit)(handler)
 	return logRequests(deps.Logger, handler)
 }
 

@@ -1,17 +1,31 @@
 // Package api wires HTTP handlers for the helmdeck control plane.
 //
-// This is the T101 skeleton: only /healthz and /version are live.
-// Real endpoints arrive in T105 (sessions), T106 (CDP), T107 (auth), and beyond.
+// T101 shipped /healthz and /version. T105 adds the /api/v1/sessions
+// surface backed by a [session.Runtime].
 package api
 
 import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+
+	"github.com/tosin2013/helmdeck/internal/session"
 )
 
+// Deps bundles the runtime dependencies the router needs. Passing them as
+// a struct (rather than positional args) keeps the router constructor
+// stable as new subsystems land in later phases.
+type Deps struct {
+	Logger  *slog.Logger
+	Version string
+	Runtime session.Runtime // optional; nil disables /api/v1/sessions
+}
+
 // NewRouter returns the top-level HTTP handler for the control plane.
-func NewRouter(logger *slog.Logger, version string) http.Handler {
+func NewRouter(deps Deps) http.Handler {
+	if deps.Logger == nil {
+		deps.Logger = slog.Default()
+	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -19,16 +33,25 @@ func NewRouter(logger *slog.Logger, version string) http.Handler {
 	})
 
 	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"version": version})
+		writeJSON(w, http.StatusOK, map[string]string{"version": deps.Version})
 	})
 
-	return logRequests(logger, mux)
+	registerSessionRoutes(mux, deps)
+
+	return logRequests(deps.Logger, mux)
 }
 
 func writeJSON(w http.ResponseWriter, code int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+func writeError(w http.ResponseWriter, code int, errCode, message string) {
+	writeJSON(w, code, map[string]string{
+		"error":   errCode,
+		"message": message,
+	})
 }
 
 func logRequests(logger *slog.Logger, next http.Handler) http.Handler {

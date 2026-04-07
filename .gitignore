@@ -1,0 +1,9 @@
+
+# Auto-generated MCP server context (added automatically)
+.mcp-server-context.md
+
+# Local PRD (input to ADR generation; not tracked)
+PRD.md
+
+# Claude Code workspace
+.claude/

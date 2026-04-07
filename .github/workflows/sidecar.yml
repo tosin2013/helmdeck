@@ -65,7 +65,13 @@ jobs:
         with:
           context: .
           file: deploy/docker/sidecar.Dockerfile
-          platforms: linux/amd64,linux/arm64
+          # arm64 deferred: Marp CLI ships an amd64-only Linux release tarball
+          # (marp-cli-v4.0.4-linux.tar.gz is x86_64) and the COPY-from-build
+          # stage stamps that binary onto every target arch, so the arm64 leg
+          # fails with "exec format error" at the chmod/--version sanity check.
+          # v0.2 will switch to npm-based Marp install which is multi-arch
+          # native; until then we publish amd64 only.
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

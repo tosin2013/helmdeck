@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
+	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/session"
 )
 
@@ -19,6 +21,13 @@ type Deps struct {
 	Logger  *slog.Logger
 	Version string
 	Runtime session.Runtime // optional; nil disables /api/v1/sessions
+	Issuer  *auth.Issuer    // optional; nil disables /api/v1/* JWT enforcement (dev mode)
+}
+
+// IsProtectedPath returns true for paths the auth middleware must guard.
+// Exported so tests and the control plane can share the same predicate.
+func IsProtectedPath(p string) bool {
+	return strings.HasPrefix(p, "/api/v1/") || strings.HasPrefix(p, "/v1/")
 }
 
 // NewRouter returns the top-level HTTP handler for the control plane.
@@ -38,7 +47,11 @@ func NewRouter(deps Deps) http.Handler {
 
 	registerSessionRoutes(mux, deps)
 
-	return logRequests(deps.Logger, mux)
+	var handler http.Handler = mux
+	if deps.Issuer != nil {
+		handler = auth.Middleware(deps.Issuer, IsProtectedPath)(handler)
+	}
+	return logRequests(deps.Logger, handler)
 }
 
 func writeJSON(w http.ResponseWriter, code int, body any) {

@@ -20,6 +20,7 @@ func newTestRouterWithFake(t *testing.T) (http.Handler, *fake.Runtime) {
 		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Version: "test",
 		Runtime: rt,
+		// Issuer left nil so existing handler tests don't need a token.
 	})
 	return h, rt
 }

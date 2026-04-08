@@ -258,12 +258,22 @@ func buildRepoPushScript(clonePath, remote, branch string, force bool) string {
 }
 
 // isSafeClonePath enforces the "agents can only reference clone paths
-// under /tmp or /home" rule. The git command path argument is shell-
-// quoted before injection so this isn't a defense-in-depth against
-// command injection — it's a defense against an LLM passing
-// /etc/passwd or /var/lib/garage as a clone_path and getting back
-// confusing errors. Both /tmp/helmdeck-clone-* and the future
-// /home/helmdeck/work/* paths are accepted.
+// the helmdeck packs created" rule. Accepts only the two prefixes
+// helmdeck packs ever produce:
+//
+//   /tmp/helmdeck-clone-*  — created by repo.fetch via mktemp
+//   /home/helmdeck/work/*  — designated workspace dir for future packs
+//
+// The git command path argument is shell-quoted before injection
+// so this isn't a defense-in-depth against command injection —
+// it's a defense against an LLM passing /etc/passwd or
+// /home/helmdeck/.ssh/id_rsa as a clone_path and getting back
+// confusing errors or unintended file access.
+//
+// Tightened in Phase 5.5 (fs.* pack set) — the previous version
+// accepted any /tmp/* or /home/* path, which is too loose for
+// fs.read/fs.write since those packs read arbitrary files inside
+// the clone path.
 func isSafeClonePath(p string) bool {
 	if !strings.HasPrefix(p, "/") {
 		return false
@@ -271,7 +281,8 @@ func isSafeClonePath(p string) bool {
 	if strings.Contains(p, "..") {
 		return false
 	}
-	return strings.HasPrefix(p, "/tmp/") || strings.HasPrefix(p, "/home/")
+	return strings.HasPrefix(p, "/tmp/helmdeck-") ||
+		strings.HasPrefix(p, "/home/helmdeck/work/")
 }
 
 // isNonFastForward sniffs git's stderr for the canonical "rejected

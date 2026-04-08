@@ -290,6 +290,20 @@ func main() {
 	if err := packReg.Register(builtin.HTTPFetch(vaultStore, egressGuard)); err != nil {
 		logger.Warn("register http.fetch pack failed", "err", err)
 	}
+	// Phase 5.5 fs/git/cmd pack set — the primitives that turn
+	// repo.fetch into a working code-edit loop.
+	for _, p := range []*packs.Pack{
+		builtin.FSRead(),
+		builtin.FSWrite(),
+		builtin.FSPatch(),
+		builtin.FSList(),
+		builtin.CmdRun(),
+		builtin.GitCommit(),
+	} {
+		if err := packReg.Register(p); err != nil {
+			logger.Warn("register fs/git pack failed", "pack", p.Name, "err", err)
+		}
+	}
 	// Language sidecar packs (Option B per-pack image override).
 	// Each pins its own SessionSpec.Image so the runtime spawns the
 	// right toolchain container without the rest of the pack catalog

@@ -91,6 +91,19 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 
 ---
 
+## Milestone: `v0.5.5 — Code Edit Loop` (Phase 5.5)
+**Target:** alongside Phase 5 · **Exit:** an LLM can `repo.fetch` → `fs.read` → `fs.patch` → `cmd.run go test` → `git.commit` → `repo.push` end-to-end
+
+- [x] **T550** Built-in pack: `fs.read` (read file from clone)
+- [x] **T551** Built-in pack: `fs.write` (write file to clone)
+- [x] **T552** Built-in pack: `fs.patch` (literal search-and-replace)
+- [x] **T553** Built-in pack: `fs.list` (find files under clone path)
+- [x] **T554** Built-in pack: `cmd.run` (run an arbitrary command in clone)
+- [x] **T555** Built-in pack: `git.commit` (stage + commit changes)
+- [x] **T556** `http.fetch` placeholder-token demo pack *(landed with T504)*
+
+---
+
 ## Milestone: `v0.6 — Management UI` (Phase 6)
 **Target:** Week 20 · **Exit:** operator authors+publishes a custom pack entirely in the UI
 

@@ -113,51 +113,60 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  npm-bridge:
-    name: Publish @helmdeck/mcp-bridge
-    # On tag push, wait for goreleaser so the release artifacts the
-    # postinstall script downloads exist before users can `npm install`.
-    # On manual dispatch, run independently — the dry-run path doesn't
-    # need real artifacts, and a real pre-release publish under the
-    # `next` dist-tag is decoupled from the binary release flow.
-    needs: ${{ github.event_name == 'push' && fromJSON('["goreleaser"]') || fromJSON('[]') }}
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+  # Tag-push path: publish @helmdeck/mcp-bridge to `latest` after the
+  # goreleaser job has uploaded the binary tarballs the postinstall
+  # script will fetch. Provenance attestation is enabled.
+  npm-bridge-release:
+    name: Publish @helmdeck/mcp-bridge (release)
+    if: github.event_name == 'push'
+    needs: goreleaser
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-
-      - name: Resolve target version
-        id: ver
+      - name: Pin package version to release tag
+        working-directory: npm
+        env:
+          VERSION: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          fi
+          node -e "const fs=require('fs');const p=require('./package.json');p.version=process.env.VERSION.replace(/^v/,'');fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
+      - name: Publish to npm
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
 
+  # Manual-dispatch path: dry-run by default to validate the token,
+  # org permission, and package contents without shipping. Set
+  # npm_dry_run=false to publish a pre-release under the chosen
+  # dist-tag (defaults to `next` so `latest` is unaffected). This job
+  # is decoupled from goreleaser — the dry-run doesn't need release
+  # artifacts, and pre-release npm publishes are validated independently.
+  npm-bridge-manual:
+    name: Publish @helmdeck/mcp-bridge (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
       - name: Pin package version
         working-directory: npm
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ inputs.version }}
         run: |
           node -e "const fs=require('fs');const p=require('./package.json');p.version=process.env.VERSION;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
-
       - name: Publish to npm
         working-directory: npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # Tag-push: real publish to `latest`, with provenance, after goreleaser.
-          # workflow_dispatch + npm_dry_run=true: --dry-run, no token side effects.
-          # workflow_dispatch + npm_dry_run=false: real publish under the chosen dist-tag.
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            npm publish --provenance --access public
-          elif [[ "${{ inputs.npm_dry_run }}" == "true" ]]; then
+          if [[ "${{ inputs.npm_dry_run }}" == "true" ]]; then
             npm publish --dry-run --access public
           else
             npm publish --provenance --access public --tag "${{ inputs.npm_dist_tag }}"

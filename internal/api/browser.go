@@ -7,9 +7,25 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/cdp"
+	"github.com/tosin2013/helmdeck/internal/inject"
 	"github.com/tosin2013/helmdeck/internal/session"
+	"github.com/tosin2013/helmdeck/internal/vault"
 )
+
+// actorFromRequest pulls the JWT subject + client claims out of the
+// request context for vault ACL checks. Returns a zero Actor when
+// auth is disabled (dev mode); the vault treats that as an empty
+// subject which matches no ACL rows, so credential injection
+// silently no-ops in dev unless a wildcard grant exists.
+func actorFromRequest(r *http.Request) vault.Actor {
+	claims := auth.FromContext(r.Context())
+	if claims == nil {
+		return vault.Actor{}
+	}
+	return vault.Actor{Subject: claims.Subject, Client: claims.Client}
+}
 
 // CDPClientFactory owns the lifecycle of cdp.Client instances for browser
 // sessions. Each session gets exactly one chromedp client that survives
@@ -155,10 +171,46 @@ func registerBrowserRoutes(mux *http.ServeMux, deps Deps) {
 			return
 		}
 		withClient(w, r, req.SessionID, func(c cdp.Client) error {
+			// T503: vault credential injection. For cookie credentials,
+			// install BEFORE navigate so the first request carries the
+			// session. For login credentials, the injector waits until
+			// after navigate (handled in the post-navigate branch
+			// below). The injector is a no-op when no Injector is
+			// wired or no credential matches.
+			actor := actorFromRequest(r)
+			var preResult inject.Result
+			if deps.Injector != nil {
+				var ierr error
+				preResult, ierr = deps.Injector.Inject(r.Context(), c, req.URL, actor)
+				if ierr != nil {
+					return ierr
+				}
+			}
 			if err := c.Navigate(r.Context(), req.URL); err != nil {
 				return err
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": req.URL})
+			// Post-navigate: login credentials need the page DOM to
+			// exist before AutofillForm runs. Re-invoke the injector;
+			// vault.Resolve is cheap (single SQL query) and we get
+			// the right action ordering for both credential types
+			// without forking the handler.
+			postResult := preResult
+			if deps.Injector != nil && preResult.Type == vault.TypeLogin {
+				var ierr error
+				postResult, ierr = deps.Injector.Inject(r.Context(), c, req.URL, actor)
+				if ierr != nil {
+					return ierr
+				}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":  true,
+				"url": req.URL,
+				"vault": map[string]any{
+					"matched":       postResult.Matched,
+					"credential_id": postResult.CredentialID,
+					"action":        postResult.Action,
+				},
+			})
 			return nil
 		})
 	})

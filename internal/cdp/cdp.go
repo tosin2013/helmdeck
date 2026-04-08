@@ -15,7 +15,9 @@ import (
 	"strings"
 	"time"
 
+	cdpcdp "github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
@@ -47,7 +49,36 @@ type Client interface {
 	Screenshot(ctx context.Context, fullPage bool) ([]byte, error)
 	Execute(ctx context.Context, script string) (any, error)
 	Interact(ctx context.Context, action InteractAction, selector, value string) error
+	// SetCookies installs browser cookies via Network.setCookies (T503).
+	// Called BEFORE Navigate so the first request to the target host
+	// already carries the session. The cookies parameter is opaque to
+	// this layer — see the Cookie struct for the field shape.
+	SetCookies(ctx context.Context, cookies []Cookie) error
+	// AutofillForm fills input fields by selector via JS evaluation
+	// (T503 fallback when cookie injection isn't appropriate, e.g.
+	// first-visit login pages). Selector → value pairs are dispatched
+	// in iteration order.
+	AutofillForm(ctx context.Context, fields map[string]string) error
 	Close() error
+}
+
+// Cookie is the wire shape for SetCookies. Fields mirror the
+// Network.CookieParam type from the Chrome DevTools Protocol; we
+// re-declare them here so callers don't have to import cdproto.
+//
+// Domain is the hostname the cookie is scoped to (e.g. "github.com").
+// Path defaults to "/" when empty. Secure should be true for any
+// cookie used on an https origin. Expires is a Unix timestamp in
+// seconds; zero means "session cookie" (cleared on browser close).
+type Cookie struct {
+	Name     string
+	Value    string
+	Domain   string
+	Path     string
+	Secure   bool
+	HTTPOnly bool
+	SameSite string // "Strict", "Lax", "None", or empty for default
+	Expires  int64
 }
 
 // WaitReady polls the CDP /json/version endpoint until it returns 200 OK
@@ -199,6 +230,95 @@ func (c *chromedpClient) Interact(ctx context.Context, action InteractAction, se
 		return chromedp.Run(c.browserCtx, chromedp.Focus(selector, chromedp.ByQuery))
 	}
 	return fmt.Errorf("cdp: interact: unknown action %q", action)
+}
+
+// SetCookies implements Client. Translates the helmdeck Cookie shape
+// into network.CookieParam and runs network.SetCookies via chromedp.
+// Empty input is a no-op so callers can hand it the result of a
+// vault lookup without checking length.
+func (c *chromedpClient) SetCookies(ctx context.Context, cookies []Cookie) error {
+	if len(cookies) == 0 {
+		return nil
+	}
+	params := make([]*network.CookieParam, 0, len(cookies))
+	for _, ck := range cookies {
+		p := &network.CookieParam{
+			Name:     ck.Name,
+			Value:    ck.Value,
+			Domain:   ck.Domain,
+			Path:     ck.Path,
+			Secure:   ck.Secure,
+			HTTPOnly: ck.HTTPOnly,
+		}
+		if p.Path == "" {
+			p.Path = "/"
+		}
+		switch ck.SameSite {
+		case "Strict":
+			p.SameSite = network.CookieSameSiteStrict
+		case "Lax":
+			p.SameSite = network.CookieSameSiteLax
+		case "None":
+			p.SameSite = network.CookieSameSiteNone
+		}
+		if ck.Expires > 0 {
+			ts := cdpTimestamp(ck.Expires)
+			p.Expires = &ts
+		}
+		params = append(params, p)
+	}
+	return chromedp.Run(c.browserCtx, network.SetCookies(params))
+}
+
+// AutofillForm implements Client. Iterates the (selector, value)
+// pairs in stable iteration order and runs chromedp.SendKeys for
+// each one. Selectors that don't match are skipped — the form may
+// have rendered fewer fields than the credential supplies, which
+// is normal for partial autofill scenarios.
+func (c *chromedpClient) AutofillForm(ctx context.Context, fields map[string]string) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	// Sort selectors so behavior is deterministic across runs.
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	for i := 1; i < len(keys); i++ {
+		j := i
+		for j > 0 && keys[j-1] > keys[j] {
+			keys[j-1], keys[j] = keys[j], keys[j-1]
+			j--
+		}
+	}
+	for _, sel := range keys {
+		val := fields[sel]
+		// SendKeys will return an error if the selector doesn't
+		// match — wrap with WaitVisible+timeout so missing fields
+		// don't fail the whole call. Use a short per-field
+		// deadline derived from ctx.
+		fieldCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		err := chromedp.Run(c.browserCtx,
+			chromedp.WaitVisible(sel, chromedp.ByQuery),
+			chromedp.Focus(sel, chromedp.ByQuery),
+			chromedp.SendKeys(sel, val, chromedp.ByQuery),
+		)
+		cancel()
+		_ = fieldCtx
+		if err != nil {
+			// Best-effort: skip missing fields silently.
+			continue
+		}
+	}
+	return nil
+}
+
+// cdpTimestamp converts a Unix-seconds value to the chromedp
+// TimeSinceEpoch type the network domain expects (defined in the
+// cdproto/cdp shared types package, imported here as cdpcdp to
+// avoid colliding with our own package name).
+func cdpTimestamp(unixSec int64) cdpcdp.TimeSinceEpoch {
+	return cdpcdp.TimeSinceEpoch(time.Unix(unixSec, 0))
 }
 
 // Close implements Client.

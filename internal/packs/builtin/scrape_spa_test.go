@@ -37,7 +37,11 @@ func (s *scrapeFakeClient) Execute(_ context.Context, _ string) (any, error)    
 func (s *scrapeFakeClient) Interact(_ context.Context, _ cdp.InteractAction, _, _ string) error {
 	return nil
 }
-func (s *scrapeFakeClient) Close() error { return nil }
+func (s *scrapeFakeClient) Close() error                                          { return nil }
+func (s *scrapeFakeClient) SetCookies(_ context.Context, _ []cdp.Cookie) error    { return nil }
+func (s *scrapeFakeClient) AutofillForm(_ context.Context, _ map[string]string) error {
+	return nil
+}
 
 type scrapeFactory struct {
 	client *scrapeFakeClient

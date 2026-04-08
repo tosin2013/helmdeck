@@ -79,7 +79,7 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 
 - [x] **T501** Credential Vault (AES-256-GCM + ACL + usage log)
 - [x] **T502** Credential types: login, cookies, API key, OAuth, SSH/git
-- [ ] **T503** CDP cookie injection + form-autofill fallback
+- [x] **T503** CDP cookie injection + form-autofill fallback
 - [ ] **T504** HTTP gateway placeholder-token interception
 - [ ] **T505** Built-in pack: `repo.fetch`
 - [ ] **T506** Built-in pack: `repo.push`

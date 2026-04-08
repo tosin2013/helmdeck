@@ -22,6 +22,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/audit"
 	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/gateway"
+	"github.com/tosin2013/helmdeck/internal/inject"
 	"github.com/tosin2013/helmdeck/internal/keystore"
 	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/packs"
@@ -161,6 +162,7 @@ func main() {
 		Keys:        ks,
 		MCPRegistry: mcp.NewRegistry(db),
 		Vault:       vaultStore,
+		Injector:    inject.New(vaultStore, logger.With("subsystem", "inject")),
 	}
 	packReg := packs.NewPackRegistry()
 	deps.PackRegistry = packReg

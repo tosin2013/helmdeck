@@ -130,3 +130,51 @@ func TestBrowserNoFactoryReturns503(t *testing.T) {
 		t.Fatalf("status = %d, want 503", rr.Code)
 	}
 }
+
+// T503 — verify the navigate handler invokes the injector and the
+// vault credential lands on the cdp client before the navigation.
+func TestBrowserNavigateWithVaultCookieInjection(t *testing.T) {
+	db := newTestDB(t)
+	v := newTestVault(t, db)
+	rec, _ := v.Create(context.Background(), vaultCreateInput("gh", "cookie", "github.com",
+		[]byte(`[{"name":"session","value":"abc123"}]`)))
+	_ = v.Grant(context.Background(), rec.ID, vaultGrant("*", ""))
+
+	fc := &cdpfake.Client{}
+	h := NewRouter(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Version:    "test",
+		CDPFactory: &stubCDPFactory{c: fc},
+		Vault:      v,
+		Injector:   newTestInjector(v),
+	})
+	body := bytes.NewBufferString(`{"session_id":"s1","url":"https://github.com/foo"}`)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/browser/navigate", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(fc.CookiesSet) != 1 || fc.CookiesSet[0][0].Value != "abc123" {
+		t.Errorf("cookie not installed before navigate: %+v", fc.CookiesSet)
+	}
+	if fc.NavigateURL != "https://github.com/foo" {
+		t.Errorf("navigate not called: %q", fc.NavigateURL)
+	}
+	// Response should report the vault outcome.
+	if !strings.Contains(rr.Body.String(), `"action":"cookies_installed"`) {
+		t.Errorf("response missing vault outcome: %s", rr.Body.String())
+	}
+}
+
+func TestBrowserNavigateWithoutInjectorIsUnchanged(t *testing.T) {
+	h, fc := newBrowserRouter(t)
+	body := bytes.NewBufferString(`{"session_id":"s1","url":"https://example.com"}`)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/browser/navigate", body))
+	if rr.Code != http.StatusOK || fc.NavigateURL != "https://example.com" {
+		t.Fatalf("baseline navigate broke: code=%d url=%q", rr.Code, fc.NavigateURL)
+	}
+	if len(fc.CookiesSet) != 0 {
+		t.Errorf("no injector should mean no cookies: %+v", fc.CookiesSet)
+	}
+}

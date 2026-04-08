@@ -17,11 +17,15 @@ type Client struct {
 	ScreenshotPNG  []byte
 	ExecuteResult  any
 	InteractCalls  []InteractCall
+	CookiesSet     [][]cdp.Cookie
+	AutofillCalls  []map[string]string
 	NavigateErr    error
 	ExtractText    string
 	ExecuteErr     error
 	InteractErr    error
 	ScreenshotErr  error
+	SetCookiesErr  error
+	AutofillErr    error
 	CloseCallCount int
 }
 
@@ -76,6 +80,24 @@ func (c *Client) Execute(_ context.Context, _ string) (any, error) {
 func (c *Client) Interact(_ context.Context, action cdp.InteractAction, selector, value string) error {
 	c.InteractCalls = append(c.InteractCalls, InteractCall{Action: action, Selector: selector, Value: value})
 	return c.InteractErr
+}
+
+// SetCookies implements cdp.Client.
+func (c *Client) SetCookies(_ context.Context, cookies []cdp.Cookie) error {
+	cp := make([]cdp.Cookie, len(cookies))
+	copy(cp, cookies)
+	c.CookiesSet = append(c.CookiesSet, cp)
+	return c.SetCookiesErr
+}
+
+// AutofillForm implements cdp.Client.
+func (c *Client) AutofillForm(_ context.Context, fields map[string]string) error {
+	cp := make(map[string]string, len(fields))
+	for k, v := range fields {
+		cp[k] = v
+	}
+	c.AutofillCalls = append(c.AutofillCalls, cp)
+	return c.AutofillErr
 }
 
 // Close implements cdp.Client.

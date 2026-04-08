@@ -15,6 +15,7 @@ import (
 
 	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/gateway"
+	"github.com/tosin2013/helmdeck/internal/inject"
 	"github.com/tosin2013/helmdeck/internal/keystore"
 	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/packs"
@@ -45,6 +46,7 @@ type Deps struct {
 	PackEngine   *packs.Engine   // optional; nil disables /api/v1/packs dispatch
 	MCPRegistry  *mcp.Registry   // optional; nil disables /api/v1/mcp/servers
 	Vault        *vault.Store    // optional; nil disables /api/v1/vault/*
+	Injector     *inject.Injector // optional; nil disables vault injection on /api/v1/browser/navigate
 }
 
 // IsProtectedPath returns true for paths the auth middleware must guard.

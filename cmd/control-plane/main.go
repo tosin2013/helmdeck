@@ -21,6 +21,10 @@ import (
 	"github.com/tosin2013/helmdeck/internal/api"
 	"github.com/tosin2013/helmdeck/internal/audit"
 	"github.com/tosin2013/helmdeck/internal/auth"
+	"github.com/tosin2013/helmdeck/internal/gateway"
+	"github.com/tosin2013/helmdeck/internal/keystore"
+	"github.com/tosin2013/helmdeck/internal/packs"
+	"github.com/tosin2013/helmdeck/internal/packs/builtin"
 	"github.com/tosin2013/helmdeck/internal/session"
 	dockerrt "github.com/tosin2013/helmdeck/internal/session/docker"
 	"github.com/tosin2013/helmdeck/internal/store"
@@ -80,6 +84,23 @@ func main() {
 	defer db.Close()
 	auditWriter := audit.NewSQLiteWriter(db)
 
+	// Provider key store. HELMDECK_KEYSTORE_KEY is a 32-byte hex master
+	// key; if missing we autogenerate one and warn loudly so operators
+	// know rows written this run will be unreadable after a restart.
+	ksMaster, ksAutogen, err := loadOrGenerateKeystoreMaster()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "keystore init:", err)
+		os.Exit(1)
+	}
+	if ksAutogen {
+		logger.Warn("HELMDECK_KEYSTORE_KEY not set; generated an ephemeral master key. Provider keys will be unreadable after restart.")
+	}
+	ks, err := keystore.New(db, ksMaster)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "keystore:", err)
+		os.Exit(1)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -112,9 +133,48 @@ func main() {
 		Runtime: rt,
 		Issuer:  issuer,
 		Audit:   auditWriter,
+		// Empty registry today; T202 wires real provider adapters into it
+		// at startup. The routes still mount so misconfiguration shows up
+		// as an empty /v1/models response rather than a 503.
+		Gateway: gateway.NewRegistry(),
+		Keys:    ks,
+	}
+	packReg := packs.NewPackRegistry()
+	deps.PackRegistry = packReg
+
+	engineOpts := []packs.Option{packs.WithRuntime(rt), packs.WithLogger(logger)}
+	if store, err := loadS3StoreFromEnv(ctx); err != nil {
+		logger.Warn("S3 artifact store disabled", "err", err)
+	} else if store != nil {
+		engineOpts = append(engineOpts, packs.WithArtifactStore(store))
+		logger.Info("S3 artifact store enabled", "endpoint", os.Getenv("HELMDECK_S3_ENDPOINT"), "bucket", os.Getenv("HELMDECK_S3_BUCKET"))
 	}
 	if rt != nil {
-		deps.CDPFactory = api.DefaultCDPClientFactory(rt)
+		cdpFactory := api.DefaultCDPClientFactory(rt)
+		deps.CDPFactory = cdpFactory
+		// The two CDPFactory interfaces (api + packs) have identical
+		// method sets, so an embedding adapter satisfies both without
+		// the api package needing to import packs.
+		engineOpts = append(engineOpts, packs.WithCDPFactory(cdpFactoryAdapter{cdpFactory}))
+		// Backends that implement session.Executor (the docker
+		// runtime does after T210) get wired in so packs like
+		// slides.render can shell out inside the container.
+		if ex, ok := rt.(session.Executor); ok {
+			engineOpts = append(engineOpts, packs.WithSessionExecutor(ex))
+		}
+	}
+	deps.PackEngine = packs.New(engineOpts...)
+
+	// Register built-in packs (T208–T210). T209/T210 packs append here
+	// as they land.
+	if err := packReg.Register(builtin.ScreenshotURL()); err != nil {
+		logger.Warn("register screenshot_url pack failed", "err", err)
+	}
+	if err := packReg.Register(builtin.ScrapeSPA()); err != nil {
+		logger.Warn("register scrape_spa pack failed", "err", err)
+	}
+	if err := packReg.Register(builtin.SlidesRender()); err != nil {
+		logger.Warn("register slides_render pack failed", "err", err)
 	}
 	if *disableAuth {
 		deps.Issuer = nil
@@ -177,6 +237,49 @@ func loadOrGenerateIssuer(logger *slog.Logger) (*auth.Issuer, bool, error) {
 		return nil, false, err
 	}
 	return iss, true, nil
+}
+
+// loadS3StoreFromEnv builds an S3 artifact store from HELMDECK_S3_*
+// env vars. Returns (nil, nil) when S3 is not configured (operators
+// who want the in-memory store leave the env vars unset). Any error
+// is logged at startup but does not abort the process — falling
+// back to in-memory is preferable to refusing to boot.
+func loadS3StoreFromEnv(ctx context.Context) (*packs.S3ArtifactStore, error) {
+	endpoint := os.Getenv("HELMDECK_S3_ENDPOINT")
+	if endpoint == "" {
+		return nil, nil
+	}
+	cfg := packs.S3Config{
+		Endpoint:        endpoint,
+		Bucket:          os.Getenv("HELMDECK_S3_BUCKET"),
+		AccessKeyID:     os.Getenv("HELMDECK_S3_ACCESS_KEY"),
+		SecretAccessKey: os.Getenv("HELMDECK_S3_SECRET_KEY"),
+		Region:          os.Getenv("HELMDECK_S3_REGION"),
+		UseSSL:          os.Getenv("HELMDECK_S3_USE_SSL") == "true",
+		PublicEndpoint:  os.Getenv("HELMDECK_S3_PUBLIC_ENDPOINT"),
+	}
+	return packs.NewS3ArtifactStore(ctx, cfg)
+}
+
+// cdpFactoryAdapter bridges api.CDPClientFactory to packs.CDPFactory.
+// Both interfaces have the same method set; the embedded interface
+// promotes Get and Evict, so the struct satisfies packs.CDPFactory
+// without packs needing to import api.
+type cdpFactoryAdapter struct {
+	api.CDPClientFactory
+}
+
+func loadOrGenerateKeystoreMaster() ([]byte, bool, error) {
+	if raw := os.Getenv("HELMDECK_KEYSTORE_KEY"); raw != "" {
+		b, err := keystore.ParseMasterKey(raw)
+		return b, false, err
+	}
+	hex, err := keystore.GenerateMasterKey()
+	if err != nil {
+		return nil, false, err
+	}
+	b, err := keystore.ParseMasterKey(hex)
+	return b, true, err
 }
 
 func parseScopes(csv string) []auth.Scope {

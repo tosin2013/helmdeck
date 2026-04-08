@@ -21,6 +21,16 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
+// Flush forwards to the underlying ResponseWriter when it implements
+// http.Flusher. Without this, SSE handlers (T213) see a wrapped
+// writer that doesn't satisfy the Flusher interface and refuse to
+// stream. Standard library middlewares do this for the same reason.
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // auditMiddleware records every request that survives auth into the audit
 // log. /healthz and /version are skipped (kubelet probes would otherwise
 // drown the table). The actor is read from the JWT claims attached by

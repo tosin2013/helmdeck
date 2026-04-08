@@ -11,9 +11,18 @@ import (
 	"strings"
 
 	"github.com/tosin2013/helmdeck/internal/audit"
+	"context"
+
 	"github.com/tosin2013/helmdeck/internal/auth"
+	"github.com/tosin2013/helmdeck/internal/gateway"
+	"github.com/tosin2013/helmdeck/internal/keystore"
+	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/session"
 )
+
+// KeyTester pings a provider to verify a freshly-decrypted key works.
+// Injected into Deps so tests can stub the network call.
+type KeyTester func(ctx context.Context, client *http.Client, provider, apiKey string) error
 
 // Deps bundles the runtime dependencies the router needs. Passing them as
 // a struct (rather than positional args) keeps the router constructor
@@ -24,13 +33,23 @@ type Deps struct {
 	Runtime    session.Runtime  // optional; nil disables /api/v1/sessions
 	Issuer     *auth.Issuer     // optional; nil disables /api/v1/* JWT enforcement (dev mode)
 	Audit      audit.Writer     // optional; nil uses audit.Discard
-	CDPFactory CDPClientFactory // optional; nil disables /api/v1/browser/*
+	CDPFactory CDPClientFactory  // optional; nil disables /api/v1/browser/*
+	Gateway      *gateway.Registry // optional; nil disables /v1/* AI facade
+	GatewayChain *gateway.Chain    // optional; when set, /v1/* dispatches via the chain
+	Keys         *keystore.Store  // optional; nil disables /api/v1/providers/keys
+	KeyTester    KeyTester        // optional; defaults to keystore.TestProviderKey
+	PackRegistry *packs.Registry  // optional; nil disables /api/v1/packs
+	PackEngine   *packs.Engine    // optional; nil disables /api/v1/packs dispatch
 }
 
 // IsProtectedPath returns true for paths the auth middleware must guard.
 // Exported so tests and the control plane can share the same predicate.
 func IsProtectedPath(p string) bool {
-	return strings.HasPrefix(p, "/api/v1/") || strings.HasPrefix(p, "/v1/")
+	// /.well-known/agent.json (T212) is intentionally public — it's
+	// the A2A discovery endpoint and remote agents fetch it before
+	// they have credentials. /a2a/v1/* (T213) IS protected because
+	// task execution costs real resources.
+	return strings.HasPrefix(p, "/api/v1/") || strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/a2a/v1/")
 }
 
 // NewRouter returns the top-level HTTP handler for the control plane.
@@ -50,6 +69,10 @@ func NewRouter(deps Deps) http.Handler {
 
 	registerSessionRoutes(mux, deps)
 	registerBrowserRoutes(mux, deps)
+	registerGatewayRoutes(mux, deps)
+	registerKeyRoutes(mux, deps)
+	registerPackRoutes(mux, deps)
+	registerA2ARoutes(mux, deps)
 
 	if deps.Audit == nil {
 		deps.Audit = audit.Discard{}

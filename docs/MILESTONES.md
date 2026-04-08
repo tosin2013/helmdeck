@@ -77,8 +77,8 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 ## Milestone: `v0.5 — Vault, Repo Packs & Hardening` (Phase 5)
 **Target:** Week 16 · **Exit:** `repo.fetch` against private GitHub via vault SSH key; OTel traces in Langfuse
 
-- [ ] **T501** Credential Vault (AES-256-GCM + ACL + usage log)
-- [ ] **T502** Credential types: login, cookies, API key, OAuth, SSH/git
+- [x] **T501** Credential Vault (AES-256-GCM + ACL + usage log)
+- [x] **T502** Credential types: login, cookies, API key, OAuth, SSH/git
 - [ ] **T503** CDP cookie injection + form-autofill fallback
 - [ ] **T504** HTTP gateway placeholder-token interception
 - [ ] **T505** Built-in pack: `repo.fetch`

@@ -29,6 +29,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/session"
 	dockerrt "github.com/tosin2013/helmdeck/internal/session/docker"
 	"github.com/tosin2013/helmdeck/internal/store"
+	"github.com/tosin2013/helmdeck/internal/vault"
 	"github.com/tosin2013/helmdeck/internal/vision"
 )
 
@@ -103,6 +104,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Credential vault (T501). HELMDECK_VAULT_KEY is a separate 32-byte
+	// hex master key — intentionally distinct from HELMDECK_KEYSTORE_KEY
+	// so a leak of one does not expose the other domain. Same
+	// autogenerate-with-warning fallback as the keystore.
+	vaultMaster, vaultAutogen, err := loadOrGenerateVaultMaster()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "vault init:", err)
+		os.Exit(1)
+	}
+	if vaultAutogen {
+		logger.Warn("HELMDECK_VAULT_KEY not set; generated an ephemeral master key. Credentials will be unreadable after restart.")
+	}
+	vaultStore, err := vault.New(db, vaultMaster)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "vault:", err)
+		os.Exit(1)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -141,6 +160,7 @@ func main() {
 		Gateway:     gateway.NewRegistry(),
 		Keys:        ks,
 		MCPRegistry: mcp.NewRegistry(db),
+		Vault:       vaultStore,
 	}
 	packReg := packs.NewPackRegistry()
 	deps.PackRegistry = packReg
@@ -287,6 +307,22 @@ func loadOrGenerateIssuer(logger *slog.Logger) (*auth.Issuer, bool, error) {
 		return nil, false, err
 	}
 	return iss, true, nil
+}
+
+// loadOrGenerateVaultMaster mirrors loadOrGenerateKeystoreMaster
+// but reads HELMDECK_VAULT_KEY. The two keys are intentionally
+// separate (ADR 007) so a leak of one does not expose the other.
+func loadOrGenerateVaultMaster() ([]byte, bool, error) {
+	if raw := os.Getenv("HELMDECK_VAULT_KEY"); raw != "" {
+		b, err := vault.ParseMasterKey(raw)
+		return b, false, err
+	}
+	hex, err := vault.GenerateMasterKey()
+	if err != nil {
+		return nil, false, err
+	}
+	b, err := vault.ParseMasterKey(hex)
+	return b, true, err
 }
 
 // pickVisionDispatcher mirrors the precedence used by api/vision.go:

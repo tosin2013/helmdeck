@@ -19,6 +19,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/session"
+	"github.com/tosin2013/helmdeck/internal/vault"
 )
 
 // KeyTester pings a provider to verify a freshly-decrypted key works.
@@ -43,6 +44,7 @@ type Deps struct {
 	PackRegistry *packs.Registry // optional; nil disables /api/v1/packs
 	PackEngine   *packs.Engine   // optional; nil disables /api/v1/packs dispatch
 	MCPRegistry  *mcp.Registry   // optional; nil disables /api/v1/mcp/servers
+	Vault        *vault.Store    // optional; nil disables /api/v1/vault/*
 }
 
 // IsProtectedPath returns true for paths the auth middleware must guard.
@@ -79,6 +81,7 @@ func NewRouter(deps Deps) http.Handler {
 	registerDesktopRoutes(mux, deps)
 	registerDesktopVNCRoute(mux, deps)
 	registerVisionRoutes(mux, deps)
+	registerVaultRoutes(mux, deps)
 	registerGatewayRoutes(mux, deps)
 	registerKeyRoutes(mux, deps)
 	registerPackRoutes(mux, deps)

@@ -46,6 +46,9 @@ Each task lists its source ADR(s) and prerequisite tasks. IDs are stable for cro
 | T209 | Built-in pack: `web.scrape_spa` with JSON Schema-driven extraction and partial-result handling | P0 | 017 | T207 |
 | T210 | Built-in pack: `slides.render` (Marp + Chromium → PDF/PPTX/HTML) | P1 | 014 | T104, T207 |
 | T211 | Object store integration (S3-compatible) for pack artifacts; signed URL generation | P0 | 014, 015, 018, 021 | T205 |
+| T211a | Bundle Garage (`dxflrs/garage`) as the default object store in `deploy/compose/compose.yaml`; init container runs `garage layout assign` + `garage layout apply` on first boot; control plane env wired so `make smoke` exercises the persistent path end-to-end | P0 | 031 | T211, T110 |
+| T211b | Artifact TTL janitor: control-plane goroutine scans audit-table pack output references older than `HELMDECK_ARTIFACT_TTL` (default 7d) and deletes the corresponding objects; per-pack overrides via pack manifest | P1 | 031 | T211, T109 |
+| T211c | Cross-reference ADR 031 from ADRs 014 and 021 (one-line "see ADR 031 for backend choice" addition); update README install path to mention bundled Garage | P3 | 031 | T211a |
 | T212 | A2A Agent Card endpoint `/.well-known/agent.json` auto-generated from pack registry | P2 | 026 | T207 |
 | T213 | A2A task endpoint `POST /a2a/v1/tasks` with SSE streaming for long-running packs | P2 | 026 | T212 |
 
@@ -197,7 +200,7 @@ These can be staffed independently from week 1:
 
 ## Open Questions to Resolve Before Phase 1 Kickoff
 
-1. Object store choice for pack artifacts: bundled MinIO vs. require external S3? (affects T211 and Helm chart shape)
+1. ~~Object store choice for pack artifacts: bundled MinIO vs. require external S3?~~ **Resolved by ADR 031 (2026-04-08): bundle Garage as the Compose default; treat the storage layer as a pluggable S3 client so any external backend is a first-class option; never bundle MinIO (upstream archived 2026-02). Tracked by T211a/T211b/T211c below.**
 2. Which weak open-weight models (and at which quantizations) form the reference benchmark cohort for the Model Success Rates SLO?
 3. Tenant boundary semantics for ADR 029 semantic memory — single-tenant only at GA, multi-tenant later?
 4. License choice for the platform repo (affects distribution wording in ADR 030).

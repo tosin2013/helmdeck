@@ -35,6 +35,9 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [x] **T209** Built-in pack: `web.scrape_spa`
 - [x] **T210** Built-in pack: `slides.render`
 - [x] **T211** Object store integration + signed URLs
+- [ ] **T211a** Bundle Garage as default object store in Compose stack *(ADR 031)*
+- [ ] **T211b** Artifact TTL janitor *(ADR 031)*
+- [ ] **T211c** Cross-reference ADR 031 from ADRs 014/021 + README *(ADR 031)*
 - [x] **T212** A2A Agent Card endpoint
 - [x] **T213** A2A task endpoint with SSE
 

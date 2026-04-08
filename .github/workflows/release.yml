@@ -117,12 +117,17 @@ jobs:
 
   # Tag-push path: publish @helmdeck/mcp-bridge to `latest` after the
   # goreleaser job has uploaded the binary tarballs the postinstall
-  # script will fetch. Provenance attestation is enabled.
+  # script will fetch. Authenticates via npm Trusted Publishing (OIDC)
+  # — no NODE_AUTH_TOKEN, provenance is automatic. Trust is configured
+  # on npmjs.com against this exact workflow file (release.yml).
   npm-bridge-release:
     name: Publish @helmdeck/mcp-bridge (release)
     if: github.event_name == 'push'
     needs: goreleaser
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for OIDC token exchange with npm
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -135,11 +140,9 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           node -e "const fs=require('fs');const p=require('./package.json');p.version=process.env.VERSION.replace(/^v/,'');fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
-      - name: Publish to npm
+      - name: Publish to npm via trusted publishing
         working-directory: npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: npm publish --access public
 
   # Manual-dispatch path: dry-run by default to validate the token,
   # org permission, and package contents without shipping. Set
@@ -151,6 +154,9 @@ jobs:
     name: Publish @helmdeck/mcp-bridge (manual)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for OIDC token exchange with npm
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -163,13 +169,11 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           node -e "const fs=require('fs');const p=require('./package.json');p.version=process.env.VERSION;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
-      - name: Publish to npm
+      - name: Publish to npm via trusted publishing
         working-directory: npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if [[ "${{ inputs.npm_dry_run }}" == "true" ]]; then
             npm publish --dry-run --access public
           else
-            npm publish --provenance --access public --tag "${{ inputs.npm_dist_tag }}"
+            npm publish --access public --tag "${{ inputs.npm_dist_tag }}"
           fi

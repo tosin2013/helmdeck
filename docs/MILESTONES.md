@@ -108,15 +108,15 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 **Target:** Week 20 · **Exit:** operator authors+publishes a custom pack entirely in the UI
 
 - [x] **T601** React/Tailwind/shadcn shell + JWT login
-- [ ] **T602** Dashboard panel
-- [ ] **T603** Browser Sessions panel
+- [x] **T602** Dashboard panel *(stat cards + status table; Recharts memory chart in T602a)*
+- [x] **T603** Browser Sessions panel *(read-only list; New Session modal in T603a)*
 - [ ] **T604** AI Providers panel
-- [ ] **T605** MCP Registry panel
-- [ ] **T606** Capability Packs panel (list + Overview/Schema/Test Runner tabs)
+- [x] **T605** MCP Registry panel *(read-only list; Add Server modal in T605a)*
+- [x] **T606** Capability Packs panel *(read-only list grouped by namespace; Test Runner in T606a)*
 - [ ] **T607** Model Success Rates tab (the killer feature)
 - [ ] **T608** Pack Authoring UI (schema editor + Go/WASM handler + publish)
 - [ ] **T609** Security Policies panel
-- [ ] **T610** Credential Vault panel
+- [x] **T610** Credential Vault panel *(read-only list; Add Credential modal + Usage Log in T610a)*
 - [ ] **T611** Audit Logs panel
 - [ ] **T612** Connect-client OS-detected one-liner buttons
 

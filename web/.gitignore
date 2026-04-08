@@ -10,6 +10,13 @@ dist/*
 !dist/index.html
 !dist/.gitkeep
 
+# TypeScript incremental build cache and the .d.ts/.js shadows
+# tsc emits next to vite.config.ts when running `tsc -b`. None of
+# these should be checked in — `make web-build` regenerates them.
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js
+
 # IDE / editor
 .vscode/
 .idea/

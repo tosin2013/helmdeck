@@ -64,13 +64,13 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [x] **T401** Desktop Actions REST API (xdotool/scrot wrappers)
 - [x] **T402** Built-in pack: `desktop.run_app_and_screenshot`
 - [x] **T403** Built-in pack: `doc.ocr`
-- [ ] **T404** Built-in pack: `web.fill_form` *(blocked on T501)*
-- [ ] **T405** Built-in pack: `web.login_and_fetch` *(blocked on T501)*
-- [ ] **T406** Built-in pack: `slides.video` *(blocked on T501)*
+- [x] ~~**T404** Built-in pack: `web.fill_form`~~ — **superseded** by T503 (CDP cookie injection) + T408 (`vision.fill_form_by_label`)
+- [x] ~~**T405** Built-in pack: `web.login_and_fetch`~~ — **superseded** by T504 (`http.fetch` with `${vault:NAME}`) + T503
+- [x] ~~**T406** Built-in pack: `slides.video`~~ — **deferred**, not on the GA path; revisit alongside T804 WebRTC streaming
 - [x] **T407** Vision-mode endpoint
 - [x] **T408** Reference vision packs
 - [x] **T409** noVNC live viewer baseline
-- [ ] **T410** Steel Browser integration (optional)
+- [ ] **T410** Steel Browser integration (optional, P3)
 
 ---
 

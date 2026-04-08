@@ -83,9 +83,9 @@ Each task lists its source ADR(s) and prerequisite tasks. IDs are stable for cro
 | T401 | Desktop Actions REST API: screenshot, click, type, key, launch, windows, focus (xdotool/scrot wrappers) | P0 | 027 | T106 |
 | T402 | Built-in pack: `desktop.run_app_and_screenshot` | P1 | 018 | T401 |
 | T403 | Built-in pack: `doc.ocr` (Tesseract with language pack support) | P1 | 019 | T207 |
-| T404 | Built-in pack: `web.fill_form` (with vault credential injection — depends on Phase 5 vault) | P1 | 020 | T207, T501 |
-| T405 | Built-in pack: `web.login_and_fetch` (depends on vault) | P1 | 016 | T207, T501 |
-| T406 | Built-in pack: `slides.video` (Marp + Xvfb + ffmpeg + TTS via vault) | P2 | 015 | T210, T501 |
+| T404 | ~~Built-in pack: `web.fill_form`~~ — **superseded** by T503 (CDP cookie injection) + T408 (`vision.fill_form_by_label`); the "fill a form with a vault credential" capability ships through both | — | 020 | — |
+| T405 | ~~Built-in pack: `web.login_and_fetch`~~ — **superseded** by T504 (`http.fetch` with `${vault:NAME}` substitution) + T503; the substantive auth pattern is the placeholder-token flow, not a dedicated browser-driven login pack | — | 016 | — |
+| T406 | ~~Built-in pack: `slides.video`~~ — **deferred**; not on the GA path. Worth revisiting alongside T804 (WebRTC streaming) since the same audio/video pipeline serves both | — | 015 | — |
 | T407 | Vision-mode endpoint `POST /api/v1/sessions/{id}/vision/act`: screenshot → AI gateway → action loop | P1 | 027 | T201, T401 |
 | T408 | Reference vision packs: `vision.click_anywhere`, `vision.extract_visible_text`, `vision.fill_form_by_label` | P2 | 027 | T407 |
 | T409 | noVNC live viewer endpoint `/api/v1/desktop/vnc-url` (baseline; WebRTC in Phase 6+) | P2 | 028 | T401 |
@@ -106,12 +106,30 @@ Each task lists its source ADR(s) and prerequisite tasks. IDs are stable for cro
 | T505 | Built-in pack: `repo.fetch` (URL normalization, vault SSH key, `GIT_SSH_COMMAND` with `accept-new`, retries) | P0 | 022 | T501 |
 | T506 | Built-in pack: `repo.push` (paired with `repo.fetch`; non-fast-forward → `schema_mismatch` with detail) | P1 | 023 | T505 |
 | T507 | OneCLI delegation mode: optional config to forward credential resolution to external OneCLI | P3 | 007 | T501 |
-| T508 | Security policies: NetworkPolicy egress allowlist enforcement, block 169.254.169.254/32, block RFC 1918 ranges | P0 | 011 | T103 |
-| T509 | Sandbox baseline: non-root UID 1000, drop ALL caps + SYS_ADMIN, seccomp `chrome.json`, `runAsNonRoot` | P0 | 011 | T103 |
+| T508 | Application-layer egress guard: refuses any pack-handler call to a host that resolves to 169.254.169.254/32, RFC 1918 ranges, loopback, IPv6 link-local, or carrier-grade NAT — with DNS rebinding defense (every returned IP must pass). `HELMDECK_EGRESS_ALLOWLIST` for internal hosts. K8s `NetworkPolicy` lands separately as T706. | P0 | 011 | T103 |
+| T509 | Sandbox baseline: non-root UID 1000 (helmdeck user in sidecar Dockerfile), `cap-drop ALL` + `cap-add SYS_ADMIN` (Chromium namespace sandbox), `no-new-privileges`, `pids-limit 1024` (defaults; override via `HELMDECK_PIDS_LIMIT`), `seccomp` defaults to docker's curated profile (override via `HELMDECK_SECCOMP_PROFILE`) | P0 | 011 | T103 |
 | T510 | OpenTelemetry instrumentation: traces with `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.*` on every LLM/MCP/pack span; OTLP exporter | P0 | 013 | T201, T205 |
 | T511 | Trivy CI scan; fail pipeline on CRITICAL findings | P0 | 030 | T102 |
 
 **Phase 5 exit criteria:** `repo.fetch` against a private GitHub repo with vault SSH key works end-to-end without agent ever seeing the key; OTel traces visible in a Langfuse instance; egress allowlist blocks metadata IP.
+
+---
+
+## Phase 5.5 — Code Edit Loop (interleaved with Phase 5)
+
+**Goal:** turn `repo.fetch` into a working autonomous code-edit workflow by adding the file/git/cmd primitives the LLM needs to actually modify and test code inside a clone.
+
+| ID | Task | Pri | ADRs | Depends on |
+| :--- | :--- | :--- | :--- | :--- |
+| T550 | Built-in pack: `fs.read` (read file from clone with size cap + sha256, path safety via `safeJoin`) | P0 | 022 | T505 |
+| T551 | Built-in pack: `fs.write` (write file with `mkdir -p` for parents, content via stdin) | P0 | 022 | T505 |
+| T552 | Built-in pack: `fs.patch` (literal search-and-replace, NOT regex; optional occurrence cap; sha256 of result) | P0 | 022 | T550, T551 |
+| T553 | Built-in pack: `fs.list` (find files under clone path with optional glob, recursive flag, 5000-entry cap) | P1 | 022 | T550 |
+| T554 | Built-in pack: `cmd.run` (run an arbitrary shell command in a clone path with stdin support; non-zero exit codes are normal pack outcomes) | P0 | 022 | T505 |
+| T555 | Built-in pack: `git.commit` (stage + commit with `helmdeck-agent` author env injection; "nothing to commit" maps to invalid_input) | P0 | 023 | T505 |
+| T556 | Built-in pack: `http.fetch` (placeholder-token demo: `${vault:NAME}` substitution in URL/headers/body via the wrapped http.Client; egress-guarded) | P0 | 007 | T504 |
+
+**Phase 5.5 exit criteria:** an LLM can drive `repo.fetch` → `fs.list` → `fs.read` → `fs.patch` → `python.run` (or `cmd.run`) → `git.commit` → `repo.push` end-to-end against a real private GitHub repo, with the SSH key never in the LLM's context window and every step audit-logged.
 
 ---
 
@@ -193,9 +211,9 @@ The hard sequence is: Go scaffolding → session runtime → CDP → pack engine
 ## Dependency-Free Parallel Tracks
 
 These can be staffed independently from week 1:
-- **UI track** (T601 onward) — depends only on a stable REST shape, can mock until Phase 5.
+- ~~**UI track** (T601 onward)~~ — Phases 1–5 are now shipped; the REST surface the UI consumes is stable. UI track is the next active workstream rather than a parallel one.
 - **Helm chart track** (T702, T703, T705, T706) — once `client-go` `SessionRuntime` lands.
-- **Distribution track** (T305, T306, T307) — once goreleaser config exists.
+- **Distribution track** (T305, T306, T307) — once goreleaser config exists. ✅ shipped in v0.3.0.
 - **Documentation track** — recipes for each integrated client (ADR 025) can be drafted as soon as the bridge contract is frozen.
 
 ## Open Questions to Resolve Before Phase 1 Kickoff

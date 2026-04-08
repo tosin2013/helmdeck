@@ -41,6 +41,25 @@ fmt: ## gofmt -w
 tidy: ## go mod tidy
 	$(GO) mod tidy
 
+.PHONY: web-deps
+web-deps: ## Install Management UI npm dependencies (T601)
+	cd web && npm install --no-audit --no-fund
+
+.PHONY: web-build
+web-build: ## Build the embedded Management UI bundle into web/dist (T601)
+	cd web && npm run build
+
+.PHONY: web-dev
+web-dev: ## Start the Vite dev server (proxies /api to http://localhost:3000)
+	cd web && npm run dev
+
+.PHONY: web-clean
+web-clean: ## Remove web/node_modules and the built dist (preserves placeholder)
+	rm -rf web/node_modules web/dist
+	mkdir -p web/dist
+	@echo "// regenerate placeholder via make web-build" > web/dist/index.html
+	@echo "Run 'make web-build' to regenerate the dist bundle."
+
 .PHONY: run
 run: $(CONTROL_PLANE) ## Run control-plane locally on :3000
 	HELMDECK_ADDR=:3000 $(CONTROL_PLANE)

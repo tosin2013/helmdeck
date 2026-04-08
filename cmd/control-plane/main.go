@@ -138,6 +138,22 @@ func main() {
 		security.WithAllowlist(security.AllowlistFromEnv(os.Getenv("HELMDECK_EGRESS_ALLOWLIST"))),
 	)
 
+	// Management UI login credentials (T601). The UI's login form
+	// posts to /api/v1/auth/login which compares against these in
+	// constant time. Empty HELMDECK_ADMIN_PASSWORD disables the
+	// login endpoint entirely (returns 503) — operators using only
+	// the CLI mint-token path don't need to set it. The default
+	// username is "admin"; override via HELMDECK_ADMIN_USERNAME.
+	api.AuthAdminPassword = os.Getenv("HELMDECK_ADMIN_PASSWORD")
+	if u := os.Getenv("HELMDECK_ADMIN_USERNAME"); u != "" {
+		api.AuthAdminUsername = u
+	}
+	if api.AuthAdminPassword == "" {
+		logger.Info("HELMDECK_ADMIN_PASSWORD not set; UI login endpoint will return 503. Mint tokens via the CLI -mint-token flag instead.")
+	} else {
+		logger.Info("UI login endpoint enabled", "username", api.AuthAdminUsername)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

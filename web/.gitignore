@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.npm/
+
+# Build output — except the placeholder index.html that lets the
+# Go control plane compile before `make web-build` has ever run.
+# `make web-build` overwrites the placeholder with the real bundle.
+dist/*
+!dist/index.html
+!dist/.gitkeep
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# Local env overrides
+.env.local
+.env.development.local

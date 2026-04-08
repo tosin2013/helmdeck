@@ -1,0 +1,43 @@
+# Docker build context exclusions for the control-plane image build.
+#
+# Anything listed here is NOT shipped to the docker daemon when
+# `docker build` runs against this directory. Cuts the build context
+# transfer time and avoids accidentally baking dev artifacts into
+# the image.
+
+# Git metadata
+.git
+.gitignore
+
+# Build outputs (the binary is built fresh by goreleaser; web/dist
+# is gitignored except for the placeholder, which IS included so
+# go:embed compiles even when web-build hasn't run)
+bin/
+control-plane
+
+# JavaScript dev dependencies — these are huge and the build copies
+# the pre-built dist directory in via go:embed, not the source tree.
+web/node_modules/
+web/.pnpm-store/
+web/.npm/
+
+# IDE / editor noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Local env files (never bake credentials into images)
+.env
+.env.local
+deploy/compose/.env
+deploy/compose/.env.smoke
+
+# Test fixtures we don't need at runtime
+testdata/
+
+# Documentation source — the binary doesn't need it
+docs/
+
+# CI / GitHub config
+.github/

@@ -52,12 +52,12 @@ type Deps struct {
 // IsProtectedPath returns true for paths the auth middleware must guard.
 // Exported so tests and the control plane can share the same predicate.
 func IsProtectedPath(p string) bool {
-	// /.well-known/agent.json (T212) and /api/v1/bridge/version
-	// (T304) are intentionally public — both are discovery
-	// endpoints the client hits before it has a token. /a2a/v1/*
-	// (T213) IS protected because task execution costs real
-	// resources.
-	if p == "/api/v1/bridge/version" {
+	// /.well-known/agent.json (T212), /api/v1/bridge/version (T304),
+	// and /api/v1/auth/login (T601) are intentionally public — all
+	// three are endpoints the client hits before it has a token.
+	// /a2a/v1/* (T213) IS protected because task execution costs
+	// real resources.
+	if p == "/api/v1/bridge/version" || p == "/api/v1/auth/login" {
 		return false
 	}
 	return strings.HasPrefix(p, "/api/v1/") || strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/a2a/v1/")
@@ -84,6 +84,12 @@ func NewRouter(deps Deps) http.Handler {
 	registerDesktopVNCRoute(mux, deps)
 	registerVisionRoutes(mux, deps)
 	registerVaultRoutes(mux, deps)
+	registerAuthLoginRoute(mux, deps)
+	// SPA web UI mount is registered LAST so its catch-all "GET /"
+	// route doesn't shadow more specific API routes registered
+	// above. net/http's ServeMux uses longest-prefix matching but
+	// the explicit ordering keeps the intent obvious in code review.
+	registerWebRoute(mux, deps)
 	registerGatewayRoutes(mux, deps)
 	registerKeyRoutes(mux, deps)
 	registerPackRoutes(mux, deps)

@@ -1,0 +1,65 @@
+/* Tailwind v4 single-import directive — replaces the v3 three-line
+ * @tailwind base/components/utilities incantation. */
+@import "tailwindcss";
+
+/* shadcn-style design tokens. We're not running the shadcn CLI in
+ * this environment so the variables are inlined instead of pulled
+ * from a generated globals.css. The dark theme is the default
+ * because helmdeck is an operator dashboard — most ops folks live
+ * in dark mode and the alert colors read better against dark
+ * backgrounds. */
+@layer base {
+  :root {
+    --background: 240 10% 4%;
+    --foreground: 0 0% 96%;
+    --card: 240 7% 9%;
+    --card-foreground: 0 0% 96%;
+    --primary: 142 76% 45%;
+    --primary-foreground: 240 10% 4%;
+    --secondary: 240 5% 16%;
+    --secondary-foreground: 0 0% 96%;
+    --muted: 240 5% 16%;
+    --muted-foreground: 240 4% 64%;
+    --accent: 240 5% 18%;
+    --accent-foreground: 0 0% 96%;
+    --destructive: 0 73% 50%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5% 18%;
+    --input: 240 5% 18%;
+    --ring: 142 76% 45%;
+    --radius: 0.5rem;
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  /* Tailwind v4 utility colors map to the CSS variables above so
+   * shadcn-style components like bg-background and text-foreground
+   * resolve correctly without a tailwind.config.ts theme block. */
+  @theme {
+    --color-background: hsl(var(--background));
+    --color-foreground: hsl(var(--foreground));
+    --color-card: hsl(var(--card));
+    --color-card-foreground: hsl(var(--card-foreground));
+    --color-primary: hsl(var(--primary));
+    --color-primary-foreground: hsl(var(--primary-foreground));
+    --color-secondary: hsl(var(--secondary));
+    --color-secondary-foreground: hsl(var(--secondary-foreground));
+    --color-muted: hsl(var(--muted));
+    --color-muted-foreground: hsl(var(--muted-foreground));
+    --color-accent: hsl(var(--accent));
+    --color-accent-foreground: hsl(var(--accent-foreground));
+    --color-destructive: hsl(var(--destructive));
+    --color-destructive-foreground: hsl(var(--destructive-foreground));
+    --color-border: hsl(var(--border));
+    --color-input: hsl(var(--input));
+    --color-ring: hsl(var(--ring));
+  }
+}

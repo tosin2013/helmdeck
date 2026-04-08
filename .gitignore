@@ -13,5 +13,15 @@ PRD.md
 *.test
 *.out
 coverage.txt
+# `dist/` ignores the goreleaser output directory at the repo root
+# AND any nested `dist/` directories. The web UI build (web/dist)
+# also lands here — we keep the placeholder index.html in version
+# control so the Go //go:embed directive compiles before
+# `make web-build` has ever run, and let the per-directory
+# web/.gitignore re-include it explicitly. The `!web/dist/index.html`
+# rule below makes that exception unambiguous regardless of how
+# git's ignore precedence orders the per-directory file.
 dist/
+!web/dist/
+!web/dist/index.html
 

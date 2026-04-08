@@ -107,7 +107,7 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 ## Milestone: `v0.6 — Management UI` (Phase 6)
 **Target:** Week 20 · **Exit:** operator authors+publishes a custom pack entirely in the UI
 
-- [ ] **T601** React/Tailwind/shadcn shell + JWT login
+- [x] **T601** React/Tailwind/shadcn shell + JWT login
 - [ ] **T602** Dashboard panel
 - [ ] **T603** Browser Sessions panel
 - [ ] **T604** AI Providers panel

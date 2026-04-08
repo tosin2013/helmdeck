@@ -23,6 +23,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/keystore"
+	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/packs/builtin"
 	"github.com/tosin2013/helmdeck/internal/session"
@@ -136,8 +137,9 @@ func main() {
 		// Empty registry today; T202 wires real provider adapters into it
 		// at startup. The routes still mount so misconfiguration shows up
 		// as an empty /v1/models response rather than a 503.
-		Gateway: gateway.NewRegistry(),
-		Keys:    ks,
+		Gateway:     gateway.NewRegistry(),
+		Keys:        ks,
+		MCPRegistry: mcp.NewRegistry(db),
 	}
 	packReg := packs.NewPackRegistry()
 	deps.PackRegistry = packReg

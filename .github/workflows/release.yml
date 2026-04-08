@@ -4,6 +4,26 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual trigger for npm dry-runs and pre-release verification.
+  # Use this before cutting a real tag to confirm NPM_TOKEN is wired,
+  # the @helmdeck org grants publish, and the postinstall payloads
+  # exist on the corresponding GitHub release.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 0.3.0-rc.1). Used for the npm-bridge job only.'
+        required: true
+        type: string
+      npm_dry_run:
+        description: 'If true, run npm publish --dry-run instead of actually publishing.'
+        required: false
+        default: true
+        type: boolean
+      npm_dist_tag:
+        description: 'npm dist-tag to publish under (use "next" for pre-releases so latest is unaffected).'
+        required: false
+        default: 'next'
+        type: string
 
 permissions:
   contents: write   # GitHub Releases
@@ -92,3 +112,53 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  npm-bridge:
+    name: Publish @helmdeck/mcp-bridge
+    # On tag push, wait for goreleaser so the release artifacts the
+    # postinstall script downloads exist before users can `npm install`.
+    # On manual dispatch, run independently — the dry-run path doesn't
+    # need real artifacts, and a real pre-release publish under the
+    # `next` dist-tag is decoupled from the binary release flow.
+    needs: ${{ github.event_name == 'push' && fromJSON('["goreleaser"]') || fromJSON('[]') }}
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Resolve target version
+        id: ver
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pin package version
+        working-directory: npm
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          node -e "const fs=require('fs');const p=require('./package.json');p.version=process.env.VERSION;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
+
+      - name: Publish to npm
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # Tag-push: real publish to `latest`, with provenance, after goreleaser.
+          # workflow_dispatch + npm_dry_run=true: --dry-run, no token side effects.
+          # workflow_dispatch + npm_dry_run=false: real publish under the chosen dist-tag.
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            npm publish --provenance --access public
+          elif [[ "${{ inputs.npm_dry_run }}" == "true" ]]; then
+            npm publish --dry-run --access public
+          else
+            npm publish --provenance --access public --tag "${{ inputs.npm_dist_tag }}"
+          fi

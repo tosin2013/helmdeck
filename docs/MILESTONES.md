@@ -7,51 +7,51 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 ## Milestone: `v0.1 — Core Infrastructure` (Phase 1)
 **Target:** Week 4 · **Exit:** `make smoke` green end-to-end on Compose
 
-- [ ] **T101** Bootstrap Go module + repo layout (`cmd/control-plane`, `cmd/helmdeck-mcp`, `internal/`)
-- [ ] **T102** goreleaser + GitHub Actions: build matrix, cosign, distroless image to ghcr.io
-- [ ] **T103** `SessionRuntime` interface + Docker SDK backend
-- [ ] **T104** Browser sidecar Dockerfile (Chromium, Marp, Tesseract, ffmpeg, xdotool, scrot, Xvfb, XFCE4, noVNC)
-- [ ] **T105** Session lifecycle REST + watchdog
-- [ ] **T106** CDP integration via `chromedp`
-- [ ] **T107** JWT auth middleware
-- [ ] **T108** SQLite migrations + Postgres-compatible schema
-- [ ] **T109** Audit log writer
-- [ ] **T110** Compose stack `deploy/compose/compose.yaml`
-- [ ] **T111** `make smoke` end-to-end harness
+- [x] **T101** Bootstrap Go module + repo layout (`cmd/control-plane`, `cmd/helmdeck-mcp`, `internal/`)
+- [x] **T102** goreleaser + GitHub Actions: build matrix, cosign, distroless image to ghcr.io
+- [x] **T103** `SessionRuntime` interface + Docker SDK backend
+- [x] **T104** Browser sidecar Dockerfile (Chromium, Marp, Tesseract, ffmpeg, xdotool, scrot, Xvfb, XFCE4, noVNC)
+- [x] **T105** Session lifecycle REST + watchdog
+- [x] **T106** CDP integration via `chromedp`
+- [x] **T107** JWT auth middleware
+- [x] **T108** SQLite migrations + Postgres-compatible schema
+- [x] **T109** Audit log writer
+- [x] **T110** Compose stack `deploy/compose/compose.yaml`
+- [x] **T111** `make smoke` end-to-end harness
 
 ---
 
 ## Milestone: `v0.2 — AI Gateway & Pack Substrate` (Phase 2)
 **Target:** Week 8 · **Exit:** ≥90% weak-model success on `browser.screenshot_url` + `web.scrape_spa`
 
-- [ ] **T201** OpenAI-compatible `/v1/chat/completions` + `/v1/models`
-- [ ] **T202** Provider adapters: Anthropic, Gemini, OpenAI, Ollama, Deepseek
-- [ ] **T203** AES-256-GCM encrypted key store + rotation
-- [ ] **T204** Fallback chain rules engine
-- [ ] **T205** Pack Execution Engine
-- [ ] **T206** Closed-set typed error code enforcement
-- [ ] **T207** Pack registry + REST dispatch + version routing
-- [ ] **T208** Built-in pack: `browser.screenshot_url`
-- [ ] **T209** Built-in pack: `web.scrape_spa`
-- [ ] **T210** Built-in pack: `slides.render`
-- [ ] **T211** Object store integration + signed URLs
-- [ ] **T212** A2A Agent Card endpoint
-- [ ] **T213** A2A task endpoint with SSE
+- [x] **T201** OpenAI-compatible `/v1/chat/completions` + `/v1/models`
+- [x] **T202** Provider adapters: Anthropic, Gemini, OpenAI, Ollama, Deepseek
+- [x] **T203** AES-256-GCM encrypted key store + rotation
+- [x] **T204** Fallback chain rules engine
+- [x] **T205** Pack Execution Engine
+- [x] **T206** Closed-set typed error code enforcement
+- [x] **T207** Pack registry + REST dispatch + version routing
+- [x] **T208** Built-in pack: `browser.screenshot_url`
+- [x] **T209** Built-in pack: `web.scrape_spa`
+- [x] **T210** Built-in pack: `slides.render`
+- [x] **T211** Object store integration + signed URLs
+- [x] **T212** A2A Agent Card endpoint
+- [x] **T213** A2A task endpoint with SSE
 
 ---
 
 ## Milestone: `v0.3 — MCP Bridge & Client Integrations` (Phase 3)
 **Target:** Week 10 · **Exit:** four-client smoke matrix green in CI
 
-- [ ] **T301** MCP server registry CRUD + transport adapters
-- [ ] **T302** Built-in MCP server exposing all packs
-- [ ] **T303** `helmdeck-mcp` bridge binary
-- [ ] **T304** Bridge version-skew warning
-- [ ] **T305** Distribution: Homebrew tap + Scoop bucket + GH Releases (cosigned)
-- [ ] **T306** npm package `@helmdeck/mcp-bridge`
-- [ ] **T307** OCI image `ghcr.io/tosin2013/helmdeck-mcp`
-- [ ] **T308** CI smoke matrix: Claude Code · Claude Desktop · OpenClaw · Gemini CLI
-- [ ] **T309** "Connect" UI snippet generators (stubs)
+- [x] **T301** MCP server registry CRUD + transport adapters
+- [x] **T302** Built-in MCP server exposing all packs
+- [x] **T303** `helmdeck-mcp` bridge binary
+- [x] **T304** Bridge version-skew warning
+- [x] **T305** Distribution: Homebrew tap + Scoop bucket + GH Releases (cosigned)
+- [x] **T306** npm package `@helmdeck/mcp-bridge`
+- [x] **T307** OCI image `ghcr.io/tosin2013/helmdeck-mcp`
+- [x] **T308** CI smoke matrix: Claude Code · Claude Desktop · OpenClaw · Gemini CLI
+- [x] **T309** "Connect" UI snippet generators (stubs)
 
 ---
 

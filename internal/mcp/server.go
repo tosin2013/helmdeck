@@ -1,0 +1,246 @@
+package mcp
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
+
+	"github.com/tosin2013/helmdeck/internal/packs"
+)
+
+// PackServer is the helmdeck-as-MCP-server implementation. It
+// exposes every Capability Pack registered in packs.Registry as a
+// typed MCP tool: tools/list enumerates the live registry on every
+// request (so hot-loaded packs from T207 show up immediately) and
+// tools/call dispatches through packs.Engine — meaning the same
+// validation, session lifecycle, artifact upload, and closed-set
+// error mapping that REST callers get also covers MCP clients.
+//
+// PackServer is intentionally transport-agnostic: Serve takes an
+// io.Reader and io.Writer and speaks line-delimited JSON-RPC 2.0,
+// the same framing the StdioAdapter consumes from external servers.
+// The api package wraps it in a WebSocket hijacker (T302), and
+// future Phase 3 work could just as easily wrap it in an
+// HTTP/SSE handler or pipe it to a Unix socket.
+type PackServer struct {
+	registry *packs.Registry
+	engine   *packs.Engine
+}
+
+// NewPackServer constructs a server bound to a pack registry and
+// the engine that executes them. Both are required.
+func NewPackServer(reg *packs.Registry, eng *packs.Engine) *PackServer {
+	return &PackServer{registry: reg, engine: eng}
+}
+
+// Serve drives one MCP session. It returns when the reader hits
+// EOF, the context is cancelled, or a write to w fails. Errors
+// inside individual JSON-RPC calls are surfaced via the response's
+// Error field, NOT as Go errors — the only Go errors Serve returns
+// are transport-level (broken pipe, scanner overflow).
+func (s *PackServer) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	// Writes are serialized so concurrent notifications and
+	// responses don't interleave on the wire. Reads are sequential
+	// (one request at a time) so a sync.Mutex is enough.
+	var writeMu sync.Mutex
+	writeFrame := func(v any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		buf, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		buf = append(buf, '\n')
+		_, err = w.Write(buf)
+		return err
+	}
+
+	for sc.Scan() {
+		// Honor context cancellation between requests so a long-lived
+		// MCP session can be torn down by closing the context.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		var req rpcRequest
+		if err := json.Unmarshal(sc.Bytes(), &req); err != nil {
+			// Malformed JSON gets the standard parse error code.
+			// We can't echo the request id because we never parsed
+			// it; per JSON-RPC 2.0 the id is null in this case.
+			_ = writeFrame(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      json.RawMessage("null"),
+				Error:   &rpcError{Code: -32700, Message: "parse error"},
+			})
+			continue
+		}
+
+		// Notifications (no id) are fire-and-forget per spec; we
+		// silently consume the ones we recognise.
+		if len(req.ID) == 0 || string(req.ID) == "null" {
+			continue
+		}
+
+		resp := s.dispatch(ctx, req)
+		if err := writeFrame(resp); err != nil {
+			return err
+		}
+	}
+	return sc.Err()
+}
+
+func (s *PackServer) dispatch(ctx context.Context, req rpcRequest) rpcResponse {
+	mk := func(result any, err *rpcError) rpcResponse {
+		out := rpcResponse{JSONRPC: "2.0", ID: req.ID}
+		if err != nil {
+			out.Error = err
+			return out
+		}
+		raw, mErr := json.Marshal(result)
+		if mErr != nil {
+			out.Error = &rpcError{Code: -32603, Message: "marshal: " + mErr.Error()}
+			return out
+		}
+		out.Result = raw
+		return out
+	}
+
+	switch req.Method {
+	case "initialize":
+		// We accept any protocol version the client sends and echo
+		// back the one we implement. Strict version negotiation is
+		// T304's job (skew warnings); for now compatibility is best-
+		// effort and the bridge handles client capability gaps.
+		return mk(map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities": map[string]any{
+				"tools": map[string]any{},
+			},
+			"serverInfo": map[string]any{
+				"name":    "helmdeck",
+				"version": "0.2.0",
+			},
+		}, nil)
+
+	case "tools/list":
+		infos := s.registry.List()
+		tools := make([]Tool, 0, len(infos))
+		for _, info := range infos {
+			pack, err := s.registry.Get(info.Name, "")
+			if err != nil {
+				continue
+			}
+			schema, _ := schemaToJSON(pack.InputSchema)
+			tools = append(tools, Tool{
+				Name:        pack.Name,
+				Description: pack.Description,
+				InputSchema: schema,
+			})
+		}
+		return mk(map[string]any{"tools": tools}, nil)
+
+	case "tools/call":
+		var params struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if len(req.Params) == 0 {
+			return mk(nil, &rpcError{Code: -32602, Message: "missing params"})
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return mk(nil, &rpcError{Code: -32602, Message: "invalid params: " + err.Error()})
+		}
+		if params.Name == "" {
+			return mk(nil, &rpcError{Code: -32602, Message: "tool name required"})
+		}
+		pack, err := s.registry.Get(params.Name, "")
+		if err != nil {
+			return mk(nil, &rpcError{Code: -32601, Message: "unknown tool: " + params.Name})
+		}
+		input := params.Arguments
+		if len(input) == 0 {
+			input = json.RawMessage("{}")
+		}
+		res, err := s.engine.Execute(ctx, pack, input)
+		if err != nil {
+			return mk(packErrorAsToolResult(err), nil)
+		}
+		return mk(packResultAsToolResult(res), nil)
+
+	default:
+		return mk(nil, &rpcError{Code: -32601, Message: "method not found: " + req.Method})
+	}
+}
+
+// packResultAsToolResult converts a packs.Result into the MCP
+// `CallToolResult` shape: a typed content array (today just text)
+// plus an optional structured `isError` flag. We serialize the
+// pack output as a single text block of JSON so MCP clients see a
+// shape they can render even when they don't understand the
+// underlying pack semantics.
+func packResultAsToolResult(res *packs.Result) map[string]any {
+	body, _ := json.Marshal(res)
+	return map[string]any{
+		"content": []map[string]any{
+			{"type": "text", "text": string(body)},
+		},
+		"isError": false,
+	}
+}
+
+func packErrorAsToolResult(err error) map[string]any {
+	var perr *packs.PackError
+	code := "internal"
+	msg := err.Error()
+	if errors.As(err, &perr) {
+		code = string(perr.Code)
+		msg = perr.Message
+	}
+	body, _ := json.Marshal(map[string]string{"error": code, "message": msg})
+	return map[string]any{
+		"content": []map[string]any{
+			{"type": "text", "text": string(body)},
+		},
+		"isError": true,
+	}
+}
+
+// schemaToJSON converts a packs.Schema implementation into a
+// JSON Schema document. Today we recognise BasicSchema and emit
+// the canonical `{type:"object", required, properties}` shape; any
+// other Schema type is exported as `{type:"object"}` because pack
+// authors that bring a real JSON Schema library can serialise it
+// themselves at registration time (a future task can extend this
+// switch).
+func schemaToJSON(s packs.Schema) (json.RawMessage, error) {
+	if s == nil {
+		return json.Marshal(map[string]any{"type": "object"})
+	}
+	if bs, ok := s.(packs.BasicSchema); ok {
+		props := map[string]any{}
+		for k, kind := range bs.Properties {
+			props[k] = map[string]any{"type": kind}
+		}
+		out := map[string]any{
+			"type":       "object",
+			"properties": props,
+		}
+		if len(bs.Required) > 0 {
+			out["required"] = bs.Required
+		}
+		return json.Marshal(out)
+	}
+	return json.Marshal(map[string]any{"type": "object"})
+}
+
+// methodNotFoundError is exported for tests that want to assert on
+// the wire shape of an unknown-method response without re-parsing
+// the rpcError struct.
+var methodNotFoundError = fmt.Errorf("method not found")

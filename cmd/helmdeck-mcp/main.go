@@ -11,8 +11,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/tosin2013/helmdeck/internal/bridge"
 )
 
 var (
@@ -21,15 +27,25 @@ var (
 )
 
 func main() {
-	url := os.Getenv("HELMDECK_URL")
-	token := os.Getenv("HELMDECK_TOKEN")
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	if url == "" || token == "" {
-		fmt.Fprintln(os.Stderr, "helmdeck-mcp: HELMDECK_URL and HELMDECK_TOKEN must be set")
-		os.Exit(2)
+	cfg := bridge.Config{
+		URL:     os.Getenv("HELMDECK_URL"),
+		Token:   os.Getenv("HELMDECK_TOKEN"),
+		Version: version,
+		Stdin:   os.Stdin,
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
 	}
+	fmt.Fprintf(os.Stderr, "helmdeck-mcp %s (%s)\n", version, commit)
 
-	fmt.Fprintf(os.Stderr, "helmdeck-mcp %s (%s) — bridge stub, proxy not yet implemented (T303)\n", version, commit)
-	fmt.Fprintf(os.Stderr, "target: %s\n", url)
-	os.Exit(0)
+	if err := bridge.Run(ctx, cfg); err != nil {
+		if errors.Is(err, bridge.ErrMissingConfig) {
+			fmt.Fprintln(os.Stderr, "helmdeck-mcp: HELMDECK_URL and HELMDECK_TOKEN must be set")
+			os.Exit(2)
+		}
+		fmt.Fprintf(os.Stderr, "helmdeck-mcp: %v\n", err)
+		os.Exit(1)
+	}
 }

@@ -1,0 +1,49 @@
+name: Clients Smoke Matrix
+
+# T308 — assert helmdeck-mcp can drive every supported client end-to-end.
+# Per ADR 025 the wire contract is identical at the stdio MCP layer; the
+# matrix exists to catch regressions in the per-client connect snippets
+# (T309) plus the bridge stdio↔WS plumbing.
+#
+# The actual matrix is unrolled inside scripts/clients-smoke.sh — the
+# job exists to provide a clean Compose environment per run.
+
+on:
+  pull_request:
+    paths:
+      - 'cmd/helmdeck-mcp/**'
+      - 'internal/bridge/**'
+      - 'internal/mcp/**'
+      - 'internal/api/connect.go'
+      - 'internal/api/mcp_server.go'
+      - 'scripts/clients-smoke.sh'
+      - '.github/workflows/clients-smoke.yml'
+  schedule:
+    - cron: '0 6 * * *'   # nightly at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  clients-smoke:
+    name: Four-client bridge smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Build helmdeck-mcp bridge
+        run: go build -o bin/helmdeck-mcp ./cmd/helmdeck-mcp
+
+      - name: Build sidecar image
+        run: make sidecar-build
+
+      - name: Run clients smoke matrix
+        env:
+          BRIDGE_BIN: ${{ github.workspace }}/bin/helmdeck-mcp
+        run: bash scripts/clients-smoke.sh

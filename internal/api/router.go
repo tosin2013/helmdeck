@@ -16,6 +16,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/keystore"
+	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/session"
 )
@@ -38,17 +39,22 @@ type Deps struct {
 	GatewayChain *gateway.Chain    // optional; when set, /v1/* dispatches via the chain
 	Keys         *keystore.Store  // optional; nil disables /api/v1/providers/keys
 	KeyTester    KeyTester        // optional; defaults to keystore.TestProviderKey
-	PackRegistry *packs.Registry  // optional; nil disables /api/v1/packs
-	PackEngine   *packs.Engine    // optional; nil disables /api/v1/packs dispatch
+	PackRegistry *packs.Registry // optional; nil disables /api/v1/packs
+	PackEngine   *packs.Engine   // optional; nil disables /api/v1/packs dispatch
+	MCPRegistry  *mcp.Registry   // optional; nil disables /api/v1/mcp/servers
 }
 
 // IsProtectedPath returns true for paths the auth middleware must guard.
 // Exported so tests and the control plane can share the same predicate.
 func IsProtectedPath(p string) bool {
-	// /.well-known/agent.json (T212) is intentionally public — it's
-	// the A2A discovery endpoint and remote agents fetch it before
-	// they have credentials. /a2a/v1/* (T213) IS protected because
-	// task execution costs real resources.
+	// /.well-known/agent.json (T212) and /api/v1/bridge/version
+	// (T304) are intentionally public — both are discovery
+	// endpoints the client hits before it has a token. /a2a/v1/*
+	// (T213) IS protected because task execution costs real
+	// resources.
+	if p == "/api/v1/bridge/version" {
+		return false
+	}
 	return strings.HasPrefix(p, "/api/v1/") || strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/a2a/v1/")
 }
 
@@ -73,6 +79,10 @@ func NewRouter(deps Deps) http.Handler {
 	registerKeyRoutes(mux, deps)
 	registerPackRoutes(mux, deps)
 	registerA2ARoutes(mux, deps)
+	registerMCPRoutes(mux, deps)
+	registerMCPServerRoute(mux, deps)
+	registerBridgeVersionRoute(mux, deps)
+	registerConnectRoutes(mux, deps)
 
 	if deps.Audit == nil {
 		deps.Audit = audit.Discard{}

@@ -1,0 +1,38 @@
+{
+  "name": "@helmdeck/mcp-bridge",
+  "version": "0.3.0",
+  "description": "Stdio MCP bridge that connects Claude Code, Claude Desktop, OpenClaw, and Gemini CLI to a helmdeck control plane.",
+  "bin": {
+    "helmdeck-mcp": "bin/helmdeck-mcp.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tosin2013/helmdeck.git",
+    "directory": "npm"
+  },
+  "homepage": "https://github.com/tosin2013/helmdeck",
+  "bugs": {
+    "url": "https://github.com/tosin2013/helmdeck/issues"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "helmdeck",
+    "claude",
+    "gemini",
+    "agent",
+    "bridge"
+  ]
+}

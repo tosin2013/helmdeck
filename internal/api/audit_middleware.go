@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -29,6 +31,17 @@ func (s *statusRecorder) Flush() {
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Hijack forwards to the underlying ResponseWriter when it
+// implements http.Hijacker. Required for the WebSocket MCP server
+// (T302) — without it, ws.UpgradeHTTP fails because the wrapped
+// writer no longer satisfies http.Hijacker.
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := s.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
 }
 
 // auditMiddleware records every request that survives auth into the audit

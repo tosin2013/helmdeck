@@ -67,7 +67,7 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [ ] **T404** Built-in pack: `web.fill_form` *(blocked on T501)*
 - [ ] **T405** Built-in pack: `web.login_and_fetch` *(blocked on T501)*
 - [ ] **T406** Built-in pack: `slides.video` *(blocked on T501)*
-- [ ] **T407** Vision-mode endpoint
+- [x] **T407** Vision-mode endpoint
 - [ ] **T408** Reference vision packs
 - [x] **T409** noVNC live viewer baseline
 - [ ] **T410** Steel Browser integration (optional)

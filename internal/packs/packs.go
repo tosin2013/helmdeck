@@ -63,6 +63,13 @@ type Pack struct {
 	NeedsSession bool        // when true, Engine acquires a session and exposes it via ExecutionContext
 	SessionSpec  session.Spec // optional override; zero value means "runtime defaults"
 	Handler      HandlerFunc
+
+	// ArtifactTTL is the per-pack retention override consulted by the
+	// janitor (T211b, ADR 031). Zero means "use the platform default
+	// from HELMDECK_ARTIFACT_TTL". Set on packs whose outputs are
+	// either especially short-lived (e.g. one-off screenshots) or
+	// especially valuable (e.g. rendered slide decks the user shares).
+	ArtifactTTL time.Duration
 }
 
 // HandlerFunc is the per-pack work function. It receives an

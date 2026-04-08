@@ -22,13 +22,17 @@ type Artifact struct {
 }
 
 // ArtifactStore is the contract every backend implements. The engine
-// only ever calls Put (from inside handlers via ExecutionContext)
-// and ListForPack (after the handler returns) — Get/Delete live in
-// the REST artifact endpoint that T211 will land alongside S3.
+// calls Put from inside handlers via ExecutionContext and ListForPack
+// after the handler returns; the artifact REST endpoint uses Get; the
+// TTL janitor (T211b) uses ListAll + Delete. Cross-process listing
+// (ListAll) is required for the janitor because the per-process index
+// doesn't survive restarts.
 type ArtifactStore interface {
 	Put(ctx context.Context, pack, name string, content []byte, contentType string) (Artifact, error)
 	ListForPack(ctx context.Context, pack string) ([]Artifact, error)
 	Get(ctx context.Context, key string) ([]byte, Artifact, error)
+	ListAll(ctx context.Context) ([]Artifact, error)
+	Delete(ctx context.Context, key string) error
 }
 
 // MemoryArtifactStore is the dev/test backend. It keeps content in a
@@ -104,4 +108,26 @@ func (s *MemoryArtifactStore) Get(ctx context.Context, key string) ([]byte, Arti
 	cp := make([]byte, len(c))
 	copy(cp, c)
 	return cp, s.meta[key], nil
+}
+
+// ListAll returns metadata for every artifact currently held. Order is unspecified.
+func (s *MemoryArtifactStore) ListAll(ctx context.Context) ([]Artifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Artifact, 0, len(s.meta))
+	for _, m := range s.meta {
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// Delete removes a single artifact. No-op if the key is unknown — the
+// janitor invokes Delete unconditionally and an already-gone object
+// is the desired state, not an error.
+func (s *MemoryArtifactStore) Delete(ctx context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.contents, key)
+	delete(s.meta, key)
+	return nil
 }

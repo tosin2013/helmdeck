@@ -76,7 +76,11 @@ Compose defaults wire these to the bundled Garage service so `docker compose up`
 
 Bucket lifecycle policies are intentionally **not used**. Garage's lifecycle support is partial; SeaweedFS's is partial; even AWS S3 lifecycle has surprising semantics around versioned buckets. A backend-portable design must own this in helmdeck itself.
 
-Implementation: a janitor goroutine in the control plane scans the audit table for pack output references older than `HELMDECK_ARTIFACT_TTL` (default 7 days) and deletes the corresponding objects. This also gives operators per-pack retention policies, which a bucket-level rule cannot express, and keeps the "what's still in the bucket" question answerable from helmdeck's own database.
+Implementation: a janitor goroutine in the control plane scans the artifact bucket via `ListObjects` once per `HELMDECK_ARTIFACT_JANITOR_INTERVAL` (default 1h), compares each object's `LastModified` against either the per-pack `Pack.ArtifactTTL` override or the platform default `HELMDECK_ARTIFACT_TTL` (default 7d), and deletes anything past its expiry. The bucket itself is the source of truth for "what artifacts exist" — the audit log records lifecycle events for observability, but the bucket scan is what drives deletion. This keeps the design stateless across control-plane restarts and survives crash scenarios cleanly.
+
+The pack name is parsed from the object key prefix (`<pack>/<rand>-<name>`), which is set by the engine's `ArtifactStore.Put` namespacing convention. Per-pack overrides come from the `Pack.ArtifactTTL` field, which packs whose outputs are especially short-lived (one-off screenshots) or especially valuable (rendered slide decks the user shares) can set in their pack definition.
+
+The earlier sketch of "scan the audit table for pack output references" was discarded in favor of bucket scanning because: (1) it requires no SQL schema for retention state, (2) it survives audit-log compaction or loss without losing track of artifacts, (3) the helmdeck bucket is dedicated by convention so there is no risk of deleting non-helmdeck objects, and (4) `ListObjects` is paginated and cheap at the helmdeck artifact volume profile (KB-MB objects, write-once).
 
 ### Backend-specific features that must NOT be used
 

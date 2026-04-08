@@ -177,6 +177,66 @@ func (s *S3ArtifactStore) Get(ctx context.Context, key string) ([]byte, Artifact
 	}, nil
 }
 
+// ListAll walks the entire bucket and returns metadata for every
+// object. Used by the TTL janitor (T211b). The Pack field is parsed
+// from the key prefix because S3 object metadata isn't carried by
+// minio-go's recursive listing — that's fine because the engine's Put
+// always namespaces by `<pack>/<rand>-<name>`.
+func (s *S3ArtifactStore) ListAll(ctx context.Context) ([]Artifact, error) {
+	var out []Artifact
+	for obj := range s.client.ListObjects(ctx, s.cfg.Bucket, minio.ListObjectsOptions{Recursive: true}) {
+		if obj.Err != nil {
+			return nil, &PackError{Code: CodeArtifactFailed, Message: obj.Err.Error(), Cause: obj.Err}
+		}
+		pack := ""
+		if i := indexByte(obj.Key, '/'); i > 0 {
+			pack = obj.Key[:i]
+		}
+		out = append(out, Artifact{
+			Key:         obj.Key,
+			Size:        obj.Size,
+			ContentType: obj.ContentType,
+			CreatedAt:   obj.LastModified,
+			Pack:        pack,
+		})
+	}
+	return out, nil
+}
+
+// Delete removes a single object. Idempotent — the janitor calls
+// Delete on every expired key, and a 404 from the backend would just
+// mean another janitor cycle (or operator) got there first.
+func (s *S3ArtifactStore) Delete(ctx context.Context, key string) error {
+	if err := s.client.RemoveObject(ctx, s.cfg.Bucket, key, minio.RemoveObjectOptions{}); err != nil {
+		return &PackError{Code: CodeArtifactFailed, Message: err.Error(), Cause: err}
+	}
+	// Drop the in-memory index entry too so a subsequent ListForPack
+	// in this process doesn't return a stale handle.
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	for pack, list := range s.index {
+		filtered := list[:0]
+		for _, a := range list {
+			if a.Key != key {
+				filtered = append(filtered, a)
+			}
+		}
+		s.index[pack] = filtered
+	}
+	return nil
+}
+
+// indexByte is strings.IndexByte without importing strings just for
+// this. The key always uses '/' as the pack/name separator.
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
 // presign builds a time-limited GET URL. If PublicEndpoint is set, we
 // rewrite the host on the returned URL so agents reaching helmdeck
 // from outside the docker network get a URL they can actually fetch.

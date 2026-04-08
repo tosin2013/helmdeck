@@ -145,9 +145,11 @@ func main() {
 	deps.PackRegistry = packReg
 
 	engineOpts := []packs.Option{packs.WithRuntime(rt), packs.WithLogger(logger)}
+	var artifactStore packs.ArtifactStore
 	if store, err := loadS3StoreFromEnv(ctx); err != nil {
 		logger.Warn("S3 artifact store disabled", "err", err)
 	} else if store != nil {
+		artifactStore = store
 		engineOpts = append(engineOpts, packs.WithArtifactStore(store))
 		logger.Info("S3 artifact store enabled", "endpoint", os.Getenv("HELMDECK_S3_ENDPOINT"), "bucket", os.Getenv("HELMDECK_S3_BUCKET"))
 	}
@@ -166,6 +168,29 @@ func main() {
 		}
 	}
 	deps.PackEngine = packs.New(engineOpts...)
+
+	// Artifact TTL janitor (T211b, ADR 031). Only runs when an
+	// S3-compatible store is configured — the in-memory store is
+	// process-local and gets cleaned up on shutdown anyway.
+	if artifactStore != nil {
+		janitor := packs.NewJanitor(packs.JanitorConfig{
+			Store:      artifactStore,
+			Interval:   parseDurationOr("HELMDECK_ARTIFACT_JANITOR_INTERVAL", time.Hour),
+			DefaultTTL: parseDurationOr("HELMDECK_ARTIFACT_TTL", 7*24*time.Hour),
+			PackTTL: func(name string) (time.Duration, bool) {
+				p, err := packReg.Get(name, "")
+				if err != nil || p.ArtifactTTL <= 0 {
+					return 0, false
+				}
+				return p.ArtifactTTL, true
+			},
+			Logger: logger.With("subsystem", "artifact-janitor"),
+		})
+		go janitor.Run(ctx)
+		logger.Info("artifact janitor running",
+			"interval", parseDurationOr("HELMDECK_ARTIFACT_JANITOR_INTERVAL", time.Hour),
+			"default_ttl", parseDurationOr("HELMDECK_ARTIFACT_TTL", 7*24*time.Hour))
+	}
 
 	// Register built-in packs (T208–T210). T209/T210 packs append here
 	// as they land.
@@ -239,6 +264,22 @@ func loadOrGenerateIssuer(logger *slog.Logger) (*auth.Issuer, bool, error) {
 		return nil, false, err
 	}
 	return iss, true, nil
+}
+
+// parseDurationOr reads a Go duration string from envKey and returns
+// it. Falls back to def when the env var is unset, empty, or invalid;
+// invalid values are silently ignored because the janitor is best-
+// effort infrastructure that should never refuse to start over a typo.
+func parseDurationOr(envKey string, def time.Duration) time.Duration {
+	v := os.Getenv(envKey)
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return def
+	}
+	return d
 }
 
 // envOrFile returns the value of envKey if set; otherwise reads the

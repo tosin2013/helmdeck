@@ -64,6 +64,10 @@ type openAIChatRequest struct {
 
 // openAIChatResponse mirrors the upstream response. Choices/Usage map
 // directly to ChatResponse so the translation step is just a re-tag.
+// Assistant responses from OpenAI are always text-only at the
+// content level (the model returns prose, not images), so the
+// embedded message uses a plain string Content field rather than the
+// MessageContent sum type.
 type openAIChatResponse struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
@@ -113,7 +117,7 @@ func (p *openAIProvider) ChatCompletion(ctx context.Context, req ChatRequest) (C
 	for _, c := range parsed.Choices {
 		out.Choices = append(out.Choices, Choice{
 			Index:        c.Index,
-			Message:      Message{Role: c.Message.Role, Content: c.Message.Content},
+			Message:      Message{Role: c.Message.Role, Content: TextContent(c.Message.Content)},
 			FinishReason: c.FinishReason,
 		})
 	}

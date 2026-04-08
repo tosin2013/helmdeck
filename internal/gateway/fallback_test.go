@@ -38,7 +38,7 @@ func (s *scriptedProvider) ChatCompletion(ctx context.Context, req ChatRequest) 
 	}
 	resp := r.resp
 	if len(resp.Choices) == 0 {
-		resp.Choices = []Choice{{Index: 0, Message: Message{Role: "assistant", Content: "ok from " + s.name}, FinishReason: "stop"}}
+		resp.Choices = []Choice{{Index: 0, Message: Message{Role: "assistant", Content: TextContent("ok from " + s.name)}, FinishReason: "stop"}}
 	}
 	return resp, nil
 }
@@ -58,7 +58,7 @@ func TestChainPassthroughWhenNoRule(t *testing.T) {
 
 	resp, err := chain.Dispatch(context.Background(), ChatRequest{
 		Model:    "openai/gpt-4o",
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages: []Message{{Role: "user", Content: TextContent("hi")}},
 	})
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -88,7 +88,7 @@ func TestChainFailoverOnRateLimit(t *testing.T) {
 
 	resp, err := chain.Dispatch(context.Background(), ChatRequest{
 		Model:    "openai/gpt-4o",
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages: []Message{{Role: "user", Content: TextContent("hi")}},
 	})
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -118,7 +118,7 @@ func TestChainNoFailoverOnUnmatchedTrigger(t *testing.T) {
 
 	_, err := chain.Dispatch(context.Background(), ChatRequest{
 		Model:    "openai/gpt-4o",
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages: []Message{{Role: "user", Content: TextContent("hi")}},
 	})
 	if err == nil {
 		t.Fatal("expected error")
@@ -142,7 +142,7 @@ func TestChainEmptyTriggersMatchesAny(t *testing.T) {
 	})
 	resp, err := chain.Dispatch(context.Background(), ChatRequest{
 		Model:    "openai/gpt-4o",
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages: []Message{{Role: "user", Content: TextContent("hi")}},
 	})
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -170,7 +170,7 @@ func TestChainWalksMultipleFallbacks(t *testing.T) {
 
 	resp, err := chain.Dispatch(context.Background(), ChatRequest{
 		Model:    "openai/gpt-4o",
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages: []Message{{Role: "user", Content: TextContent("hi")}},
 	})
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -195,7 +195,7 @@ func TestChainExhaustionSurfacesLastError(t *testing.T) {
 	})
 	_, err := chain.Dispatch(context.Background(), ChatRequest{
 		Model:    "openai/gpt-4o",
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages: []Message{{Role: "user", Content: TextContent("hi")}},
 	})
 	if err == nil {
 		t.Fatal("expected error")
@@ -243,7 +243,7 @@ func TestChainStopsOnContextCancel(t *testing.T) {
 	cancel()
 	_, err := chain.Dispatch(ctx, ChatRequest{
 		Model:    "openai/gpt-4o",
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages: []Message{{Role: "user", Content: TextContent("hi")}},
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)

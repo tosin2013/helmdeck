@@ -31,7 +31,7 @@ func (s *stubProvider) ChatCompletion(ctx context.Context, req ChatRequest) (Cha
 	return ChatResponse{
 		Choices: []Choice{{
 			Index:        0,
-			Message:      Message{Role: "assistant", Content: "hi from " + s.name + " using " + req.Model},
+			Message:      Message{Role: "assistant", Content: TextContent("hi from " + s.name + " using " + req.Model)},
 			FinishReason: "stop",
 		}},
 		Usage: Usage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3},
@@ -73,7 +73,7 @@ func TestRegistryDispatch(t *testing.T) {
 
 	resp, err := reg.Dispatch(context.Background(), ChatRequest{
 		Model:    "anthropic/claude-sonnet-4-6",
-		Messages: []Message{{Role: "user", Content: "hello"}},
+		Messages: []Message{{Role: "user", Content: TextContent("hello")}},
 	})
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -96,7 +96,7 @@ func TestRegistryDispatchUnknownProvider(t *testing.T) {
 	reg := NewRegistry()
 	_, err := reg.Dispatch(context.Background(), ChatRequest{
 		Model:    "ghost/x",
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages: []Message{{Role: "user", Content: TextContent("hi")}},
 	})
 	if !errors.Is(err, ErrUnknownProvider) {
 		t.Fatalf("err = %v, want ErrUnknownProvider", err)

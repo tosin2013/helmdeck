@@ -27,12 +27,17 @@ var ErrUnknownProvider = errors.New("unknown provider")
 // contain a `provider/model` separator. Mapped to HTTP 400.
 var ErrInvalidModel = errors.New("model must use provider/model syntax")
 
-// Message mirrors the OpenAI chat message shape. Content is a string for
-// the T201 facade — multimodal content arrays land with vision packs.
+// Message mirrors the OpenAI chat message shape. Content is the
+// MessageContent sum type defined in content.go — it accepts either
+// a plain text string (text-only chat, the legacy path) or an
+// ordered array of typed content parts (text + images, the OpenAI
+// vision spec). Use TextContent / MultipartContent constructors at
+// call sites; provider adapters branch on Content.IsMultipart() to
+// translate to whatever shape their upstream API speaks.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-	Name    string `json:"name,omitempty"`
+	Role    string         `json:"role"`
+	Content MessageContent `json:"content"`
+	Name    string         `json:"name,omitempty"`
 }
 
 // ChatRequest is the subset of the OpenAI /v1/chat/completions request

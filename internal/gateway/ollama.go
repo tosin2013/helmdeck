@@ -49,18 +49,36 @@ type ollamaOptions struct {
 	NumPredict  *int     `json:"num_predict,omitempty"`
 }
 
+// ollamaWireMessage is the per-message shape Ollama wants on the wire.
+// Unlike OpenAI/Anthropic, Ollama does not embed images in the
+// content array — it has a separate top-level Images field per
+// message containing base64-encoded image bytes. We translate at
+// adapter time so callers can use the same MessageContent abstraction
+// for every backend.
+type ollamaWireMessage struct {
+	Role    string   `json:"role"`
+	Content string   `json:"content"`
+	Images  []string `json:"images,omitempty"`
+}
+
 type ollamaRequest struct {
-	Model    string         `json:"model"`
-	Messages []Message      `json:"messages"`
-	Stream   bool           `json:"stream"`
-	Options  *ollamaOptions `json:"options,omitempty"`
+	Model    string             `json:"model"`
+	Messages []ollamaWireMessage `json:"messages"`
+	Stream   bool               `json:"stream"`
+	Options  *ollamaOptions     `json:"options,omitempty"`
 }
 
 type ollamaResponse struct {
-	Model     string  `json:"model"`
-	CreatedAt string  `json:"created_at"`
-	Message   Message `json:"message"`
-	Done      bool    `json:"done"`
+	Model     string `json:"model"`
+	CreatedAt string `json:"created_at"`
+	// Ollama always returns text-only assistant messages — the images
+	// field is request-only. Decode into a flat shape and lift into a
+	// gateway Message via TextContent below.
+	Message struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"message"`
+	Done bool `json:"done"`
 	// Token counts when available; Ollama only fills these on the final
 	// response, which is what we get with stream=false.
 	PromptEvalCount int `json:"prompt_eval_count"`
@@ -68,9 +86,24 @@ type ollamaResponse struct {
 }
 
 func (p *ollamaProvider) ChatCompletion(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	wire := make([]ollamaWireMessage, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		wm := ollamaWireMessage{Role: m.Role, Content: m.Content.Text()}
+		// Lift any image_url parts out of the content stream into the
+		// per-message Images field. data:image/...;base64,<x> URLs
+		// become the raw base64 (Ollama wants the payload only); other
+		// URL forms (https://...) are skipped because Ollama can't
+		// fetch them server-side.
+		for _, img := range m.Content.Images() {
+			if _, b64, ok := decodeDataURL(img.URL); ok {
+				wm.Images = append(wm.Images, b64)
+			}
+		}
+		wire = append(wire, wm)
+	}
 	upstream := ollamaRequest{
 		Model:    req.Model,
-		Messages: req.Messages,
+		Messages: wire,
 		Stream:   false,
 	}
 	if req.Temperature != nil || req.MaxTokens != nil {
@@ -96,9 +129,13 @@ func (p *ollamaProvider) ChatCompletion(ctx context.Context, req ChatRequest) (C
 		finish = "stop"
 	}
 	return ChatResponse{
-		Object:  "chat.completion",
-		Model:   parsed.Model,
-		Choices: []Choice{{Index: 0, Message: parsed.Message, FinishReason: finish}},
+		Object: "chat.completion",
+		Model:  parsed.Model,
+		Choices: []Choice{{
+			Index:        0,
+			Message:      Message{Role: parsed.Message.Role, Content: TextContent(parsed.Message.Content)},
+			FinishReason: finish,
+		}},
 		Usage: Usage{
 			PromptTokens:     parsed.PromptEvalCount,
 			CompletionTokens: parsed.EvalCount,

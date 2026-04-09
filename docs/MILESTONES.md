@@ -125,7 +125,7 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [x] **T606** Capability Packs panel *(read-only list grouped by namespace; Test Runner in T606a)*
 - [ ] **T607** Model Success Rates tab (the killer feature)
 - [ ] **T608** Pack Authoring UI (schema editor + Go/WASM handler + publish)
-- [ ] **T609** Security Policies panel
+- [x] **T609** Security Policies panel *(read-only snapshot of egress allowlist + sandbox baseline + auth + telemetry; backed by new GET /api/v1/security; edit + reload-config in T609a)*
 - [x] **T610** Credential Vault panel *(read-only list; Add Credential modal + Usage Log in T610a)*
 - [x] **T611** Audit Logs panel *(GET /api/v1/audit + filters: event_type / severity / actor / from / to / limit; React panel replaces stub)*
 - [x] **T612** Connect Clients panel *(per-client cards with snippet + copy button for claude-code, claude-desktop, openclaw, gemini-cli, hermes-agent; OS-detected one-liners in T612a)*

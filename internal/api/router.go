@@ -107,6 +107,7 @@ func NewRouter(deps Deps) http.Handler {
 	registerBridgeVersionRoute(mux, deps)
 	registerConnectRoutes(mux, deps)
 	registerAuditRoutes(mux, deps)
+	registerSecurityRoutes(mux, deps)
 
 	var handler http.Handler = mux
 	// Innermost: auth attaches claims (or rejects with 401).

@@ -215,17 +215,32 @@ func main() {
 		logger.Info("session runtime disabled by flag")
 	}
 
+	// T202a: hydrate the gateway registry from the encrypted keystore
+	// at boot AND expose a closure so handler routes can re-hydrate
+	// after a key add/rotate/delete (hot reload — no restart needed).
+	// LoadCustomOpenAIProviders adds env-var-driven OpenAI-compatible
+	// aggregators (today: OpenRouter via HELMDECK_OPENROUTER_API_KEY).
+	gwReg := newGatewayRegistryWithRecorder(db)
+	rehydrateGateway := func() error {
+		if err := gateway.HydrateFromKeystore(ctx, gwReg, keystoreReaderAdapter{ks}, logger); err != nil {
+			return err
+		}
+		gateway.LoadCustomOpenAIProviders(gwReg, logger)
+		return nil
+	}
+	if err := rehydrateGateway(); err != nil {
+		logger.Warn("initial gateway hydrate failed; /v1/* will be partial or empty", "err", err)
+	}
+
 	deps := api.Deps{
-		Logger:  logger,
-		Version: version,
-		Runtime: rt,
-		Issuer:  issuer,
-		Audit:   auditWriter,
-		// Empty registry today; T202 wires real provider adapters into it
-		// at startup. The routes still mount so misconfiguration shows up
-		// as an empty /v1/models response rather than a 503.
-		Gateway:     newGatewayRegistryWithRecorder(db),
-		Keys:        ks,
+		Logger:           logger,
+		Version:          version,
+		Runtime:          rt,
+		Issuer:           issuer,
+		Audit:            auditWriter,
+		Gateway:          gwReg,
+		RehydrateGateway: rehydrateGateway,
+		Keys:             ks,
 		MCPRegistry: mcp.NewRegistry(db),
 		Vault:       vaultStore,
 		Injector:    inject.New(vaultStore, logger.With("subsystem", "inject")),
@@ -484,6 +499,36 @@ func envOrFile(envKey, fileKey string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// keystoreReaderAdapter wraps *keystore.Store so it satisfies
+// gateway.KeystoreReader. The interface lives in internal/gateway/
+// (not internal/keystore/) so the gateway package doesn't have to
+// import database/sql. The adapter converts []keystore.Record into
+// []gateway.KeystoreRecord and forwards Decrypt 1:1.
+type keystoreReaderAdapter struct {
+	ks *keystore.Store
+}
+
+func (a keystoreReaderAdapter) List(ctx context.Context, provider string) ([]gateway.KeystoreRecord, error) {
+	recs, err := a.ks.List(ctx, provider)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]gateway.KeystoreRecord, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, gateway.KeystoreRecord{
+			ID:        r.ID,
+			Provider:  r.Provider,
+			Label:     r.Label,
+			CreatedAt: r.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+func (a keystoreReaderAdapter) Decrypt(ctx context.Context, id string) (string, error) {
+	return a.ks.Decrypt(ctx, id)
 }
 
 // newGatewayRegistryWithRecorder constructs a fresh gateway.Registry

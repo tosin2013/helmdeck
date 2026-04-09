@@ -153,6 +153,7 @@ Each task lists its source ADR(s) and prerequisite tasks. IDs are stable for cro
 | T604 | AI Providers panel: provider cards, Configure modal, Test Connection, Routing Rules table | P0 | 005 | T601, T203 |
 | T605 | MCP Registry panel: server table, Add Server multi-step modal, Tool Inspector | P0 | 006 | T601, T301 |
 | T606 | **Capability Packs panel** (the killer feature): list grouped by namespace, Overview/Schema/Test Runner tabs | P0 | 003, 024 | T601, T207 |
+| T202a | Wire keystore-stored provider keys into `gateway.Registry` at startup + on every key mutation (hot reload). Adds `HELMDECK_OPENROUTER_API_KEY` env-var fast path for OpenAI-compatible aggregators not yet modeled in the keystore schema. Closes the gap that left v0.6.0 with a non-functional `/v1/chat/completions` despite T202 being marked complete. | P0 | 005 | T203 |
 | T607 | **Model Success Rates tab** with per-model breakdown, 80% threshold highlight, "Tighten Schema" diff view | P0 | 003, 008, 024 | T606, T510 |
 | ~~T608~~ | ~~Pack Authoring UI~~ — **moved to Phase 8** (see row in Phase 8 table); depends on T801 (WASM Executor) or a composite-pack runtime, neither of which is on the v0.6.0 critical path | — | 024 | T606, T801 |
 | T609 | Security Policies panel: Network/Sandbox/Access Control tabs | P1 | 011 | T601, T508 |

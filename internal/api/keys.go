@@ -58,6 +58,15 @@ func registerKeyRoutes(mux *http.ServeMux, deps Deps) {
 			}
 			return
 		}
+		// T202a hot reload: re-hydrate the gateway registry so the
+		// new key is live for /v1/chat/completions immediately. We
+		// log but never fail the HTTP response on rehydrate error —
+		// the keystore mutation itself succeeded.
+		if deps.RehydrateGateway != nil {
+			if err := deps.RehydrateGateway(); err != nil {
+				deps.Logger.Warn("rehydrate gateway after key create failed", "err", err)
+			}
+		}
 		writeJSON(w, http.StatusCreated, rec)
 	})
 
@@ -97,6 +106,11 @@ func registerKeyRoutes(mux *http.ServeMux, deps Deps) {
 					writeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
 					return
 				}
+				if deps.RehydrateGateway != nil {
+					if err := deps.RehydrateGateway(); err != nil {
+						deps.Logger.Warn("rehydrate gateway after key delete failed", "err", err)
+					}
+				}
 				w.WriteHeader(http.StatusNoContent)
 			default:
 				writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", r.Method)
@@ -123,6 +137,11 @@ func registerKeyRoutes(mux *http.ServeMux, deps Deps) {
 				if err != nil {
 					writeError(w, http.StatusBadRequest, "rotate_failed", err.Error())
 					return
+				}
+				if deps.RehydrateGateway != nil {
+					if err := deps.RehydrateGateway(); err != nil {
+						deps.Logger.Warn("rehydrate gateway after key rotate failed", "err", err)
+					}
 				}
 				writeJSON(w, http.StatusOK, rec)
 				return

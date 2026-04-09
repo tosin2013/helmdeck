@@ -39,9 +39,13 @@ type Deps struct {
 	Audit      audit.Writer     // optional; nil uses audit.Discard
 	CDPFactory CDPClientFactory  // optional; nil disables /api/v1/browser/*
 	Executor   session.Executor // optional; nil disables /api/v1/desktop/*
-	Gateway      *gateway.Registry // optional; nil disables /v1/* AI facade
-	DB           *sql.DB           // optional; nil disables /api/v1/providers/stats and any other endpoint that needs raw SQL
-	GatewayChain *gateway.Chain    // optional; when set, /v1/* dispatches via the chain
+	Gateway          *gateway.Registry // optional; nil disables /v1/* AI facade
+	DB               *sql.DB           // optional; nil disables /api/v1/providers/stats and any other endpoint that needs raw SQL
+	GatewayChain     *gateway.Chain    // optional; when set, /v1/* dispatches via the chain
+	// RehydrateGateway re-runs gateway.HydrateFromKeystore so a key
+	// added/rotated/deleted via /api/v1/providers/keys takes effect
+	// without a control-plane restart (T202a hot reload). nil = no-op.
+	RehydrateGateway func() error
 	Keys         *keystore.Store  // optional; nil disables /api/v1/providers/keys
 	KeyTester    KeyTester        // optional; defaults to keystore.TestProviderKey
 	PackRegistry *packs.Registry // optional; nil disables /api/v1/packs

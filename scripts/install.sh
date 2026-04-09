@@ -378,7 +378,12 @@ run_build() {
 compose_up() {
   step "Starting Compose stack"
   info "this brings up the control plane, the Garage object store, and the garage-init bootstrap..."
-  if ! docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d --wait; then
+  # Note: --wait omitted intentionally. The sidecar-warm service is a
+  # one-shot pull-warmer that exits 0 by design; `compose up --wait`
+  # treats Exited as failure even when restart: "no". Our own
+  # wait_for_health() below polls /healthz directly and is the real
+  # readiness gate.
+  if ! docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d --build; then
     fail "compose up failed — dumping control-plane logs:"
     docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" logs control-plane 2>&1 | tail -40 >&2 || true
     exit 4

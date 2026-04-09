@@ -21,7 +21,7 @@
 
 set -eu
 
-GARAGE="garage -c /etc/garage/garage.toml"
+GARAGE="garage -c /etc/garage.toml"
 CRED_DIR="${CRED_DIR:-/credentials}"
 BUCKET="${HELMDECK_S3_BUCKET:-helmdeck-artifacts}"
 KEY_NAME="${HELMDECK_S3_KEY_NAME:-helmdeck-control-plane}"

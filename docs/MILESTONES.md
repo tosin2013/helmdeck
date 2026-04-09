@@ -110,7 +110,7 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [x] **T563** `docs/integrations/hermes-agent.md` — setup + Phase 5.5 loop walkthrough; added `hermes-agent` case to `connect.go` (YAML config, `format: "yaml"` field) *(🟡)*
 - [x] **T564** `scripts/validate-clients.sh` — manual helper that boots the stack and prints connect snippets + a copy-pasteable JSON-RPC code-edit-loop scenario (no pass/fail automation)
 - [ ] **T565** Walk the Phase 5.5 code-edit loop against Claude Code end-to-end and flip `docs/integrations/claude-code.md` + `README.md` matrix to ✅ — the actual milestone exit gate
-- [ ] **T570** `scripts/install.sh` — one-command bootstrap on a fresh box (preflight, idempotent secret generation into `.env.local`, build, compose up, healthcheck, `--reset` / `--no-build` flags). Plus `make install` target, `compose.yaml` `env_file` wiring so vault/keystore/admin secrets reach the container, `.gitignore` exclusion of `.env*`, and a README Quick Start rewrite making `./scripts/install.sh` the primary path. Verified end-to-end on a fresh Ubuntu 24.04 VM.
+- [x] **T570** `scripts/install.sh` — one-command bootstrap on a fresh box. Verified end-to-end on the dev box (all four scenarios: happy path, login round-trip, idempotent re-run, `--reset` rotates password). Surfaced and fixed nine pre-existing wiring bugs in compose.yaml / garage.toml / garage-init / Dockerfiles along the way. Multipass VM verification still recommended before tagging v0.6.0.
 
 ---
 

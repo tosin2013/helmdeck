@@ -20,7 +20,7 @@ replication_factor = 1
 # garage.toml. Format: 32 hex bytes = 64 hex chars.
 rpc_secret = "6c2c8b8e27e9f2a3a3b1d5e9f8c4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2"
 rpc_bind_addr = "[::]:3901"
-rpc_public_addr = "127.0.0.1:3901"
+rpc_public_addr = "garage:3901"
 
 [s3_api]
 api_bind_addr = "[::]:3900"

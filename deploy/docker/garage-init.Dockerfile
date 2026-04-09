@@ -8,7 +8,7 @@
 # Pin the garage version to the same tag the compose stack runs to
 # guarantee CLI/server compatibility.
 
-FROM dxflrs/garage:v2.2.1 AS garage
+FROM dxflrs/garage:v2.2.0 AS garage
 FROM alpine:3.20
 
 RUN apk add --no-cache bash gawk

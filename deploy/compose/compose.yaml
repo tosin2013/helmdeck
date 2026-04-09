@@ -97,20 +97,20 @@ services:
   # MinIO-fork) can stop this service and override the control-plane
   # HELMDECK_S3_* env vars in their .env file.
   garage:
-    image: dxflrs/garage:v2.2.1
+    image: dxflrs/garage:v2.2.0
     container_name: helmdeck-garage
     restart: unless-stopped
     volumes:
       - garage-meta:/var/lib/garage/meta
       - garage-data:/var/lib/garage/data
-      - ./garage.toml:/etc/garage/garage.toml:ro
+      - ./garage.toml:/etc/garage.toml:ro
     networks:
       - baas-net
     healthcheck:
       # garage status returns 0 once the daemon is answering, even
       # before a layout is applied. The init service handles the
       # post-boot bootstrap.
-      test: ["CMD", "garage", "-c", "/etc/garage/garage.toml", "status"]
+      test: ["CMD", "/garage", "-c", "/etc/garage.toml", "status"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -130,9 +130,16 @@ services:
     restart: "no"
     entrypoint: ["/bin/sh", "/garage-init.sh"]
     volumes:
-      - ./garage.toml:/etc/garage/garage.toml:ro
+      - ./garage.toml:/etc/garage.toml:ro
       - ./garage-init.sh:/garage-init.sh:ro
       - garage-credentials:/credentials
+      # Share garage's metadata volume so the CLI inside this container
+      # can read the node key file the daemon writes on first launch.
+      # Without this, `garage status` from a separate container errors
+      # with "Unable to read node key" — the CLI tries to act as a
+      # cluster member and needs the node identity to authenticate
+      # against the running daemon over RPC.
+      - garage-meta:/var/lib/garage/meta
     networks:
       - baas-net
     depends_on:

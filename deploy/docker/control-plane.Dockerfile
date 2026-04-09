@@ -17,6 +17,13 @@ RUN go mod download
 
 COPY cmd ./cmd
 COPY internal ./internal
+# web/embed.go is imported by internal/api/web.go to serve the
+# Management UI bundle via go:embed. Must be present in the build
+# context even if web/dist/ contains only the placeholder index.html
+# (the embed compiles fine against the placeholder; the real bundle
+# lands at make web-build time on the host or via a separate
+# multi-stage when CI builds the image).
+COPY web ./web
 
 RUN CGO_ENABLED=0 go build \
       -trimpath \

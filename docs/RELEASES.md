@@ -107,13 +107,15 @@ Production design partners. Hardening RC.
 
 ### Ships
 - React/Tailwind/shadcn UI embedded in Go binary
-- All eight panels: Dashboard, Sessions, AI Providers, MCP Registry, **Capability Packs**, Security Policies, Credential Vault, Audit Logs
-- **Pack Authoring** workflow (schema editor + Go/WASM handler + Test Runner + publish)
-- **Model Success Rates tab** with 80% threshold highlight and "Tighten Schema" diff view
-- "Connect" buttons emitting OS-detected install one-liners for each of the four target clients
+- All read-only panels: Dashboard, Sessions, AI Providers, MCP Registry, **Capability Packs**, Security Policies, Credential Vault, Audit Logs, Connect Clients
+- **Model Success Rates** section on the AI Providers panel (per-(provider, model) rollup over a configurable window, backed by the new `provider_calls` aggregation table written by every gateway dispatch)
+- "Connect" panel emitting per-client MCP config snippets for Claude Code, Claude Desktop, OpenClaw, Gemini CLI, and Hermes Agent
+
+### Deferred from v0.6.0
+- **Pack Authoring** (T608) — moved to v1.x (Phase 8) and clustered with T801 (WASM Executor). The pack registry is in-process today and has no publish surface; building one requires either landing a sandboxed code runtime first (WASM) or a composite-pack JSON runtime. Neither is on the v0.6.0 critical path. Operators *observe and dispatch* packs in v0.6.0; they author them in v1.x.
 
 ### Audience
-Public beta — full self-service.
+Public beta — full self-service for everything except authoring custom packs.
 
 ---
 

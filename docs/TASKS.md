@@ -154,13 +154,13 @@ Each task lists its source ADR(s) and prerequisite tasks. IDs are stable for cro
 | T605 | MCP Registry panel: server table, Add Server multi-step modal, Tool Inspector | P0 | 006 | T601, T301 |
 | T606 | **Capability Packs panel** (the killer feature): list grouped by namespace, Overview/Schema/Test Runner tabs | P0 | 003, 024 | T601, T207 |
 | T607 | **Model Success Rates tab** with per-model breakdown, 80% threshold highlight, "Tighten Schema" diff view | P0 | 003, 008, 024 | T606, T510 |
-| T608 | Pack Authoring UI: schema editor with live validation, inline Go handler editor, `.wasm` upload, Test Runner, Publish | P0 | 024 | T606 |
+| ~~T608~~ | ~~Pack Authoring UI~~ — **moved to Phase 8** (see row in Phase 8 table); depends on T801 (WASM Executor) or a composite-pack runtime, neither of which is on the v0.6.0 critical path | — | 024 | T606, T801 |
 | T609 | Security Policies panel: Network/Sandbox/Access Control tabs | P1 | 011 | T601, T508 |
 | T610 | Credential Vault panel: credentials table, Add Credential modal, Session Cookie import tool, Usage Log tab | P1 | 007 | T601, T501 |
 | T611 | Audit Logs panel: filter bar, infinite-scroll table, Details drawer with redacted JSON payload | P1 | 013 | T601, T109 |
 | T612 | "Connect" UI buttons for Claude Code / Claude Desktop / OpenClaw / Gemini CLI emitting OS-detected one-liners | P1 | 025, 030 | T601, T309 |
 
-**Phase 6 exit criteria:** an operator can author, test, publish, and observe success rates for a custom pack entirely in the UI without restarting the control plane.
+**Phase 6 exit criteria:** every read-only Phase 6 panel (Dashboard, Sessions, AI Providers, MCP Registry, Capability Packs, Security Policies, Credential Vault, Audit Logs, Connect Clients) ships against a real backend with success-rate visibility (T607). Pack *authoring* (T608) is deferred to Phase 8 — operators observe and dispatch packs in v0.6.0; they author them in v1.x once a sandboxed runtime (T801) lands.
 
 ---
 
@@ -195,6 +195,7 @@ These are tracked but not on the GA critical path.
 | ID | Task | Pri | ADRs |
 | :--- | :--- | :--- | :--- |
 | T801 | WASM Executor subsystem (`wasmtime-go`); WASI capability inspection; `.wasm` pack handler runtime | P1 | 012, 024 |
+| T608 | Pack Authoring UI: schema editor with live validation, handler editor, Test Runner, Publish (moved from Phase 6 — depends on T801 for a sandboxed handler runtime) | P1 | 024 | T606, T801 |
 | T802 | Four-tier Memory API: Working (in-process) + Episodic (Redis) + Semantic (pgvector) + Procedural (read-only) | P1 | 029 |
 | T803 | Procedural-memory → Pack promotion UI flow ("Pack Candidates") | P2 | 024, 029 |
 | T804 | WebRTC live session streaming via `pion/webrtc`; LiveKit SFU optional path; bidirectional control data channel | P2 | 028 |

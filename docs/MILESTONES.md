@@ -115,7 +115,7 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 ---
 
 ## Milestone: `v0.6 — Management UI` (Phase 6)
-**Target:** Week 20 · **Exit:** operator authors+publishes a custom pack entirely in the UI
+**Target:** Week 20 · **Exit:** every read-only Phase 6 panel ships against a real backend; pack *authoring* (schema editor + handler runtime + publish) is deferred to Phase 8 alongside T801 (WASM Executor) — see T608 below
 
 - [x] **T601** React/Tailwind/shadcn shell + JWT login
 - [x] **T602** Dashboard panel *(stat cards + status table; Recharts memory chart in T602a)*
@@ -124,7 +124,7 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [x] **T605** MCP Registry panel *(read-only list; Add Server modal in T605a)*
 - [x] **T606** Capability Packs panel *(read-only list grouped by namespace; Test Runner in T606a)*
 - [x] **T607** Model Success Rates tab *(provider_calls table written by gateway dispatch on every success/error path; GET /api/v1/providers/stats aggregates by (provider, model) over a configurable window; rendered as a second section on the AI Providers panel)*
-- [ ] **T608** Pack Authoring UI (schema editor + Go/WASM handler + publish)
+- [x] ~~**T608** Pack Authoring UI (schema editor + Go/WASM handler + publish)~~ — **deferred to Phase 8**, clustered with T801 (WASM Executor) and T803 (Procedural→Pack promotion). Today the pack registry is in-process and has no publish surface; building one means landing either a sandboxed code runtime (WASM, T801) or a composite-pack JSON runtime first. Neither is on the v0.6.0 critical path. Read-only Capability Packs panel (T606) ships in v0.6.0; authoring lands in v1.x.
 - [x] **T609** Security Policies panel *(read-only snapshot of egress allowlist + sandbox baseline + auth + telemetry; backed by new GET /api/v1/security; edit + reload-config in T609a)*
 - [x] **T610** Credential Vault panel *(read-only list; Add Credential modal + Usage Log in T610a)*
 - [x] **T611** Audit Logs panel *(GET /api/v1/audit + filters: event_type / severity / actor / from / to / limit; React panel replaces stub)*

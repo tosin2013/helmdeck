@@ -41,3 +41,8 @@ services:
     # before `docker compose ... up -d`.
     environment:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # OpenClaw reads provider API keys from process env only when
+      # this flag is set — see /app/dist/shell-env-*.js
+      # `shouldEnableShellEnvFallback`. Without it, OPENROUTER_API_KEY
+      # is ignored and `models status` reports "Shell env: off".
+      OPENCLAW_LOAD_SHELL_ENV: "true"

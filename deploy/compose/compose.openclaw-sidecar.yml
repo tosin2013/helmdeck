@@ -1,0 +1,34 @@
+# Helmdeck — OpenClaw sidecar overlay (T565 / D3a)
+#
+# Merges helmdeck's bridge network into OpenClaw's compose stack so
+# the openclaw-gateway container can resolve helmdeck-control-plane
+# by service-name DNS and call /api/v1/mcp/sse over the URL/SSE
+# transport (T302a) without baking the helmdeck-mcp stdio bridge
+# into the OpenClaw image.
+#
+# Apply alongside both the helmdeck and OpenClaw stacks:
+#
+#   docker compose -f /root/helmdeck/deploy/compose/compose.yaml \
+#                  --env-file /root/helmdeck/deploy/compose/.env.local up -d
+#
+#   docker compose -f /root/openclaw/docker-compose.yml \
+#                  -f /root/helmdeck/deploy/compose/compose.openclaw-sidecar.yml up -d
+#
+# After this overlay is in place, openclaw-gateway can resolve:
+#   helmdeck-control-plane:3000  → helmdeck's REST + MCP-SSE surface
+#
+# Then point OpenClaw at the URL transport per docs/integrations/openclaw.md.
+#
+# Network name `baas-net` matches the helmdeck control-plane's network as
+# defined in deploy/compose/compose.yaml. The `external: true` flag means
+# this overlay does NOT create the network — helmdeck must already be up.
+
+networks:
+  baas-net:
+    external: true
+
+services:
+  openclaw-gateway:
+    networks:
+      - default
+      - baas-net

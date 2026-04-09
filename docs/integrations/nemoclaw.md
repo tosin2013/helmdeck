@@ -1,49 +1,53 @@
 # NemoClaw
 
-> **Status:** 🟡 Documented, not yet verified end-to-end
-> NemoClaw is **not** a separate Helmdeck connect target. It is NVIDIA's sandboxed runtime *around* OpenClaw — running OpenClaw inside an OpenShell container with Landlock/seccomp/netns guardrails — and reuses OpenClaw's MCP config schema inside the sandbox. This page is a thin wrapper around [openclaw.md](openclaw.md) with the sandbox-specific notes. Promote to ✅ once a maintainer has walked the Phase 5.5 loop inside a NemoClaw sandbox.
+> **Status:** 🟡 Documented (inherits OpenClaw schema inside the NVIDIA sandbox)
+> NemoClaw is NVIDIA's sandbox around OpenClaw and reuses OpenClaw's MCP schema and CLI verbatim inside the sandbox boundary. Promote to ✅ once a maintainer has walked the Phase 5.5 loop *inside* a NemoClaw sandbox specifically (the OpenClaw walkthrough does not transfer automatically — sandbox networking and credential isolation differ).
+
+## Topology
+
+NemoClaw is **Topology A with sandbox boundary** — the agent runs in NVIDIA's NeMo sandbox, which wraps OpenClaw and adds its own credential / network isolation layer. From helmdeck's perspective, the wiring is the same as the [OpenClaw sidecar pattern](openclaw.md), but the sandbox imposes two extra constraints:
+
+1. **Network**: the sandbox may not give the OpenClaw process inside it access to the host's docker bridge by default. You may need a NemoClaw-specific network passthrough flag (consult NVIDIA's NemoClaw docs — this section will gain a concrete recipe once a maintainer has run it).
+2. **Credentials**: the helmdeck JWT and any LLM provider key must be passed in via NemoClaw's secret-injection mechanism, not via plain env vars in the OpenClaw container.
+
+NemoClaw is alpha at the time of helmdeck v0.6.0 and the configuration surface may shift. Treat this page as a pointer; the authoritative schema for the inner OpenClaw config is still [`openclaw.md`](openclaw.md).
+
+## What inherits from OpenClaw
+
+- `~/.openclaw/openclaw.json` schema, including the `agents.list[].mcp.servers[]` section
+- `openclaw mcp` CLI commands
+- The two MCP transport options: stdio `command` and URL-based `url`
+
+## What does NOT inherit
+
+- The `./scripts/docker/setup.sh` flow — NemoClaw has its own bootstrap
+- The host networking model — the sandbox may require explicit egress rules
+- The credential storage path — secrets live in NVIDIA's sandbox vault, not on the host filesystem
 
 ## Prerequisites
 
-Same as [openclaw.md](openclaw.md), plus:
+- An NVIDIA GPU host with the NeMo sandbox installed
+- NVIDIA NemoClaw / NeMo Agent CLI access
+- A running helmdeck stack on the same host (or reachable from the sandbox via configured egress)
 
-- NemoClaw installed and a sandbox provisioned per the [NVIDIA NemoClaw quickstart](https://docs.nvidia.com/nemoclaw/latest/get-started/quickstart.html).
-- The Helmdeck control plane reachable from inside the sandbox network namespace (NemoClaw uses `netns` to restrict egress — you may need to allowlist the control-plane host/port in the sandbox network policy).
-- The `helmdeck-mcp` binary either baked into the sandbox image, mounted into the container, or installed at sandbox bootstrap time. The agent inside the sandbox can only execute binaries it can see — Landlock restricts writes to `/sandbox` and `/tmp`, so place the bridge accordingly.
+## Walkthrough
 
-## 1. Install the bridge
+Until a maintainer has run NemoClaw end-to-end, follow these steps as scaffolding:
 
-See [claude-code.md §1](claude-code.md#1-install-the-bridge) for distribution channels. The wrinkle is **where** to install it: it must be reachable on `PATH` from inside the NemoClaw sandbox. Recommended approaches:
+1. Install helmdeck on the host: `git clone … && ./scripts/install.sh`
+2. Install NemoClaw per NVIDIA's instructions (URL TBD — see <https://github.com/NVIDIA> or NVIDIA developer docs for the current path).
+3. Inside the NemoClaw sandbox, create or edit the inner `openclaw.json` to add the helmdeck MCP server entry — copy the JSON shape from [`openclaw.md` §4a](openclaw.md#4a-edit-openclawopenclawjson-directly).
+4. Pass the helmdeck JWT in via NemoClaw's secret-injection mechanism (NOT a plain env var).
+5. From inside the sandbox, verify the helmdeck control plane is reachable: `curl http://<host-or-bridge>:3000/healthz`.
+6. Walk the Phase 5.5 loop as documented in [`openclaw.md` §6](openclaw.md#6-walk-the-phase-55-code-edit-loop).
 
-- Mount the host's `helmdeck-mcp` into the sandbox via the NemoClaw blueprint, or
-- Add `go install github.com/tosin2013/helmdeck/cmd/helmdeck-mcp@latest` to the sandbox bootstrap script.
+When the walkthrough lands, replace this section with the concrete NemoClaw-specific recipe and flip the status banner ✅.
 
-## 2. Fetch the connect snippet
+## Why NemoClaw is intentionally not a separate `connect.go` target
 
-NemoClaw is not its own client in `/api/v1/connect/`. Use the OpenClaw snippet — it is the schema NemoClaw reads inside the sandbox:
+`/api/v1/connect/openclaw` returns the OpenClaw config shape. NemoClaw consumes that exact same shape inside its sandbox — there is no NemoClaw-specific JSON to generate, only sandbox-specific network and credential plumbing that lives outside helmdeck's connect endpoint. This is a deliberate non-decision: keeping a separate target would imply a schema divergence that doesn't exist.
 
-```bash
-curl -s "http://localhost:3000/api/v1/connect/openclaw?token=$HELMDECK_TOKEN" | jq .
-```
+## References
 
-## 3. Configure NemoClaw
-
-Inside the sandbox, write the OpenClaw config to `<sandbox>/.openclaw/openclaw.json` using the JSON shape from [openclaw.md §3](openclaw.md#3-configure-openclaw). Two NemoClaw-specific notes:
-
-- The path is **inside** the sandbox filesystem — typically `/sandbox/.openclaw/openclaw.json` if you're using the default `/sandbox` writable mount.
-- `HELMDECK_URL` must be reachable from the sandbox's network namespace, not the host's. If you're running Helmdeck on the host at `http://localhost:3000`, point at the host's bridge IP (e.g. `http://172.17.0.1:3000` for default Docker bridge networking) instead of `localhost`.
-
-## 4. Walk the Phase 5.5 code-edit loop
-
-Identical to [claude-code.md §4](claude-code.md#4-walk-the-phase-55-code-edit-loop), but driven from the agent running **inside** the NemoClaw sandbox. Pay extra attention to the SSH-key assertion: NemoClaw's whole point is keeping secrets out of the model context, so a leak here would be a real audit finding.
-
-## Troubleshooting
-
-- **`helmdeck-mcp: command not found` in the sandbox** — the binary is on the host but not visible inside the sandbox. Mount it or install it during sandbox bootstrap.
-- **`connection refused` to the control plane** — Landlock/netns is blocking egress. Allowlist the control-plane host in the sandbox network policy and re-test with `curl http://<host>:3000/healthz` from inside the sandbox.
-- See [openclaw.md §Troubleshooting](openclaw.md#troubleshooting) for OpenClaw-layer issues.
-
-References:
-- [NVIDIA/NemoClaw GitHub](https://github.com/NVIDIA/NemoClaw)
-- [NVIDIA NemoClaw Quickstart](https://docs.nvidia.com/nemoclaw/latest/get-started/quickstart.html)
-- [NVIDIA NemoClaw product page](https://www.nvidia.com/en-us/ai/nemoclaw/)
+- [OpenClaw MCP schema](openclaw.md) (canonical)
+- NVIDIA NeMo / NemoClaw docs: search <https://github.com/NVIDIA> and <https://docs.nvidia.com>

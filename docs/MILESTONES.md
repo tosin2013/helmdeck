@@ -120,7 +120,7 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [x] **T601** React/Tailwind/shadcn shell + JWT login
 - [x] **T602** Dashboard panel *(stat cards + status table; Recharts memory chart in T602a)*
 - [x] **T603** Browser Sessions panel *(read-only list; New Session modal in T603a)*
-- [ ] **T604** AI Providers panel
+- [x] **T604** AI Providers panel *(read-only key list backed by GET /api/v1/providers/keys; Add/Rotate modal in T604a)*
 - [x] **T605** MCP Registry panel *(read-only list; Add Server modal in T605a)*
 - [x] **T606** Capability Packs panel *(read-only list grouped by namespace; Test Runner in T606a)*
 - [ ] **T607** Model Success Rates tab (the killer feature)
@@ -128,7 +128,7 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [ ] **T609** Security Policies panel
 - [x] **T610** Credential Vault panel *(read-only list; Add Credential modal + Usage Log in T610a)*
 - [x] **T611** Audit Logs panel *(GET /api/v1/audit + filters: event_type / severity / actor / from / to / limit; React panel replaces stub)*
-- [ ] **T612** Connect-client OS-detected one-liner buttons
+- [x] **T612** Connect Clients panel *(per-client cards with snippet + copy button for claude-code, claude-desktop, openclaw, gemini-cli, hermes-agent; OS-detected one-liners in T612a)*
 
 ---
 

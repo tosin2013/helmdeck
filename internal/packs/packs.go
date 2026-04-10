@@ -302,13 +302,21 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 		}
 	}
 
-	// Step 5: collect artifacts the handler wrote during the run.
-	// The in-memory store keys artifacts by pack name + run id;
-	// T211's S3 store will use the same keying scheme but persist
-	// across restarts and emit signed URLs.
-	arts, err := e.artifacts.ListForPack(ctx, pack.Name)
+	// Step 5: collect artifacts the handler wrote during THIS run.
+	// ListForPack returns every artifact ever produced for this pack
+	// name (the index is append-only across the process lifetime).
+	// Filter to only artifacts with CreatedAt >= start so the
+	// response scopes to this execution and doesn't accumulate
+	// entries from prior calls.
+	allArts, err := e.artifacts.ListForPack(ctx, pack.Name)
 	if err != nil {
 		return nil, &PackError{Code: CodeArtifactFailed, Message: err.Error(), Cause: err}
+	}
+	var arts []Artifact
+	for _, a := range allArts {
+		if !a.CreatedAt.Before(start) {
+			arts = append(arts, a)
+		}
 	}
 
 	return &Result{

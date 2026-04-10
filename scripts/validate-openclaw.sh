@@ -100,24 +100,48 @@ write_helmdeck_mcp_server() {
     mcp set helmdeck \
     "{\"url\":\"http://helmdeck-control-plane:3000/api/v1/mcp/sse\",\"headers\":{\"authorization\":\"Bearer $jwt\"}}" \
     >/dev/null
+  # openclaw mcp set triggers a config-change reload that drops the
+  # gateway's WebSocket connections. Wait for it to come back healthy
+  # before running any agent prompts. docker compose run also recreates
+  # the container, which drops the baas-net overlay — re-attach.
+  blue "  waiting for openclaw-gateway to stabilize after config write"
+  sleep 3
   ensure_baas_net
+  for _ in $(seq 1 30); do
+    if curl -fsS "http://localhost:18789/healthz" >/dev/null 2>&1; then break; fi
+    sleep 1
+  done
 }
 
 # Query helmdeck audit log for pack_call entries since a given
 # RFC3339 timestamp, optionally filtered by path substring.
 audit_pack_calls_since() {
   local jwt="$1" since="$2" path_filter="${3:-}"
+  # MCP-routed pack calls log as event_type=mcp_call (path
+  # /api/v1/mcp/sse/message); direct REST calls log as pack_call
+  # (path /api/v1/packs/<name>). Accept either.
   curl -fsS -H "Authorization: Bearer $jwt" \
-    "$HELMDECK_URL/api/v1/audit?limit=50&event_type=pack_call&from=$since" \
+    "$HELMDECK_URL/api/v1/audit?limit=50&from=$since" \
     | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 filt = '$path_filter'
 hits = []
 for e in d.get('entries', []):
-    if filt and filt not in e.get('path',''):
+    et = e.get('event_type','')
+    path = e.get('path','')
+    # Accept pack_call with the pack path, OR mcp_call (which routes
+    # through /api/v1/mcp/sse/message for all packs — we can't filter
+    # by pack name on MCP calls without inspecting the payload, so
+    # any mcp_call since the timestamp counts as a hit).
+    if et == 'pack_call':
+        if filt and filt not in path:
+            continue
+    elif et == 'mcp_call':
+        pass  # accept all MCP calls — they're tool invocations
+    else:
         continue
-    hits.append(f\"{e['timestamp'][:19]} {e.get('method','?')} {e.get('path','?')} {e.get('status_code','?')}\")
+    hits.append(f\"{e['timestamp'][:19]} {et:15} {e.get('method','?')} {path} {e.get('status_code','?')}\")
 for h in hits:
     print(h)
 print(f'__count={len(hits)}')

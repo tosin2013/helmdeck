@@ -49,7 +49,8 @@ type Deps struct {
 	Keys         *keystore.Store  // optional; nil disables /api/v1/providers/keys
 	KeyTester    KeyTester        // optional; defaults to keystore.TestProviderKey
 	PackRegistry *packs.Registry // optional; nil disables /api/v1/packs
-	PackEngine   *packs.Engine   // optional; nil disables /api/v1/packs dispatch
+	PackEngine   *packs.Engine       // optional; nil disables /api/v1/packs dispatch
+	ArtifactStore packs.ArtifactStore // optional; nil disables MCP inline image content (T302b)
 	MCPRegistry  *mcp.Registry   // optional; nil disables /api/v1/mcp/servers
 	Vault        *vault.Store    // optional; nil disables /api/v1/vault/*
 	Injector     *inject.Injector // optional; nil disables vault injection on /api/v1/browser/navigate
@@ -116,6 +117,7 @@ func NewRouter(deps Deps) http.Handler {
 	registerAuditRoutes(mux, deps)
 	registerSecurityRoutes(mux, deps)
 	registerProviderStatsRoutes(mux, deps)
+	registerArtifactRoutes(mux, deps)
 
 	var handler http.Handler = mux
 	// Innermost: auth attaches claims (or rejects with 401).

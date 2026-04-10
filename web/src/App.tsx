@@ -12,6 +12,7 @@ import { ProvidersPage } from '@/pages/providers';
 import { SecurityPage } from '@/pages/security';
 import { AuditPage } from '@/pages/audit';
 import { ConnectPage } from '@/pages/connect';
+import { ArtifactsPage } from '@/pages/artifacts';
 
 // App is the routing root. Auth-gated routes wrap in <Layout> which
 // owns the sidebar and header chrome; the login route is a standalone
@@ -35,6 +36,7 @@ export function App() {
         <Route path="mcp" element={<McpPage />} />
         <Route path="providers" element={<ProvidersPage />} />
         <Route path="security" element={<SecurityPage />} />
+        <Route path="artifacts" element={<ArtifactsPage />} />
         <Route path="audit" element={<AuditPage />} />
         <Route path="connect" element={<ConnectPage />} />
       </Route>

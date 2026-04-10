@@ -106,7 +106,11 @@ func registerMCPSSERoutes(mux *http.ServeMux, deps Deps) {
 		mux.HandleFunc("/api/v1/mcp/sse/message", stub)
 		return
 	}
-	server := mcp.NewPackServer(deps.PackRegistry, deps.PackEngine)
+	var mcpOpts []mcp.PackServerOption
+	if deps.ArtifactStore != nil {
+		mcpOpts = append(mcpOpts, mcp.WithArtifacts(deps.ArtifactStore))
+	}
+	server := mcp.NewPackServer(deps.PackRegistry, deps.PackEngine, mcpOpts...)
 	registry := newSSERegistry()
 
 	mux.HandleFunc("GET /api/v1/mcp/sse", func(w http.ResponseWriter, r *http.Request) {

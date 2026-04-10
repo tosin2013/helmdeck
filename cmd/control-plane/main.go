@@ -271,6 +271,9 @@ func main() {
 	} else if store != nil {
 		artifactStore = store
 		engineOpts = append(engineOpts, packs.WithArtifactStore(store))
+		// T302b: plumb the store into Deps so the MCP PackServer can
+		// fetch artifact bytes for inline image content in tool results.
+		deps.ArtifactStore = store
 		logger.Info("S3 artifact store enabled",
 			"endpoint", envOrFile("HELMDECK_S3_ENDPOINT", "HELMDECK_S3_ENDPOINT_FILE"),
 			"bucket", envOrFile("HELMDECK_S3_BUCKET", "HELMDECK_S3_BUCKET_FILE"))

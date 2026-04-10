@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   Activity,
+  Archive,
   Boxes,
   FileText,
   KeyRound,
@@ -26,6 +27,7 @@ const navItems = [
   { to: '/providers', label: 'AI Providers', icon: Activity },
   { to: '/vault', label: 'Credential Vault', icon: KeyRound },
   { to: '/security', label: 'Security Policies', icon: Shield },
+  { to: '/artifacts', label: 'Artifacts', icon: Archive },
   { to: '/audit', label: 'Audit Log', icon: FileText },
   { to: '/connect', label: 'Connect Clients', icon: LinkIcon },
 ];

@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,15 +32,47 @@ import (
 // The api package wraps it in a WebSocket hijacker (T302), and
 // future Phase 3 work could just as easily wrap it in an
 // HTTP/SSE handler or pipe it to a Unix socket.
+// DefaultInlineImageThreshold is the maximum artifact size (in bytes)
+// that gets inlined as base64 image content in MCP tool results.
+// Artifacts over this threshold are URL-only. Base64 inflates size
+// by ~33%, so 1 MB raw → ~1.33 MB in the JSON-RPC response.
+const DefaultInlineImageThreshold = 1 << 20 // 1 MiB
+
 type PackServer struct {
-	registry *packs.Registry
-	engine   *packs.Engine
+	registry              *packs.Registry
+	engine                *packs.Engine
+	artifacts             packs.ArtifactStore
+	inlineImageThreshold  int64
+}
+
+// PackServerOption configures a PackServer at construction time.
+type PackServerOption func(*PackServer)
+
+// WithArtifacts sets the artifact store used to fetch image bytes
+// for inline MCP image content (T302b, ADR 032). When nil, image
+// content blocks are not emitted — only text URLs.
+func WithArtifacts(store packs.ArtifactStore) PackServerOption {
+	return func(s *PackServer) { s.artifacts = store }
+}
+
+// WithInlineImageThreshold overrides the default 1 MB threshold.
+// Set to 0 to disable inline images entirely.
+func WithInlineImageThreshold(n int64) PackServerOption {
+	return func(s *PackServer) { s.inlineImageThreshold = n }
 }
 
 // NewPackServer constructs a server bound to a pack registry and
 // the engine that executes them. Both are required.
-func NewPackServer(reg *packs.Registry, eng *packs.Engine) *PackServer {
-	return &PackServer{registry: reg, engine: eng}
+func NewPackServer(reg *packs.Registry, eng *packs.Engine, opts ...PackServerOption) *PackServer {
+	s := &PackServer{
+		registry:             reg,
+		engine:               eng,
+		inlineImageThreshold: DefaultInlineImageThreshold,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Serve drives one MCP session. It returns when the reader hits
@@ -194,7 +227,7 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest) rpcResponse {
 		}
 		span.SetStatus(codes.Ok, "")
 		span.End()
-		return mk(packResultAsToolResult(res), nil)
+		return mk(s.packResultAsToolResult(ctx, res), nil)
 
 	default:
 		return mk(nil, &rpcError{Code: -32601, Message: "method not found: " + req.Method})
@@ -202,19 +235,63 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest) rpcResponse {
 }
 
 // packResultAsToolResult converts a packs.Result into the MCP
-// `CallToolResult` shape: a typed content array (today just text)
-// plus an optional structured `isError` flag. We serialize the
-// pack output as a single text block of JSON so MCP clients see a
-// shape they can render even when they don't understand the
-// underlying pack semantics.
-func packResultAsToolResult(res *packs.Result) map[string]any {
+// `CallToolResult` shape: a typed content array plus an optional
+// structured `isError` flag.
+//
+// T302b (ADR 032): when the pack produced image artifacts and an
+// ArtifactStore is configured, artifacts under the inline threshold
+// are included as `type: "image"` content blocks with base64-
+// encoded bytes. Vision-capable LLMs (GPT-4o, Claude, Gemini) can
+// then reason about screenshots in one round trip — no second tool
+// call to download and display the image. Artifacts over the
+// threshold stay URL-only in the text block.
+func (s *PackServer) packResultAsToolResult(ctx context.Context, res *packs.Result) map[string]any {
 	body, _ := json.Marshal(res)
+	content := []map[string]any{
+		{"type": "text", "text": string(body)},
+	}
+	// Inline image artifacts when the store is available and the
+	// artifact is small enough. The threshold check uses the raw
+	// size (pre-base64) since that's what the operator configured.
+	if s.artifacts != nil && s.inlineImageThreshold > 0 {
+		for _, art := range res.Artifacts {
+			if !isInlineableImage(art.ContentType) {
+				continue
+			}
+			if art.Size > s.inlineImageThreshold {
+				continue
+			}
+			data, _, err := s.artifacts.Get(ctx, art.Key)
+			if err != nil {
+				continue // degrade gracefully — URL is still in the text block
+			}
+			content = append(content, map[string]any{
+				"type":     "image",
+				"data":     base64Encode(data),
+				"mimeType": art.ContentType,
+			})
+		}
+	}
 	return map[string]any{
-		"content": []map[string]any{
-			{"type": "text", "text": string(body)},
-		},
+		"content": content,
 		"isError": false,
 	}
+}
+
+// isInlineableImage returns true for MIME types the MCP image
+// content type supports.
+func isInlineableImage(ct string) bool {
+	switch ct {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	}
+	return false
+}
+
+// base64Encode wraps the standard library so the import is in one
+// place and the function name is self-documenting at call sites.
+func base64Encode(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
 }
 
 func packErrorAsToolResult(err error) map[string]any {

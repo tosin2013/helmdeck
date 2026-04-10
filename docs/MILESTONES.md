@@ -130,7 +130,9 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [x] **T609** Security Policies panel *(read-only snapshot of egress allowlist + sandbox baseline + auth + telemetry; backed by new GET /api/v1/security; edit + reload-config in T609a)*
 - [x] **T610** Credential Vault panel *(read-only list; Add Credential modal + Usage Log in T610a)*
 - [x] **T611** Audit Logs panel *(GET /api/v1/audit + filters: event_type / severity / actor / from / to / limit; React panel replaces stub)*
-- [x] **T612** Connect Clients panel *(per-client cards with snippet + copy button for claude-code, claude-desktop, openclaw, gemini-cli, hermes-agent; OS-detected one-liners in T612a)*
+- [x] **T612** Connect Clients panel
+- [ ] **T302b** MCP inline image content — pack artifacts under 1 MB returned as `type: "image"` base64 content blocks in `tools/call` responses so vision-capable LLMs can see screenshots in one round trip *(ADR 032)*
+- [ ] **T613** Artifact Explorer UI panel — standalone `/artifacts` route in the Management UI with image preview, download button, pack/date filters, backed by `GET /api/v1/artifacts` *(ADR 032)* *(per-client cards with snippet + copy button for claude-code, claude-desktop, openclaw, gemini-cli, hermes-agent; OS-detected one-liners in T612a)*
 
 ---
 

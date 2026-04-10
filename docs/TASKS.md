@@ -64,6 +64,8 @@ Each task lists its source ADR(s) and prerequisite tasks. IDs are stable for cro
 | :--- | :--- | :--- | :--- | :--- |
 | T301 | MCP server registry CRUD API; stdio/SSE/WebSocket transport adapters; manifest fetch + cache | P0 | 006 | T108 |
 | T302 | Built-in MCP server exposing every installed pack as a typed MCP tool (auto-generated from pack registry) | P0 | 003, 006 | T207 |
+| T302b | MCP inline image content — image artifacts under a configurable threshold (default 1 MB) returned as `type: "image"` base64 content blocks in `tools/call` responses. Only the MCP transport gains this; REST API unchanged. Lets vision-capable LLMs reason about screenshots in one round trip. | P1 | 006, 032 | T302 |
+| T613 | Artifact Explorer UI panel — standalone `/artifacts` route in the Management UI listing recent artifacts with inline image preview, download button, pack/date filter. Backed by `GET /api/v1/artifacts`. | P1 | 032 | T601, T211 |
 | T302a | SSE MCP transport at `/api/v1/mcp/sse` (GET stream + paired POST endpoint per the MCP SSE spec). Lets containerized clients like OpenClaw connect via URL transport without baking the stdio bridge into their image. Closes the sidecar-pattern gap that left the OpenClaw integration walkthrough blocked. | P0 | 006 | T302 |
 | T303 | `helmdeck-mcp` bridge binary: stdio MCP server proxying to platform's WebSocket MCP endpoint via `HELMDECK_URL` + `HELMDECK_TOKEN` | P0 | 025, 030 | T302 |
 | T304 | Bridge version-skew warning: emit deprecation notification on session start when older than platform's min recommended | P1 | 025, 030 | T303 |

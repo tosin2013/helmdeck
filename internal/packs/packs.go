@@ -65,8 +65,9 @@ type Pack struct {
 	Description  string
 	InputSchema  Schema      // validated before Handler runs
 	OutputSchema Schema      // validated before Handler's output is returned
-	NeedsSession bool        // when true, Engine acquires a session and exposes it via ExecutionContext
-	SessionSpec  session.Spec // optional override; zero value means "runtime defaults"
+	NeedsSession    bool         // when true, Engine acquires a session and exposes it via ExecutionContext
+	PreserveSession bool         // when true AND NeedsSession, the engine does NOT terminate the session on return — the session persists for follow-on packs to reuse via _session_id. Watchdog cleans up after timeout.
+	SessionSpec     session.Spec // optional override; zero value means "runtime defaults"
 	Handler      HandlerFunc
 
 	// ArtifactTTL is the per-pack retention override consulted by the
@@ -111,11 +112,16 @@ type ExecutionContext struct {
 // operators see the cost of validation + session spin-up, not just
 // the handler's wall-clock.
 type Result struct {
-	Pack      string     `json:"pack"`
-	Version   string     `json:"version"`
+	Pack      string          `json:"pack"`
+	Version   string          `json:"version"`
 	Output    json.RawMessage `json:"output"`
-	Artifacts []Artifact `json:"artifacts,omitempty"`
-	Duration  time.Duration `json:"duration_ms"`
+	Artifacts []Artifact      `json:"artifacts,omitempty"`
+	Duration  time.Duration   `json:"duration_ms"`
+	// SessionID is set when the pack ran inside a session container.
+	// Callers pass it as `_session_id` in the input of a follow-on
+	// pack to reuse the same session (session pinning). Empty when
+	// the pack doesn't need a session.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // Engine is the pipeline runner. Construct one per process; it is
@@ -224,33 +230,57 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 		}
 	}
 
-	// Step 2: session acquire. The engine owns the lifecycle so a
-	// handler that panics or returns early still releases the
-	// container — same pattern as registerBrowserRoutes' factory.
+	// Step 2: session acquire. Callers can pin to an existing session
+	// by passing `_session_id` in the input JSON — the engine looks it
+	// up instead of creating a new one. This is the mechanism that lets
+	// the Phase 5.5 code-edit loop work: repo.fetch creates a session
+	// and returns its ID; follow-on packs (fs.*, cmd.run, git.commit,
+	// repo.push) reuse it by passing the same _session_id.
+	//
+	// When pinning, the engine does NOT terminate the session on return
+	// — the session persists until the watchdog's timeout (default 5m)
+	// or an explicit terminate call. New sessions (no _session_id) are
+	// still cleaned up on return as before.
 	var sess *session.Session
+	var pinnedSession bool
 	if pack.NeedsSession {
 		if e.runtime == nil {
 			return nil, &PackError{Code: CodeSessionUnavailable, Message: "engine has no session runtime"}
 		}
-		s, err := e.runtime.Create(ctx, pack.SessionSpec)
-		if err != nil {
-			return nil, &PackError{Code: CodeSessionUnavailable, Message: err.Error(), Cause: err}
+		// Check for _session_id in the input. If present, reuse the
+		// existing session instead of creating a new one.
+		var meta struct {
+			SessionID string `json:"_session_id"`
 		}
-		sess = s
-		defer func() {
-			// Best-effort terminate. We use a fresh background context
-			// because ctx may already be canceled by the time we get
-			// here, and leaking a container is a worse outcome than a
-			// slightly delayed shutdown error.
-			if e.cdpFactory != nil {
-				e.cdpFactory.Evict(s.ID)
+		_ = json.Unmarshal(input, &meta) // best-effort; missing field is fine
+		if meta.SessionID != "" {
+			s, err := e.runtime.Get(ctx, meta.SessionID)
+			if err != nil {
+				return nil, &PackError{Code: CodeSessionUnavailable,
+					Message: fmt.Sprintf("session %q not found: %v", meta.SessionID, err)}
 			}
-			tctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := e.runtime.Terminate(tctx, s.ID); err != nil {
-				logger.Warn("session terminate failed", "session_id", s.ID, "err", err)
+			sess = s
+			pinnedSession = true
+			logger.Info("reusing pinned session", "session_id", meta.SessionID, "pack", pack.Name)
+		} else {
+			s, err := e.runtime.Create(ctx, pack.SessionSpec)
+			if err != nil {
+				return nil, &PackError{Code: CodeSessionUnavailable, Message: err.Error(), Cause: err}
 			}
-		}()
+			sess = s
+		}
+		if !pinnedSession && !pack.PreserveSession {
+			defer func() {
+				if e.cdpFactory != nil {
+					e.cdpFactory.Evict(sess.ID)
+				}
+				tctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := e.runtime.Terminate(tctx, sess.ID); err != nil {
+					logger.Warn("session terminate failed", "session_id", sess.ID, "err", err)
+				}
+			}()
+		}
 	}
 
 	// Dial CDP after Create succeeded so handler errors don't leave
@@ -319,11 +349,16 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 		}
 	}
 
+	var sessionID string
+	if sess != nil {
+		sessionID = sess.ID
+	}
 	return &Result{
 		Pack:      pack.Name,
 		Version:   pack.Version,
 		Output:    output,
 		Artifacts: arts,
+		SessionID: sessionID,
 		Duration:  e.now().Sub(start),
 	}, nil
 }

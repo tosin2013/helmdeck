@@ -14,61 +14,58 @@ import (
 	"github.com/tosin2013/helmdeck/internal/vault"
 )
 
-// RepoFetch (T505, ADR 022) clones a git repository into the session
-// container using a vault-resolved SSH key. The agent never sees the
-// key — the pack writes it to a temporary file inside the session,
-// runs git via GIT_SSH_COMMAND with `accept-new` host-key policy,
-// then deletes the key file before returning.
+// RepoFetch (T505 + T504, ADR 022) clones a git repository into the
+// session container using vault-resolved credentials. The agent never
+// sees the credential — the pack writes it to a temporary file inside
+// the session, runs git with the appropriate transport config, then
+// deletes the credential file before returning.
 //
 // Input shape:
 //
 //	{
-//	  "url":     "git@github.com:tosin2013/helmdeck.git",  // required
-//	  "ref":     "main",                                    // optional, default HEAD
-//	  "depth":   1                                          // optional, shallow clone
+//	  "url":        "https://github.com/owner/repo.git",   // required
+//	  "ref":        "main",                                 // optional, default HEAD
+//	  "depth":      1,                                      // optional, shallow clone
+//	  "credential": "github-token"                          // optional, vault name for HTTPS PATs
 //	}
 //
 // Output shape:
 //
 //	{
-//	  "url":         "git@github.com:tosin2013/helmdeck.git",
+//	  "url":         "https://github.com/owner/repo.git",
 //	  "ref":         "main",
 //	  "commit":      "abc1234...",
-//	  "credential":  "github-deploy-key",
+//	  "credential":  "github-token",
 //	  "files":       42,
 //	  "clone_path":  "/tmp/helmdeck-clone-<rand>"
 //	}
 //
-// The clone is left on the session container's filesystem so
-// follow-on packs (repo.push, slides.video assembling assets) can
-// read it. The clone path is returned in the output so callers can
-// reference it. The session lifetime is the natural cleanup
-// boundary — when the session terminates, the clone goes with it.
-//
 // URL forms accepted:
 //
-//	git@github.com:owner/repo.git           — SSH (canonical)
+//	git@github.com:owner/repo.git           — SSH (scp-like)
 //	ssh://git@github.com/owner/repo.git     — SSH (URL form)
-//	https://github.com/owner/repo.git       — HTTPS, vault credential
-//	                                           must be type=api_key
-//	                                           (used as a Bearer token
-//	                                           via the GIT_ASKPASS path)
+//	https://github.com/owner/repo.git       — HTTPS (public or with vault credential)
 //
-// For the v1 of this pack we only implement the SSH path. HTTPS
-// support lands in a follow-up alongside the placeholder-token
-// gateway (T504).
+// For SSH clones, the pack resolves an SSH key from the vault by
+// host match and uses GIT_SSH_COMMAND. For HTTPS clones, if a
+// credential name is provided, the pack resolves it from the vault
+// and injects it via GIT_ASKPASS so the token never appears in the
+// URL or in the git process environment. Public HTTPS repos can be
+// cloned without any credential.
 func RepoFetch(v *vault.Store, eg *security.EgressGuard) *packs.Pack {
 	return &packs.Pack{
 		Name:        "repo.fetch",
 		Version:     "v1",
-		Description: "Clone a git repository inside the session container using a vault-resolved SSH key.",
-		NeedsSession: true,
+		Description:     "Clone a git repository inside the session container using vault-resolved credentials (SSH key or HTTPS token).",
+		NeedsSession:    true,
+		PreserveSession: true, // session persists for follow-on packs (fs.*, cmd.run, git.commit, repo.push) to reuse via _session_id
 		InputSchema: packs.BasicSchema{
 			Required: []string{"url"},
 			Properties: map[string]string{
-				"url":   "string",
-				"ref":   "string",
-				"depth": "number",
+				"url":        "string",
+				"ref":        "string",
+				"depth":      "number",
+				"credential": "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -87,9 +84,10 @@ func RepoFetch(v *vault.Store, eg *security.EgressGuard) *packs.Pack {
 }
 
 type repoFetchInput struct {
-	URL   string `json:"url"`
-	Ref   string `json:"ref"`
-	Depth int    `json:"depth"`
+	URL        string `json:"url"`
+	Ref        string `json:"ref"`
+	Depth      int    `json:"depth"`
+	Credential string `json:"credential"` // optional vault name for HTTPS PATs
 }
 
 func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFunc {
@@ -101,9 +99,6 @@ func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFun
 		if strings.TrimSpace(in.URL) == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "url is required"}
 		}
-		if v == nil {
-			return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "credential vault not configured"}
-		}
 		if ec.Exec == nil {
 			return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 		}
@@ -112,45 +107,13 @@ func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFun
 		if err != nil {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
 		}
-		if scheme != "ssh" {
-			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
-				Message: fmt.Sprintf("only ssh URLs supported in v1; got %q (https support lands with T504)", scheme)}
-		}
 
-		// T508: SSRF / metadata-IP guard. The egress guard refuses
-		// any host that resolves to a private, loopback, link-local,
-		// or cloud-metadata range — even via DNS rebinding tricks.
-		// nil guard = guard disabled (dev/test mode); production
-		// deployments always wire one in via cmd/control-plane.
+		// T508: SSRF / metadata-IP guard.
 		if eg != nil {
 			if err := eg.CheckHost(ctx, host); err != nil {
 				return nil, &packs.PackError{Code: packs.CodeInvalidInput,
 					Message: fmt.Sprintf("egress denied: %v", err), Cause: err}
 			}
-		}
-
-		// Resolve an SSH credential for the host. Actor identity comes
-		// from the engine's audit context — the engine sets it when
-		// the pack is invoked via the REST endpoint. For now we use
-		// a wildcard subject so dev-mode (no auth) calls work; the
-		// REST layer will tighten this in T501c follow-on by passing
-		// the JWT actor through to the engine.
-		actor := vault.Actor{Subject: "*"}
-		res, err := v.Resolve(ctx, actor, host, "")
-		if err != nil {
-			if errors.Is(err, vault.ErrNoMatch) {
-				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-					Message: fmt.Sprintf("no vault credential matches host %q", host)}
-			}
-			if errors.Is(err, vault.ErrDenied) {
-				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-					Message: fmt.Sprintf("vault denied access to credential for host %q", host)}
-			}
-			return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: err.Error(), Cause: err}
-		}
-		if res.Record.Type != vault.TypeSSH {
-			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-				Message: fmt.Sprintf("vault credential %q is type %q, expected ssh", res.Record.Name, res.Record.Type)}
 		}
 
 		ref := in.Ref
@@ -159,24 +122,63 @@ func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFun
 			depth = 0
 		}
 
-		// Run a single shell script that:
-		//  1. mktemp -d for the clone destination AND a private key
-		//     file (chmod 600).
-		//  2. write the SSH key from stdin into the key file.
-		//  3. git clone with GIT_SSH_COMMAND set to use that key with
-		//     accept-new host-key policy (no prompt, but learn the
-		//     fingerprint on first use).
-		//  4. echo a JSON envelope with clone path + commit + file
-		//     count to stdout.
-		//  5. shred the key file before returning.
-		//
-		// All five steps are wrapped in `set -eu` so any failure
-		// surfaces as a non-zero exit and the rm runs in a trap so
-		// the key never persists past the script even on error.
-		script := buildRepoFetchScript(in.URL, ref, depth)
+		var script string
+		var stdinPayload []byte
+		var credentialName string
+
+		switch scheme {
+		case "ssh":
+			// SSH path: resolve an SSH key from the vault by host match.
+			// Vault is required for SSH clones — no key = can't authenticate.
+			if v == nil {
+				return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: "credential vault not configured (required for SSH clones)"}
+			}
+			actor := vault.Actor{Subject: "*"}
+			res, err := v.Resolve(ctx, actor, host, "")
+			if err != nil {
+				if errors.Is(err, vault.ErrNoMatch) {
+					return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+						Message: fmt.Sprintf("no vault credential matches host %q", host)}
+				}
+				return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: err.Error(), Cause: err}
+			}
+			if res.Record.Type != vault.TypeSSH {
+				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+					Message: fmt.Sprintf("vault credential %q is type %q, expected ssh", res.Record.Name, res.Record.Type)}
+			}
+			script = buildRepoFetchSSHScript(in.URL, ref, depth)
+			stdinPayload = res.Plaintext
+			credentialName = res.Record.Name
+
+		case "https":
+			// HTTPS path (T504): public repos clone with no credential.
+			// Private repos use a vault-stored PAT injected via GIT_ASKPASS.
+			if in.Credential != "" && v != nil {
+				actor := vault.Actor{Subject: "*"}
+				res, err := v.ResolveByName(ctx, actor, in.Credential)
+				if err != nil {
+					if errors.Is(err, vault.ErrNoMatch) {
+						return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+							Message: fmt.Sprintf("vault credential %q not found", in.Credential)}
+					}
+					return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: err.Error(), Cause: err}
+				}
+				script = buildRepoFetchHTTPSScript(in.URL, ref, depth, true)
+				stdinPayload = res.Plaintext
+				credentialName = in.Credential
+			} else {
+				// Public repo — no credential needed.
+				script = buildRepoFetchHTTPSScript(in.URL, ref, depth, false)
+			}
+
+		default:
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+				Message: fmt.Sprintf("unsupported git scheme: %q", scheme)}
+		}
+
 		execRes, err := ec.Exec(ctx, session.ExecRequest{
 			Cmd:   []string{"sh", "-c", script},
-			Stdin: res.Plaintext,
+			Stdin: stdinPayload,
 		})
 		if err != nil {
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
@@ -207,7 +209,7 @@ func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFun
 			"url":        in.URL,
 			"ref":        ref,
 			"commit":     envelope.Commit,
-			"credential": res.Record.Name,
+			"credential": credentialName,
 			"files":      envelope.Files,
 			"clone_path": envelope.ClonePath,
 		})
@@ -245,22 +247,9 @@ func parseGitHost(rawURL string) (host, scheme string, err error) {
 	}
 }
 
-// buildRepoFetchScript renders the shell pipeline that clones a repo
-// using a key passed on stdin. Built as a string here so the test can
-// assert on its shape; production callers run it via session.Exec.
-//
-// The script:
-//  1. mktemp -d for the key dir AND the clone dir (both 0700).
-//  2. Write the SSH key from stdin into the key file (0600).
-//  3. trap EXIT to shred the key on every exit path.
-//  4. git clone with GIT_SSH_COMMAND pointing at the key file.
-//  5. Optional `git checkout <ref>` if ref was supplied.
-//  6. Capture commit hash and file count.
-//  7. Print JSON envelope to stdout.
-//
-// Stderr is reserved for git's progress / error output, which the
-// pack handler surfaces in the PackError message on failure.
-func buildRepoFetchScript(url, ref string, depth int) string {
+// buildRepoFetchSSHScript renders the shell pipeline that clones via SSH
+// using a key passed on stdin.
+func buildRepoFetchSSHScript(url, ref string, depth int) string {
 	depthFlag := ""
 	if depth > 0 {
 		depthFlag = fmt.Sprintf("--depth %d ", depth)
@@ -275,6 +264,54 @@ func buildRepoFetchScript(url, ref string, depth int) string {
 		"export GIT_SSH_COMMAND=\"ssh -i $KEY_DIR/id_rsa -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$KEY_DIR/known_hosts -o IdentitiesOnly=yes\"",
 		"git clone " + depthFlag + shellQuote(url) + " \"$CLONE_DIR\" 1>&2",
 	}
+	if ref != "" {
+		lines = append(lines, "git -C \"$CLONE_DIR\" checkout "+shellQuote(ref)+" 1>&2")
+	}
+	lines = append(lines,
+		"COMMIT=$(git -C \"$CLONE_DIR\" rev-parse HEAD)",
+		"FILES=$(git -C \"$CLONE_DIR\" ls-files | wc -l | tr -d ' ')",
+		"printf '{\"clone_path\":\"%s\",\"commit\":\"%s\",\"files\":%s}' \"$CLONE_DIR\" \"$COMMIT\" \"$FILES\"",
+	)
+	return strings.Join(lines, "\n")
+}
+
+// buildRepoFetchHTTPSScript renders the shell pipeline that clones via
+// HTTPS. When hasCredential is true, the script reads a PAT from stdin
+// and injects it via GIT_ASKPASS — a tiny helper script that echoes the
+// token as the git password. The token never appears in the URL, the
+// process environment, or git's trace output.
+func buildRepoFetchHTTPSScript(gitURL, ref string, depth int, hasCredential bool) string {
+	depthFlag := ""
+	if depth > 0 {
+		depthFlag = fmt.Sprintf("--depth %d ", depth)
+	}
+	lines := []string{
+		"set -eu",
+		"CLONE_DIR=$(mktemp -d /tmp/helmdeck-clone-XXXXXX)",
+	}
+	if hasCredential {
+		// Write a GIT_ASKPASS helper that echoes the token read from
+		// stdin. The helper is a one-liner shell script invoked by git
+		// whenever it needs a password. The token is stored in a temp
+		// file with 0600 permissions and cleaned up in a trap.
+		lines = append(lines,
+			"CRED_DIR=$(mktemp -d /tmp/helmdeck-cred-XXXXXX)",
+			"cat > \"$CRED_DIR\"/token",
+			"chmod 600 \"$CRED_DIR\"/token",
+			"trap 'rm -f \"$CRED_DIR\"/token; rmdir \"$CRED_DIR\" 2>/dev/null || true' EXIT",
+			// GIT_ASKPASS is a program git invokes to get the password.
+			// It receives a prompt as $1 and must print the password to
+			// stdout. We write a tiny shell script that cats the token.
+			"printf '#!/bin/sh\\ncat \"$CRED_DIR\"/token\\n' > \"$CRED_DIR\"/askpass",
+			"chmod 700 \"$CRED_DIR\"/askpass",
+			"export GIT_ASKPASS=\"$CRED_DIR/askpass\"",
+			// Prevent git from using any system credential helpers.
+			"export GIT_TERMINAL_PROMPT=0",
+		)
+	}
+	lines = append(lines,
+		"git clone "+depthFlag+shellQuote(gitURL)+" \"$CLONE_DIR\" 1>&2",
+	)
 	if ref != "" {
 		lines = append(lines, "git -C \"$CLONE_DIR\" checkout "+shellQuote(ref)+" 1>&2")
 	}

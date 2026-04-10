@@ -113,16 +113,32 @@ func TestRepoFetch_NoVaultMatch(t *testing.T) {
 	}
 }
 
-func TestRepoFetch_RejectsNonSSHURL(t *testing.T) {
-	v := vaultWithSSHCred(t, "github.com", []byte("key"))
-	eng := newRepoEngine(t, &recordingExecutor{})
-	_, err := eng.Execute(context.Background(), RepoFetch(v, nil),
-		json.RawMessage(`{"url":"https://github.com/foo/bar.git"}`))
-	if err == nil {
-		t.Fatal("expected error for https url")
+func TestRepoFetch_HTTPSPublicClone(t *testing.T) {
+	// HTTPS without a credential should attempt a public clone.
+	rec := &recordingExecutor{
+		replies: []session.ExecResult{{
+			Stdout: []byte(`{"clone_path":"/tmp/helmdeck-clone-abc","commit":"deadbeef","files":3}`),
+		}},
 	}
-	if !strings.Contains(err.Error(), "only ssh URLs supported") {
-		t.Errorf("wrong error: %v", err)
+	eng := newRepoEngine(t, rec)
+	res, err := eng.Execute(context.Background(), RepoFetch(nil, nil),
+		json.RawMessage(`{"url":"https://github.com/octocat/Hello-World.git"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(res.Output, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["clone_path"] != "/tmp/helmdeck-clone-abc" {
+		t.Errorf("clone_path = %v", out["clone_path"])
+	}
+	// Verify the script does NOT contain GIT_ASKPASS (no credential)
+	if len(rec.calls) > 0 {
+		script := strings.Join(rec.calls[0].Cmd, " ")
+		if strings.Contains(script, "GIT_ASKPASS") {
+			t.Error("public clone should not set GIT_ASKPASS in the command")
+		}
 	}
 }
 
@@ -206,7 +222,7 @@ func TestParseGitHost(t *testing.T) {
 }
 
 func TestBuildRepoFetchScript_OmitsCheckoutWithoutRef(t *testing.T) {
-	script := buildRepoFetchScript("git@github.com:foo/bar.git", "", 0)
+	script := buildRepoFetchSSHScript("git@github.com:foo/bar.git", "", 0)
 	if strings.Contains(script, "checkout") {
 		t.Errorf("empty ref should produce no checkout line")
 	}

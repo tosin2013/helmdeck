@@ -1,4 +1,4 @@
-import { Github, KeyRound, Plus } from 'lucide-react';
+import { Cookie, Github, Globe, Key, KeyRound, Lock, Plus, ShieldCheck, Terminal } from 'lucide-react';
 import { useState } from 'react';
 
 import { Badge } from '@/components/ui/badge';
@@ -59,27 +59,57 @@ const PRESETS = [
     id: 'github-pat',
     label: 'GitHub PAT',
     icon: Github,
-    defaults: {
-      name: 'github-token',
-      type: 'api_key',
-      host_pattern: 'github.com',
-    },
-    description:
-      'Personal access token for cloning/pushing private repos via HTTPS. Required scopes: repo.',
+    defaults: { name: 'github-token', type: 'api_key', host_pattern: 'github.com' },
+    description: 'Personal access token for cloning/pushing private repos via HTTPS. Required scopes: repo.',
     placeholder: 'ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
   },
   {
     id: 'api-key',
     label: 'API Key',
-    icon: KeyRound,
-    defaults: {
-      name: '',
-      type: 'api_key',
-      host_pattern: '',
-    },
-    description:
-      'Generic API key or bearer token. Used by http.fetch via ${vault:NAME} placeholder substitution.',
+    icon: Key,
+    defaults: { name: '', type: 'api_key', host_pattern: '' },
+    description: 'Generic API key or bearer token. Used by http.fetch via ${vault:NAME} placeholder substitution.',
     placeholder: 'sk-...',
+  },
+  {
+    id: 'ssh-key',
+    label: 'SSH Key',
+    icon: Terminal,
+    defaults: { name: 'deploy-key', type: 'ssh', host_pattern: 'github.com' },
+    description: 'SSH private key for git clone/push over SSH. The key is written to a temp file inside the session container, used for one operation, then shredded.',
+    placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----',
+  },
+  {
+    id: 'login',
+    label: 'Login',
+    icon: Lock,
+    defaults: { name: '', type: 'login', host_pattern: '' },
+    description: 'Username + password credentials. Store the password as the credential value; put the username in the host_pattern or as JSON metadata.',
+    placeholder: 'password123',
+  },
+  {
+    id: 'cookie',
+    label: 'Cookie',
+    icon: Cookie,
+    defaults: { name: '', type: 'cookie', host_pattern: '' },
+    description: 'Browser session cookie(s) for CDP cookie injection (T503). Paste the cookie value or a JSON array of cookie objects.',
+    placeholder: 'session_id=abc123; path=/; domain=.example.com',
+  },
+  {
+    id: 'oauth',
+    label: 'OAuth Token',
+    icon: ShieldCheck,
+    defaults: { name: '', type: 'oauth', host_pattern: '' },
+    description: 'OAuth access + refresh token pair. Store the access token as the credential value. Refresh token support is a follow-on (T501b).',
+    placeholder: 'ya29.a0AfB_...',
+  },
+  {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    icon: Globe,
+    defaults: { name: 'openrouter-key', type: 'api_key', host_pattern: 'openrouter.ai' },
+    description: 'OpenRouter API key for the AI gateway. Used by the helmdeck LLM gateway to route chat completions through OpenRouter.',
+    placeholder: 'sk-or-v1-...',
   },
 ];
 

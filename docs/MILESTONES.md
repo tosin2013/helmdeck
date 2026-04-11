@@ -135,7 +135,7 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [x] **T504a** Session pinning via `_session_id` input field — repo.fetch preserves session for follow-on packs (fs.*, cmd.run, git.commit, repo.push) to reuse
 - [x] **T615** GitHub PAT setup in `scripts/install.sh` — optional interactive prompt stores token in vault as `github-token`
 - [x] **T616** GitHub webhook listener at `POST /api/v1/webhooks/github` — HMAC-SHA256 validated, async pack dispatch per event rules *(ADR 033; Phase 1: push + pull_request, env-var rules)*
-- [ ] **T617** Core `github.*` pack set — `github.create_issue`, `github.list_prs`, `github.post_comment`, `github.create_release` using vault-stored PATs via `api.github.com` REST *(ADR 034)*
+- [x] **T617** Core `github.*` pack set — `github.create_issue`, `github.list_prs`, `github.post_comment`, `github.create_release` using vault-stored PATs via `api.github.com` REST *(ADR 034)*
 - [ ] **T618** `github.list_issues` + `github.search` — complete the GitHub CRUD + search set so agents can read and search issues/code, not just create them
 - [ ] **T619** `git.diff` + `git.log` — agents review what changed before committing
 - [ ] **T620** `fs.delete` — remove files in a session-local clone path
@@ -163,6 +163,10 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [ ] **T713** Argo CD reference manifest
 - [ ] **T714** Load test (100 concurrent, 24h soak)
 - [ ] **T715** External security audit
+- [ ] **T807a** Bundle Playwright MCP (`@playwright/mcp`) in the browser sidecar Dockerfile; auto-register when a session starts *(ADR 035)*
+- [ ] **T807b** Add Firecrawl as an optional compose service (`HELMDECK_FIRECRAWL_ENABLED=true`); new `web.scrape` pack — no selectors, returns clean markdown *(ADR 035)*
+- [ ] **T807c** Add Docling as an optional compose service; new `doc.parse` pack — full document understanding (PDF layout, tables, multi-format, OCR) replacing `doc.ocr` *(ADR 035)*
+- [ ] **T807e** `web.test` — natural language browser testing via Playwright MCP accessibility tree *(ADR 035)*
 
 ---
 
@@ -176,11 +180,6 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [ ] **T805** Audio capture for desktop sessions
 - [ ] **T806** WebMCP detection + preferential routing
 - [ ] **T807** Pre-packaged Chrome DevTools MCP / Playwright MCP entries
-- [ ] **T807e** `web.test` — natural language browser testing via Playwright MCP accessibility tree; decomposes instructions into `browser.interact` steps or delegates to Playwright MCP directly *(ADR 035)*
-- [ ] **T807a** Bundle Playwright MCP (`@playwright/mcp`) in the browser sidecar Dockerfile; auto-register when a session starts *(ADR 035)*
-- [ ] **T807b** Add Firecrawl as an optional compose service (`HELMDECK_FIRECRAWL_ENABLED=true`); new `web.scrape` pack (no selectors, returns clean markdown) *(ADR 035)*
-- [ ] **T807c** Add Docling as an optional compose service; new `doc.parse` pack replacing `doc.ocr` with full document understanding (PDF layout, tables, multi-format, OCR) *(ADR 035)*
-- [ ] **T816** MCP Server Hosting framework — `helmdeck mcp install <server>` installs community MCP servers into the sidecar with sandboxed execution; converges with ADR 034 marketplace *(ADR 035)*
 - [ ] **T808** Firecracker isolation tier productionization
 - [ ] **T809** Lightpanda alternate browser engine evaluation
 - [ ] **T810** Pack marketplace registry model — `index.yaml` catalog, `helmdeck-pack.yaml` manifest schema, cosign trust verification, `HELMDECK_MARKETPLACE_URL` config *(ADR 034)*
@@ -189,6 +188,7 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [ ] **T813** Marketplace UI panel — `/marketplace` route with browse-by-category, search, pack detail, install/uninstall, trust badges
 - [ ] **T814** Community marketplace repo (`tosin2013/helmdeck-marketplace`) with initial pack catalog + contribution guide
 - [ ] **T815** Pack ratings + install counts (requires marketplace-web frontend)
+- [ ] **T816** MCP Server Hosting framework — generic `helmdeck mcp install <server>` for community MCP servers with sandboxed execution; converges with ADR 034 marketplace *(ADR 035)*
 
 ---
 

@@ -172,6 +172,10 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [ ] **T805** Audio capture for desktop sessions
 - [ ] **T806** WebMCP detection + preferential routing
 - [ ] **T807** Pre-packaged Chrome DevTools MCP / Playwright MCP entries
+- [ ] **T807a** Bundle Playwright MCP (`@playwright/mcp`) in the browser sidecar Dockerfile; auto-register when a session starts *(ADR 035)*
+- [ ] **T807b** Add Firecrawl as an optional compose service (`HELMDECK_FIRECRAWL_ENABLED=true`); new `web.scrape` pack (no selectors, returns clean markdown) *(ADR 035)*
+- [ ] **T807c** Add Docling as an optional compose service; new `doc.parse` pack replacing `doc.ocr` with full document understanding (PDF layout, tables, multi-format, OCR) *(ADR 035)*
+- [ ] **T816** MCP Server Hosting framework — `helmdeck mcp install <server>` installs community MCP servers into the sidecar with sandboxed execution; converges with ADR 034 marketplace *(ADR 035)*
 - [ ] **T808** Firecracker isolation tier productionization
 - [ ] **T809** Lightpanda alternate browser engine evaluation
 - [ ] **T810** Pack marketplace registry model — `index.yaml` catalog, `helmdeck-pack.yaml` manifest schema, cosign trust verification, `HELMDECK_MARKETPLACE_URL` config *(ADR 034)*

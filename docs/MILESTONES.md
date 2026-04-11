@@ -174,7 +174,9 @@ This phase validates the "host, don't rebuild" architecture from ADR 035 before 
 - [ ] **T807a** Bundle Playwright MCP (`@playwright/mcp`) in the browser sidecar Dockerfile; auto-register when a session starts *(ADR 035)*
 - [ ] **T807b** Add Firecrawl as an optional compose service (`HELMDECK_FIRECRAWL_ENABLED=true`); new `web.scrape` pack — no selectors, returns clean markdown *(ADR 035)*
 - [ ] **T807c** Add Docling as an optional compose service (`HELMDECK_DOCLING_ENABLED=true`); new `doc.parse` pack — full document understanding (PDF layout, tables, multi-format, OCR) replacing `doc.ocr` *(ADR 035)*
-- [ ] **T807e** `web.test` — natural language browser testing via Playwright MCP accessibility tree; decomposes instructions into `browser.interact` steps or delegates to Playwright MCP directly *(ADR 035)*
+- [ ] **T807e** `web.test` — natural language browser testing via Playwright MCP accessibility tree
+- [ ] **T622** `research.deep` — Firecrawl-backed deep research: search a topic across multiple sources, scrape each to clean markdown, return a synthesis. Composite pack chaining Firecrawl search + scrape APIs. Depends on T807b.
+- [ ] **T623** `content.ground` — link grounding for blog posts: parse a markdown file for claims, search GitHub + web for authoritative sources, insert real `[source](url)` links via `fs.patch`. Composite pack chaining `github.search` + `http.fetch` + `web.scrape` + `fs.patch`.; decomposes instructions into `browser.interact` steps or delegates to Playwright MCP directly *(ADR 035)*
 
 ---
 

@@ -302,7 +302,7 @@ func buildRepoFetchHTTPSScript(gitURL, ref string, depth int, hasCredential bool
 			// GIT_ASKPASS is a program git invokes to get the password.
 			// It receives a prompt as $1 and must print the password to
 			// stdout. We write a tiny shell script that cats the token.
-			"printf '#!/bin/sh\\ncat \"$CRED_DIR\"/token\\n' > \"$CRED_DIR\"/askpass",
+			"printf \"#!/bin/sh\\ncat \\\"$CRED_DIR\\\"/token\\n\" > \"$CRED_DIR\"/askpass",
 			"chmod 700 \"$CRED_DIR\"/askpass",
 			"export GIT_ASKPASS=\"$CRED_DIR/askpass\"",
 			// Prevent git from using any system credential helpers.

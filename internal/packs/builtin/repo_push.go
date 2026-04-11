@@ -291,7 +291,7 @@ func buildRepoPushHTTPSScript(clonePath, remote, branch string, force, hasCreden
 			"cat > \"$CRED_DIR\"/token",
 			"chmod 600 \"$CRED_DIR\"/token",
 			"trap 'rm -f \"$CRED_DIR\"/token; rmdir \"$CRED_DIR\" 2>/dev/null || true' EXIT",
-			"printf '#!/bin/sh\\ncat \"$CRED_DIR\"/token\\n' > \"$CRED_DIR\"/askpass",
+			"printf \"#!/bin/sh\\ncat \\\"$CRED_DIR\\\"/token\\n\" > \"$CRED_DIR\"/askpass",
 			"chmod 700 \"$CRED_DIR\"/askpass",
 			"export GIT_ASKPASS=\"$CRED_DIR/askpass\"",
 			"export GIT_TERMINAL_PROMPT=0",

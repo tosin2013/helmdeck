@@ -163,10 +163,18 @@ Drop-in source for `gh issue create` and GitHub Projects. Each phase = one miles
 - [ ] **T713** Argo CD reference manifest
 - [ ] **T714** Load test (100 concurrent, 24h soak)
 - [ ] **T715** External security audit
+
+---
+
+## Milestone: `v0.8 — MCP Server Hosting & Pack Evolution` (Phase 6.5)
+**Target:** Week 18 · **Exit:** `web.scrape` (Firecrawl-backed, no selectors) + `doc.parse` (Docling-backed) + Playwright MCP in sidecar all pass the validation script; `web.test` drives a natural-language browser test against a real site
+
+This phase validates the "host, don't rebuild" architecture from ADR 035 before hardening for production in Phase 7. The container topology: Playwright MCP in the sidecar (shares Chromium), Firecrawl + Docling as separate optional compose services.
+
 - [ ] **T807a** Bundle Playwright MCP (`@playwright/mcp`) in the browser sidecar Dockerfile; auto-register when a session starts *(ADR 035)*
 - [ ] **T807b** Add Firecrawl as an optional compose service (`HELMDECK_FIRECRAWL_ENABLED=true`); new `web.scrape` pack — no selectors, returns clean markdown *(ADR 035)*
-- [ ] **T807c** Add Docling as an optional compose service; new `doc.parse` pack — full document understanding (PDF layout, tables, multi-format, OCR) replacing `doc.ocr` *(ADR 035)*
-- [ ] **T807e** `web.test` — natural language browser testing via Playwright MCP accessibility tree *(ADR 035)*
+- [ ] **T807c** Add Docling as an optional compose service (`HELMDECK_DOCLING_ENABLED=true`); new `doc.parse` pack — full document understanding (PDF layout, tables, multi-format, OCR) replacing `doc.ocr` *(ADR 035)*
+- [ ] **T807e** `web.test` — natural language browser testing via Playwright MCP accessibility tree; decomposes instructions into `browser.interact` steps or delegates to Playwright MCP directly *(ADR 035)*
 
 ---
 

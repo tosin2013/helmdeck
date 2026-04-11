@@ -1,0 +1,100 @@
+# Helmdeck — Firecrawl overlay (T807b, ADR 035)
+#
+# Brings up a self-hosted Firecrawl stack alongside helmdeck so the
+# built-in `web.scrape` pack has a backend to call. This overlay
+# joins Firecrawl onto helmdeck's baas-net so the control plane can
+# resolve `helmdeck-firecrawl:3002` by service-name DNS and route
+# pack calls over the private bridge — no host-port exposure, no
+# egress-guard exceptions needed.
+#
+# Apply on top of the main stack:
+#
+#   docker compose -f deploy/compose/compose.yaml \
+#                  -f deploy/compose/compose.firecrawl.yml \
+#                  --env-file deploy/compose/.env.local up -d
+#
+# And set in .env.local so the control plane wires up the pack:
+#
+#   HELMDECK_FIRECRAWL_ENABLED=true
+#   HELMDECK_FIRECRAWL_URL=http://helmdeck-firecrawl:3002
+#
+# Why a separate overlay:
+#   1. License isolation — Firecrawl is AGPL-3.0. Running it as a
+#      separate container with an API boundary (same model as Garage)
+#      avoids copyleft obligations on helmdeck's Apache-2.0 codebase.
+#   2. Resource isolation — an OOM in Firecrawl doesn't kill the
+#      control plane, and operators who don't need scraping skip the
+#      ~3 GB RAM footprint entirely.
+#   3. Optional — `web.scrape_spa` (selector-based chromedp path)
+#      still ships in core, so operators without Firecrawl aren't
+#      left without a scraping option.
+#
+# Reference only. For production self-hosting follow Firecrawl's
+# upstream guide at https://github.com/mendableai/firecrawl/blob/main/SELF_HOST.md
+# which covers proxy config, rate limiting, and Playwright tuning.
+
+networks:
+  baas-net:
+    external: true
+
+services:
+  firecrawl-redis:
+    image: redis:7-alpine
+    container_name: helmdeck-firecrawl-redis
+    restart: unless-stopped
+    networks:
+      - baas-net
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  firecrawl-playwright:
+    image: ghcr.io/firecrawl/playwright-service:latest
+    container_name: helmdeck-firecrawl-playwright
+    restart: unless-stopped
+    networks:
+      - baas-net
+    environment:
+      PORT: "3000"
+      # BLOCK_MEDIA cuts bandwidth by dropping images/fonts/media
+      # requests during the scrape — safe default for markdown
+      # extraction since the renderer never reads those pixels.
+      BLOCK_MEDIA: "true"
+      MAX_CONCURRENT_PAGES: "4"
+
+  firecrawl:
+    image: ghcr.io/firecrawl/firecrawl:latest
+    container_name: helmdeck-firecrawl
+    restart: unless-stopped
+    networks:
+      - baas-net
+    environment:
+      PORT: "3002"
+      HOST: "0.0.0.0"
+      REDIS_URL: "redis://firecrawl-redis:6379"
+      REDIS_RATE_LIMIT_URL: "redis://firecrawl-redis:6379"
+      PLAYWRIGHT_MICROSERVICE_URL: "http://firecrawl-playwright:3000/scrape"
+      # Self-hosted Firecrawl does not require an API key when
+      # USE_DB_AUTHENTICATION=false — the control plane is the
+      # only caller and runs on the private baas-net bridge.
+      USE_DB_AUTHENTICATION: "false"
+      # Disable the crawl worker's Supabase/LLM integrations; the
+      # web.scrape pack only uses POST /v1/scrape (synchronous).
+      OPENAI_API_KEY: ""
+      BULL_AUTH_KEY: ""
+    depends_on:
+      firecrawl-redis:
+        condition: service_healthy
+      firecrawl-playwright:
+        condition: service_started
+    healthcheck:
+      # /v1/health is Firecrawl's liveness endpoint; on older builds
+      # `/` returns 200 with "SCRAPERS-JS: Hello, world!" as a fallback.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3002/v1/health >/dev/null 2>&1 || wget -qO- http://localhost:3002/ >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s

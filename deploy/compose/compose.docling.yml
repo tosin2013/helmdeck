@@ -1,0 +1,77 @@
+# Helmdeck — Docling overlay (T807c, ADR 035)
+#
+# Brings up docling-serve alongside helmdeck so the built-in
+# `doc.parse` pack has a backend to call. Docling replaces the
+# selector-free document understanding surface that `doc.ocr`
+# (Tesseract) can't touch: layout-aware PDF parsing, table
+# extraction, multi-format input (PDF / DOCX / PPTX / XLSX / HTML /
+# images), OCR with multiple engines, and formula / code
+# recognition. The old `doc.ocr` pack stays in the catalog for the
+# single-image OCR case; `doc.parse` is what agents reach for when
+# the target is a real document.
+#
+# Apply on top of the main stack:
+#
+#   docker compose -f deploy/compose/compose.yaml \
+#                  -f deploy/compose/compose.docling.yml \
+#                  --env-file deploy/compose/.env.local up -d
+#
+# And set in .env.local so the control plane wires up the pack:
+#
+#   HELMDECK_DOCLING_ENABLED=true
+#   HELMDECK_DOCLING_URL=http://helmdeck-docling:5001
+#
+# Why a separate overlay:
+#   1. Resource isolation — docling-serve pulls in the full Docling
+#      model stack (PDF parsing, OCR, layout detection). Cold-start
+#      is ~30 s and RAM footprint is several GB. Operators who only
+#      need the browser/scrape packs skip this cost entirely.
+#   2. License isolation — docling-serve is MIT, but the OCR engines
+#      it ships bundle their own licenses (EasyOCR is Apache-2.0,
+#      Tesseract is Apache-2.0). Same API boundary pattern as
+#      Firecrawl and Garage — no static linkage.
+#   3. Optional — the existing `doc.ocr` pack (Tesseract-backed)
+#      stays in core so operators without Docling still have a
+#      baseline OCR option.
+
+networks:
+  baas-net:
+    external: true
+
+services:
+  docling:
+    # quay.io/docling-project/docling-serve:latest is the canonical
+    # image. Pinning to a major tag lets operators track security
+    # fixes without breaking API compatibility.
+    image: quay.io/docling-project/docling-serve:latest
+    container_name: helmdeck-docling
+    restart: unless-stopped
+    networks:
+      - baas-net
+    environment:
+      # FastAPI bind address. 0.0.0.0 so the container is reachable
+      # from the control plane over baas-net; helmdeck never exposes
+      # this port to the host — the control plane is the only caller.
+      DOCLING_SERVE_HOST: "0.0.0.0"
+      DOCLING_SERVE_PORT: "5001"
+      # Keep the model cache warm across container restarts. The
+      # named volume below survives `compose down` and makes cold
+      # restarts drop from ~45 s to ~5 s.
+      HF_HOME: "/models/hf"
+      TRANSFORMERS_CACHE: "/models/transformers"
+      EASYOCR_MODULE_PATH: "/models/easyocr"
+    volumes:
+      - docling-models:/models
+    healthcheck:
+      # /health is docling-serve's liveness endpoint; fall back to
+      # /docs (the FastAPI Swagger UI) which always returns 200 once
+      # the app has started.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5001/health >/dev/null 2>&1 || wget -qO- http://localhost:5001/docs >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 60s
+
+volumes:
+  docling-models:
+    name: helmdeck-docling-models

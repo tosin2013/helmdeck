@@ -1,6 +1,6 @@
 # Helmdeck — Built-in Capability Pack Reference
 
-29 packs ship in the control plane binary. All are available as MCP tools (via `/api/v1/mcp/sse` or `/api/v1/mcp/ws`) and as REST endpoints (`POST /api/v1/packs/<name>`).
+31 packs ship in the control plane binary. All are available as MCP tools (via `/api/v1/mcp/sse` or `/api/v1/mcp/ws`) and as REST endpoints (`POST /api/v1/packs/<name>`).
 
 ## Quick reference
 
@@ -11,6 +11,7 @@
 | `browser.interact` | ✅ | chromedp | `{url, actions[]}` | `{steps_completed, screenshots[], extractions{}, assertions_passed}` |
 | **Web** | | | | |
 | `web.scrape_spa` | ✅ | chromedp | `{url, fields{name: {selector, format}}}` | `{data{}, missing[]}` |
+| `web.scrape` | ❌ | Firecrawl | `{url, formats?, wait_ms?}` | `{markdown, html?, title?, links?, status}` — requires `HELMDECK_FIRECRAWL_ENABLED=true` |
 | **Filesystem** | | | | |
 | `fs.read` | ✅ | session exec | `{clone_path, path}` | `{content, sha256, size}` |
 | `fs.write` | ✅ | session exec | `{clone_path, path, content}` | `{sha256, size}` |
@@ -39,6 +40,7 @@
 | `slides.render` | ✅ | Marp + Chromium | `{markdown, format}` | `{artifact_key}` + PDF/PPTX artifact |
 | **Document** | | | | |
 | `doc.ocr` | ✅ | Tesseract | `{image_path}` | `{text}` |
+| `doc.parse` | ❌ | Docling | `{source_url OR source_b64+filename, formats?, do_ocr?, ocr_lang?}` | `{source, markdown, text?, html?, status, processing_time}` — requires `HELMDECK_DOCLING_ENABLED=true` |
 | **Desktop** | | | | |
 | `desktop.run_app_and_screenshot` | ✅ | Xvfb + xdotool | `{command, args?}` | `{artifact_key}` + PNG artifact |
 | **Vision** | | | | |
@@ -91,9 +93,7 @@ For MCP clients: when the artifact is an image under 1 MB, the MCP response incl
 
 | Pack | Phase | Engine | Description |
 | :--- | :--- | :--- | :--- |
-| `web.scrape` | 6.5 | Firecrawl | Auto-extract to clean markdown — no CSS selectors needed |
 | `web.test` | 6.5 | Playwright MCP | Natural language browser testing via accessibility tree |
-| `doc.parse` | 6.5 | Docling | Full document understanding (PDF, DOCX, images, tables) |
 | `research.deep` | 6.5 | Firecrawl | Crawl + search + synthesize across multiple sources |
 | `content.ground` | 6.5 | Composite | Ground a blog post with real links to authoritative sources |
 
@@ -106,6 +106,8 @@ All packs live in `internal/packs/builtin/`:
 | `browser_interact.go` | `browser.interact` |
 | `screenshot_url.go` | `browser.screenshot_url` |
 | `scrape_spa.go` | `web.scrape_spa` |
+| `web_scrape.go` | `web.scrape` |
+| `doc_parse.go` | `doc.parse` |
 | `fs_packs.go` | `fs.*`, `cmd.run`, `git.*` |
 | `repo_fetch.go` | `repo.fetch` |
 | `repo_push.go` | `repo.push` |

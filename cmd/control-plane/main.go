@@ -338,6 +338,16 @@ func main() {
 	if err := packReg.Register(builtin.DocOCR()); err != nil {
 		logger.Warn("register doc.ocr pack failed", "err", err)
 	}
+	// T807c (ADR 035): doc.parse is Docling-backed. Same pattern as
+	// web.scrape — registered unconditionally so agents discovering
+	// the catalog see it, handler gates on HELMDECK_DOCLING_ENABLED
+	// and returns a typed error pointing operators at the overlay
+	// compose file when the toggle is off. doc.ocr stays in the
+	// catalog as a lightweight Tesseract-only option for operators
+	// who don't need full Docling.
+	if err := packReg.Register(builtin.DocParse(egressGuard)); err != nil {
+		logger.Warn("register doc.parse pack failed", "err", err)
+	}
 	if err := packReg.Register(builtin.RepoFetch(vaultStore, egressGuard)); err != nil {
 		logger.Warn("register repo.fetch pack failed", "err", err)
 	}
@@ -346,6 +356,16 @@ func main() {
 	}
 	if err := packReg.Register(builtin.HTTPFetch(vaultStore, egressGuard)); err != nil {
 		logger.Warn("register http.fetch pack failed", "err", err)
+	}
+	// T807b (ADR 035): web.scrape is Firecrawl-backed. The pack is
+	// registered unconditionally so agents discovering the catalog
+	// see it — the handler itself gates on HELMDECK_FIRECRAWL_ENABLED
+	// and returns a typed error pointing operators at the overlay
+	// compose file if the toggle is off. This is preferable to
+	// conditional registration (where the pack silently disappears)
+	// because it surfaces the config knob in the error message.
+	if err := packReg.Register(builtin.WebScrape(egressGuard)); err != nil {
+		logger.Warn("register web.scrape pack failed", "err", err)
 	}
 	// Phase 5.5 fs/git/cmd pack set — the primitives that turn
 	// repo.fetch into a working code-edit loop.

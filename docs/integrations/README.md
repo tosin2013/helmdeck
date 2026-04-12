@@ -4,6 +4,12 @@
 
 This page is the index. Each per-client guide below walks through install, sidecar wiring, and an end-to-end Phase 5.5 code-edit loop.
 
+## Agent context files
+
+- **[SKILLS.md](SKILLS.md)** — Load this into your MCP client's system prompt or agent config. It teaches the LLM how to use all 35 packs, retry transient errors, chain sessions, and file bug reports when it finds real issues.
+- **[pack-demo-playbook.md](pack-demo-playbook.md)** — 20 copy-pasteable prompts that exercise every pack. Use it to validate a new integration or demo helmdeck to your team.
+- **`CLAUDE.md`** (repo root) — Auto-loaded by Claude Code; points at the files above.
+
 ## Sidecar topology
 
 Two deployment shapes cover every supported client:

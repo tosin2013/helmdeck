@@ -47,6 +47,7 @@
 | `doc.parse` | ❌ | Docling | `{source_url OR source_b64+filename, formats?, do_ocr?, ocr_lang?}` | `{source, markdown, text?, html?, status, processing_time}` — requires `HELMDECK_DOCLING_ENABLED=true` |
 | **Desktop** | | | | |
 | `desktop.run_app_and_screenshot` | ✅ | Xvfb + xdotool | `{command, args?}` | `{artifact_key}` + PNG artifact |
+| *(desktop REST primitives)* | ✅ | xdotool / scrot / ffmpeg | T807f: 15 endpoints under `/api/v1/desktop/` — screenshot, click, type, key, launch, windows, focus, double_click, triple_click, drag, scroll, modifier_click, mouse_move, wait, zoom + agent_status for noVNC witness mode. Used by `vision.*` native tool-use path. | |
 | **Vision** | | | | |
 | `vision.click_anywhere` | ✅ | screenshot + LLM (native tool-use for Anthropic/OpenAI/Gemini; JSON-prompt fallback for Ollama/Deepseek) | `{goal, model, max_steps?}` | `{completed, steps, final_action}` — T807f: uses provider-native computer-use tool schema when available, per-step screenshot artifacts uploaded for replay |
 | `vision.extract_visible_text` | ✅ | screenshot + LLM | `{model}` | `{text, model}` |
@@ -81,6 +82,7 @@ Packs that access external services use vault-stored credentials via the `creden
 - **HTTPS packs** (`repo.fetch`/`repo.push` with HTTPS URLs): pass `"credential": "github-token"` to name a vault entry
 - **GitHub packs**: default to vault entry `github-token` if it exists; work without auth for public repo reads
 - **HTTP fetch**: use `${vault:NAME}` placeholder syntax in headers/body — the control plane substitutes before sending
+- **ElevenLabs TTS** (`slides.narrate`): reads vault entry `elevenlabs-key` at handler time. When missing, video renders with silence instead of narration. Add via the Vault panel → Name: `elevenlabs-key`, Type: `api_key`, Host: `api.elevenlabs.io`
 
 ## Artifact handling
 

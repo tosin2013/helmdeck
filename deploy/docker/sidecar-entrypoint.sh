@@ -20,6 +20,9 @@ set -euo pipefail
 
 CHROMIUM_PORT="${CHROMIUM_PORT:-9222}"
 HELMDECK_MODE="${HELMDECK_MODE:-headless}"
+PLAYWRIGHT_MCP_PORT="${PLAYWRIGHT_MCP_PORT:-8931}"
+HELMDECK_PLAYWRIGHT_MCP_ENABLED="${HELMDECK_PLAYWRIGHT_MCP_ENABLED:-true}"
+PLAYWRIGHT_MCP_PID=""
 
 CHROME_FLAGS=(
     --no-sandbox
@@ -53,6 +56,42 @@ start_cdp_forwarder() {
           "TCP4:127.0.0.1:${CHROMIUM_PORT}" &
 }
 
+# Playwright MCP (T807a / ADR 035) — attach to the Chromium process this
+# entrypoint just started, via CDP on 127.0.0.1:9222, and expose the MCP
+# accessibility-tree surface on 0.0.0.0:${PLAYWRIGHT_MCP_PORT}. The control
+# plane reaches this endpoint over the internal baas-net bridge; the MCP
+# HTTP server binds 0.0.0.0 itself so we do NOT need a second socat hop.
+#
+# --cdp-endpoint makes Playwright *attach* instead of launching its own
+# browser, so there is exactly one Chromium process in the container —
+# the one this entrypoint manages. That keeps RAM flat and keeps cookies,
+# storage, and any pack-driven browser state consistent across both the
+# chromedp-based packs (`browser.*`) and the Playwright MCP tools.
+#
+# Fire-and-forget: if Playwright MCP fails to start we log a warning and
+# keep the sidecar up, because the existing chromedp packs still work
+# without it. Set HELMDECK_PLAYWRIGHT_MCP_ENABLED=false on tiny VMs to
+# skip it entirely.
+start_playwright_mcp() {
+    if [ "${HELMDECK_PLAYWRIGHT_MCP_ENABLED}" != "true" ]; then
+        echo "helmdeck-entrypoint: Playwright MCP disabled via HELMDECK_PLAYWRIGHT_MCP_ENABLED" >&2
+        return 0
+    fi
+    if ! command -v npx >/dev/null 2>&1; then
+        echo "helmdeck-entrypoint: npx not on PATH; Playwright MCP unavailable" >&2
+        return 0
+    fi
+    echo "helmdeck-entrypoint: starting Playwright MCP on 0.0.0.0:${PLAYWRIGHT_MCP_PORT} attached to CDP 127.0.0.1:${CHROMIUM_PORT}" >&2
+    npx --yes @playwright/mcp@latest \
+        --cdp-endpoint "http://127.0.0.1:${CHROMIUM_PORT}" \
+        --host 0.0.0.0 \
+        --port "${PLAYWRIGHT_MCP_PORT}" \
+        --headless \
+        --no-sandbox \
+        >/tmp/playwright-mcp.log 2>&1 &
+    PLAYWRIGHT_MCP_PID=$!
+}
+
 case "${HELMDECK_MODE}" in
   headless)
     CHROME_FLAGS+=(--headless=new)
@@ -67,7 +106,8 @@ case "${HELMDECK_MODE}" in
       sleep 0.2
     done
     start_cdp_forwarder
-    trap 'kill -TERM ${CHROME_PID} 2>/dev/null || true' INT TERM
+    start_playwright_mcp
+    trap 'kill -TERM ${CHROME_PID} ${PLAYWRIGHT_MCP_PID:-} 2>/dev/null || true' INT TERM
     wait "${CHROME_PID}"
     ;;
 
@@ -97,9 +137,10 @@ case "${HELMDECK_MODE}" in
       sleep 0.2
     done
     start_cdp_forwarder
+    start_playwright_mcp
 
     # Forward signals so the runtime watchdog gets a clean shutdown.
-    trap 'kill -TERM ${CHROME_PID} ${XFCE_PID} ${XVFB_PID} 2>/dev/null || true' INT TERM
+    trap 'kill -TERM ${CHROME_PID} ${XFCE_PID} ${XVFB_PID} ${PLAYWRIGHT_MCP_PID:-} 2>/dev/null || true' INT TERM
     wait -n
     ;;
 

@@ -59,12 +59,25 @@ type Spec struct {
 
 // Session is the runtime-observable view of a created session.
 type Session struct {
-	ID          string    // runtime-assigned UUID
-	ContainerID string    // backend-specific container/pod identifier
-	Status      Status    // current lifecycle status
-	CDPEndpoint string    // ws://host:port/devtools/browser/... reachable from the control plane
-	CreatedAt   time.Time // session creation timestamp (UTC)
-	Spec        Spec      // the spec the session was created with
+	ID          string // runtime-assigned UUID
+	ContainerID string // backend-specific container/pod identifier
+	Status      Status // current lifecycle status
+	CDPEndpoint string // ws://host:port/devtools/browser/... reachable from the control plane
+
+	// PlaywrightMCPEndpoint is the per-session SSE URL of the
+	// @playwright/mcp server bundled in the sidecar (T807a / ADR 035).
+	// Shape: http://<container-ip>:8931/sse. Empty string means either
+	// the sidecar was built without Playwright MCP (old image) or the
+	// operator disabled it via HELMDECK_PLAYWRIGHT_MCP_ENABLED=false.
+	// Packs that drive Playwright MCP (e.g. `web.test`, T807e) read
+	// this field to find the per-session endpoint; there is no entry
+	// in the external mcp.Registry because that registry is for
+	// operator-configured MCP servers, not auto-launched sidecar
+	// children.
+	PlaywrightMCPEndpoint string
+
+	CreatedAt time.Time // session creation timestamp (UTC)
+	Spec      Spec      // the spec the session was created with
 }
 
 // Runtime is the contract every backend (Docker, Kubernetes, Firecracker)

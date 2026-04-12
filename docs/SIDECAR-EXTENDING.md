@@ -128,6 +128,46 @@ Before pushing a new sidecar image:
    ```
 4. **Run the Model Success Rates regression** against the reference weak-model cohort. If any pack drops below the 80% UI threshold (ADR 008, §8.6), do not promote the image.
 
+## Playwright MCP bundled in the sidecar (T807a, ADR 035)
+
+Layer 4b of `sidecar.Dockerfile` installs Node.js 20 and
+`@playwright/mcp@latest` globally. On session start, the entrypoint
+launches Playwright MCP alongside the Chromium process it already
+manages:
+
+```bash
+npx @playwright/mcp@latest \
+    --cdp-endpoint http://127.0.0.1:9222 \
+    --host 0.0.0.0 \
+    --port 8931 \
+    --headless \
+    --no-sandbox
+```
+
+Two design choices matter:
+
+1. **`--cdp-endpoint` attaches, not launches.** Playwright MCP reuses
+   the same Chromium process the rest of helmdeck's `browser.*` packs
+   talk to. One browser, one cookie jar, one memory footprint.
+2. **`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`** at `npm install` time
+   prevents the Playwright postinstall from pulling ~200 MB of bundled
+   Chromium that would never be used — the system chromium from
+   layer 2 is the only browser in the image.
+
+The SSE endpoint is exposed on the container at port 8931 and surfaced
+to API clients as `playwright_mcp_endpoint` on every session response.
+Packs that drive Playwright MCP (for example `web.test`, T807e) read
+that field to find the per-session URL — there is no entry in the
+`/api/v1/mcp/servers` registry because that registry is for
+operator-configured external MCP servers, not auto-launched sidecar
+children.
+
+Set `HELMDECK_PLAYWRIGHT_MCP_ENABLED=false` in the session spec env
+(or image default) to skip the launch entirely on memory-constrained
+hosts; the `playwright_mcp_endpoint` field is then omitted from the
+session response so downstream packs can fail with a clear error
+instead of trying to connect to a port nothing is listening on.
+
 ## Forking the sidecar
 
 If your deployment needs tools that aren't appropriate for the upstream image (proprietary fonts, internal CA bundles, regional language packs), maintain a downstream Dockerfile:

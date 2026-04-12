@@ -104,6 +104,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
+# Layer 4b — Node.js 20 + @playwright/mcp (T807a / ADR 035)
+#
+# Playwright MCP is the "don't rebuild the browser automation layer" half
+# of ADR 035: it exposes Chromium via the accessibility tree so weak LLMs
+# can drive the browser without CSS selectors or a vision model. We install
+# it globally into the image (one-time cost) and the entrypoint points it
+# at the *existing* Chromium over CDP (--cdp-endpoint http://127.0.0.1:9222),
+# so there is no second Chromium process — both chromedp-based packs and
+# Playwright MCP share a single browser.
+#
+# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 is critical: without it the Playwright
+# postinstall would pull ~200 MB of bundled Chromium that we would never
+# use. The image already has the system chromium from Layer 2.
+#
+# The SSE/HTTP surface is bound to 0.0.0.0:8931 at runtime by the
+# entrypoint, so exposing it here is just a hint for `docker inspect`.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get update && apt-get install -y --no-install-recommends nodejs \
+ && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g @playwright/mcp@latest \
+ && npm cache clean --force \
+ && rm -rf /var/lib/apt/lists/* /root/.npm
+
 # Layer 5 — non-root user, runtime dirs, entrypoint
 RUN groupadd --system --gid 1000 helmdeck \
  && useradd  --system --uid 1000 --gid helmdeck --shell /bin/bash --create-home helmdeck \
@@ -117,10 +139,12 @@ USER helmdeck
 WORKDIR /home/helmdeck
 
 ENV CHROMIUM_PORT=9222 \
+    PLAYWRIGHT_MCP_PORT=8931 \
     HELMDECK_MODE=headless \
+    HELMDECK_PLAYWRIGHT_MCP_ENABLED=true \
     HOME=/home/helmdeck
 
-EXPOSE 9222 6080
+EXPOSE 9222 6080 8931
 
 # dumb-init reaps zombies cleanly so the watchdog/runtime get correct exit codes.
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/usr/local/bin/helmdeck-entrypoint"]

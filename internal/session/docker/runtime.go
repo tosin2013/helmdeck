@@ -48,6 +48,14 @@ const (
 	defaultTimeout     = 5 * time.Minute
 	cdpPort            = "9222"
 
+	// playwrightMCPPort is the sidecar port Playwright MCP binds to when
+	// HELMDECK_PLAYWRIGHT_MCP_ENABLED=true (T807a / ADR 035). The sidecar
+	// entrypoint starts `npx @playwright/mcp --host 0.0.0.0 --port 8931`
+	// after Chromium is live, attached to the same Chromium process via
+	// CDP on 127.0.0.1:9222. The control plane reaches this port over
+	// the internal baas-net bridge — it is not published to the host.
+	playwrightMCPPort = "8931"
+
 	// defaultPidsLimit is the T509 sandbox baseline cap on processes
 	// per session container. 1024 is enough for headless Chromium
 	// (~150 processes under normal load) plus xdotool/scrot/socat
@@ -177,7 +185,10 @@ func (r *Runtime) Create(ctx context.Context, spec session.Spec) (*session.Sessi
 			LabelSessionID: id,
 			LabelLabel:     resolved.Label,
 		},
-		ExposedPorts: nat.PortSet{nat.Port(cdpPort + "/tcp"): {}},
+		ExposedPorts: nat.PortSet{
+			nat.Port(cdpPort + "/tcp"):           {},
+			nat.Port(playwrightMCPPort + "/tcp"): {},
+		},
 	}
 
 	created, err := r.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "helmdeck-session-"+id)
@@ -200,14 +211,16 @@ func (r *Runtime) Create(ctx context.Context, spec session.Spec) (*session.Sessi
 		return nil, fmt.Errorf("container inspect: %w", err)
 	}
 	cdpEndpoint := buildCDPEndpoint(insp, r.network, cdpPort)
+	playwrightMCPEndpoint := buildPlaywrightMCPEndpoint(insp, r.network, playwrightMCPPort, resolved.Env)
 
 	s := &session.Session{
-		ID:          id,
-		ContainerID: created.ID,
-		Status:      session.StatusRunning,
-		CreatedAt:   time.Now().UTC(),
-		Spec:        resolved,
-		CDPEndpoint: cdpEndpoint,
+		ID:                    id,
+		ContainerID:           created.ID,
+		Status:                session.StatusRunning,
+		CreatedAt:             time.Now().UTC(),
+		Spec:                  resolved,
+		CDPEndpoint:           cdpEndpoint,
+		PlaywrightMCPEndpoint: playwrightMCPEndpoint,
 	}
 
 	r.mu.Lock()
@@ -410,6 +423,25 @@ func buildCDPEndpoint(insp container.InspectResponse, network, port string) stri
 		return ""
 	}
 	return "http://" + ip + ":" + port
+}
+
+// buildPlaywrightMCPEndpoint returns the per-session Playwright MCP
+// endpoint URL (T807a / ADR 035), or "" if the operator has opted out
+// via HELMDECK_PLAYWRIGHT_MCP_ENABLED=false on the spec env.
+//
+// The shape matches `@playwright/mcp --host 0.0.0.0 --port 8931`'s
+// default SSE mount point: http://<container-ip>:8931/sse. We reuse
+// buildCDPEndpoint's IP-discovery logic because both endpoints live
+// on the same container IP — only the port and path differ.
+func buildPlaywrightMCPEndpoint(insp container.InspectResponse, network, port string, env map[string]string) string {
+	if v, ok := env["HELMDECK_PLAYWRIGHT_MCP_ENABLED"]; ok && v == "false" {
+		return ""
+	}
+	base := buildCDPEndpoint(insp, network, port)
+	if base == "" {
+		return ""
+	}
+	return base + "/sse"
 }
 
 // errImageMissing is reserved for richer image-resolution errors in T104.

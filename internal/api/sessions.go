@@ -28,8 +28,12 @@ type sessionResponse struct {
 	ContainerID string         `json:"container_id"`
 	Status      session.Status `json:"status"`
 	CDPEndpoint string         `json:"cdp_endpoint,omitempty"`
-	CreatedAt   time.Time      `json:"created_at"`
-	Spec        specView       `json:"spec"`
+	// PlaywrightMCPEndpoint is the per-session SSE URL of the bundled
+	// @playwright/mcp server (T807a / ADR 035). Omitted when the sidecar
+	// was built without Playwright MCP or the operator disabled it.
+	PlaywrightMCPEndpoint string    `json:"playwright_mcp_endpoint,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
+	Spec                  specView  `json:"spec"`
 }
 
 type specView struct {
@@ -45,11 +49,12 @@ type specView struct {
 
 func toResponse(s *session.Session) sessionResponse {
 	return sessionResponse{
-		ID:          s.ID,
-		ContainerID: s.ContainerID,
-		Status:      s.Status,
-		CDPEndpoint: s.CDPEndpoint,
-		CreatedAt:   s.CreatedAt,
+		ID:                    s.ID,
+		ContainerID:           s.ContainerID,
+		Status:                s.Status,
+		CDPEndpoint:           s.CDPEndpoint,
+		PlaywrightMCPEndpoint: s.PlaywrightMCPEndpoint,
+		CreatedAt:             s.CreatedAt,
 		Spec: specView{
 			Label:          s.Spec.Label,
 			Image:          s.Spec.Image,

@@ -3,6 +3,9 @@ package docker
 import (
 	"strings"
 	"testing"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 )
 
 // T509 sandbox spec tests. These exercise buildHostConfig directly
@@ -115,5 +118,62 @@ func TestWithSeccompProfile(t *testing.T) {
 	WithSeccompProfile("/path/to/profile.json")(r)
 	if r.seccompProfile != "/path/to/profile.json" {
 		t.Errorf("WithSeccompProfile didn't apply: %q", r.seccompProfile)
+	}
+}
+
+// T807a — Playwright MCP endpoint builder. The happy path mirrors
+// buildCDPEndpoint (picks the configured network's IP first, falls
+// back to DefaultNetworkSettings.IPAddress) and appends /sse because
+// @playwright/mcp exposes its SSE transport at that mount point.
+// The opt-out env var MUST zero the endpoint so packs can detect
+// that the operator disabled Playwright MCP without having to know
+// about the sidecar's entrypoint toggle.
+
+func inspectWithNetworkIP(networkName, ip string) container.InspectResponse {
+	return container.InspectResponse{
+		NetworkSettings: &container.NetworkSettings{
+			Networks: map[string]*network.EndpointSettings{
+				networkName: {IPAddress: ip},
+			},
+		},
+	}
+}
+
+func TestBuildPlaywrightMCPEndpoint_HappyPath(t *testing.T) {
+	insp := inspectWithNetworkIP("baas-net", "172.18.0.42")
+	got := buildPlaywrightMCPEndpoint(insp, "baas-net", playwrightMCPPort, nil)
+	want := "http://172.18.0.42:8931/sse"
+	if got != want {
+		t.Errorf("endpoint = %q, want %q", got, want)
+	}
+}
+
+func TestBuildPlaywrightMCPEndpoint_OptOutEnvVar(t *testing.T) {
+	insp := inspectWithNetworkIP("baas-net", "172.18.0.42")
+	got := buildPlaywrightMCPEndpoint(insp, "baas-net", playwrightMCPPort,
+		map[string]string{"HELMDECK_PLAYWRIGHT_MCP_ENABLED": "false"})
+	if got != "" {
+		t.Errorf("opted-out endpoint = %q, want empty string", got)
+	}
+}
+
+func TestBuildPlaywrightMCPEndpoint_EnvVarTrueStillBuilds(t *testing.T) {
+	// Any value that isn't exactly "false" keeps Playwright MCP on so
+	// a typo in HELMDECK_PLAYWRIGHT_MCP_ENABLED doesn't silently
+	// disable the endpoint.
+	insp := inspectWithNetworkIP("baas-net", "172.18.0.42")
+	got := buildPlaywrightMCPEndpoint(insp, "baas-net", playwrightMCPPort,
+		map[string]string{"HELMDECK_PLAYWRIGHT_MCP_ENABLED": "true"})
+	if got != "http://172.18.0.42:8931/sse" {
+		t.Errorf("endpoint = %q, want http://172.18.0.42:8931/sse", got)
+	}
+}
+
+func TestBuildPlaywrightMCPEndpoint_NoIP(t *testing.T) {
+	// No usable IP → no endpoint. Same behavior as buildCDPEndpoint.
+	insp := container.InspectResponse{NetworkSettings: &container.NetworkSettings{}}
+	got := buildPlaywrightMCPEndpoint(insp, "baas-net", playwrightMCPPort, nil)
+	if got != "" {
+		t.Errorf("endpoint with no IP = %q, want empty string", got)
 	}
 }

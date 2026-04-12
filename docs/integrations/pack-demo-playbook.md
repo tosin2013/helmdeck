@@ -114,12 +114,19 @@ Use the helmdeck research deep tool to research "WebAssembly performance benchma
 
 #### `content.ground` — Add source links to a blog post
 
-**Prompt:**
+**Prompt (text mode — no repo needed):**
+```
+Use the helmdeck content ground tool with text "Quantum computers use qubits instead of classical bits. WebAssembly enables near-native performance in web browsers. Rust guarantees memory safety without garbage collection." and topic "computer science".
+```
+
+**Prompt (file mode — from a cloned repo):**
 ```
 First clone https://github.com/octocat/Hello-World.git using the helmdeck repo fetch tool. Then use content ground on the README file with the clone_path and session_id from the clone.
 ```
 
-**Expected:** The README gets citation links inserted after factual claims. Check `claims_grounded` count. Requires Firecrawl + LLM.
+**Tip:** Text mode is simpler — pass markdown directly and get grounded text back. File mode is for when the content is already in a repo you're editing.
+
+**Expected:** `claims_grounded >= 1`, `grounded_text` with `[source](url)` links inserted after factual claims. A `grounded.md` artifact is uploaded to `/artifacts` for download. Requires Firecrawl + LLM.
 
 ---
 

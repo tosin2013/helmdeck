@@ -100,3 +100,28 @@ Both are toggled via env vars (`HELMDECK_FIRECRAWL_ENABLED`, `HELMDECK_DOCLING_E
 - Adding Playwright MCP to the sidecar increases the sidecar image size (Playwright installs ~200 MB of browser deps, though helmdeck's sidecar already has Chromium — need to verify if they share the install or double up).
 - The accessibility tree approach (Playwright MCP) is deterministic and doesn't require a vision model, making it cheaper and more reliable than screenshot-based extraction. This is a significant quality improvement for weak models (the 7B–30B target audience from ADR 003).
 - Community MCP servers get helmdeck's security posture (vault, egress, audit) for free — the pack wrapper adds the controls that raw MCP servers don't have.
+
+## 2026 Landscape Revision (T807f, April 2026)
+
+The original ADR identified four "host, don't rebuild" candidates: Playwright MCP, Firecrawl, browser-use, and Docling. By mid-2026 the landscape shifted:
+
+**All three frontier providers now ship native computer-use tool schemas:**
+- Anthropic: `computer_20251124` (WebArena SOTA for single-agent systems)
+- OpenAI: `computer-use-preview` function tool
+- Google: `gemini-2.5-computer-use-preview-10-2025` + `gemini-3-flash-preview` built-in
+
+All three are **client-runtime** — the provider hosts the model and the caller hosts the click/type/screenshot execution environment. Helmdeck's existing T401 desktop sidecar (Xvfb + XFCE4 + xdotool + scrot + Chromium) already IS that environment.
+
+**Decision: upgrade vision.*, don't wrap browser-use or Skyvern.**
+
+Wrapping browser-use (Python, MIT) or Skyvern (Python, AGPL) would embed someone else's agent loop inside helmdeck's Go pack engine for functionality modern frontier models now provide natively. T807f instead upgrades the gateway to carry tool definitions (ChatRequest.Tools/ToolChoice) through to each provider adapter, and upgrades vision.* packs to route native tool schemas when the target model supports them. The result:
+
+1. **Cross-provider schema abstraction** — one `ComputerUseAction` type, three provider parsers (Anthropic, OpenAI, Gemini including 0-1000 normalized coordinate scaling), same desktop runtime
+2. **Vault-aware credential injection** — `${vault:NAME}` substitution happens at the xdotool layer; the model never sees the secret in context
+3. **Audit-backed replay** — `EventComputerUse` entries + per-step screenshot artifacts to Garage S3
+4. **noVNC witness mode** — `AgentStatus` on the VNC info endpoint, real-time human observation
+5. **No new runtime** — zero Python, zero new containers, zero supply-chain surface
+
+Ollama and Deepseek stay on the JSON-prompt fallback path (the legacy `vision.Action` schema). `vision.Action` is preserved as the documented local-model path indefinitely, not deprecated.
+
+The evolution path column from the original ADR for `vision.*` is satisfied: browser-use/Skyvern was the assumed vehicle; native provider tool schemas turned out to be the correct one. The same destination, different transport.

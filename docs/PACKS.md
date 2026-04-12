@@ -47,9 +47,9 @@
 | **Desktop** | | | | |
 | `desktop.run_app_and_screenshot` | ✅ | Xvfb + xdotool | `{command, args?}` | `{artifact_key}` + PNG artifact |
 | **Vision** | | | | |
-| `vision.click_anywhere` | ✅ | screenshot + LLM | `{target, description}` | `{clicked, coordinates}` |
-| `vision.extract_visible_text` | ✅ | screenshot + LLM | `{}` | `{text}` |
-| `vision.fill_form_by_label` | ✅ | screenshot + LLM | `{fields{label: value}}` | `{filled}` |
+| `vision.click_anywhere` | ✅ | screenshot + LLM (native tool-use for Anthropic/OpenAI/Gemini; JSON-prompt fallback for Ollama/Deepseek) | `{goal, model, max_steps?}` | `{completed, steps, final_action}` — T807f: uses provider-native computer-use tool schema when available, per-step screenshot artifacts uploaded for replay |
+| `vision.extract_visible_text` | ✅ | screenshot + LLM | `{model}` | `{text, model}` |
+| `vision.fill_form_by_label` | ✅ | screenshot + LLM | `{model, fields{label: value}, max_steps?}` | `{completed, fields_filled, steps}` |
 | **Language** | | | | |
 | `python.run` | ✅ | Python sidecar | `{code}` | `{stdout, stderr, exit_code}` |
 | `node.run` | ✅ | Node sidecar | `{code}` | `{stdout, stderr, exit_code}` |

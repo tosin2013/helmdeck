@@ -12,6 +12,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -51,12 +52,48 @@ type Message struct {
 // HTTP layer uses encoding/json's default behavior) and forwarded
 // opaquely via Extra so providers can pass through provider-specific
 // knobs without the gateway needing to know about them.
+//
+// T807f: Tools + ToolChoice carry provider-agnostic tool-use definitions
+// so callers (vision.*, web.test, any future tool-using pack) can hand
+// in a single tool schema and have each provider adapter translate it to
+// the provider's native wire format — Anthropic's top-level `tools: [{name,
+// description, input_schema}]`, OpenAI's `tools: [{type: "function", ...}]`,
+// Gemini's `tools: [{functionDeclarations: [...]}]`. Both fields are
+// optional; unset means "no tool use" and every adapter short-circuits the
+// translation path. Ollama and Deepseek ignore these fields (tool-agnostic
+// by design; packs fall back to the JSON-prompt path for local models).
 type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature *float64  `json:"temperature,omitempty"`
-	MaxTokens   *int      `json:"max_tokens,omitempty"`
-	Stream      bool      `json:"stream,omitempty"`
+	Model       string           `json:"model"`
+	Messages    []Message        `json:"messages"`
+	Temperature *float64         `json:"temperature,omitempty"`
+	MaxTokens   *int             `json:"max_tokens,omitempty"`
+	Stream      bool             `json:"stream,omitempty"`
+	Tools       []ToolDefinition `json:"tools,omitempty"`
+	ToolChoice  *ToolChoice      `json:"tool_choice,omitempty"`
+}
+
+// ToolDefinition is a provider-agnostic tool the LLM may call. Name
+// uniquely identifies it in the current request; Description is plain
+// English for the model; InputSchema is a JSON Schema document
+// describing the tool's arguments, handed to the provider verbatim.
+//
+// Per-provider translation lives in each adapter — this struct never
+// hits the wire directly, it's always re-shaped into the upstream
+// format in ChatCompletion().
+type ToolDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+}
+
+// ToolChoice constrains which tool (if any) the model may emit.
+// Mode is "auto" (model picks), "any" / "required" (must call a tool),
+// "none" (plain-text reply), or "tool" (must call the named tool).
+// When Mode is "tool", Name identifies the specific tool to require.
+// Nil ToolChoice is equivalent to Mode "auto".
+type ToolChoice struct {
+	Mode string `json:"mode"`
+	Name string `json:"name,omitempty"`
 }
 
 // Choice is one completion alternative in a ChatResponse.

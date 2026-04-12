@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // GeminiConfig configures the Google Gemini generateContent adapter.
@@ -46,12 +47,16 @@ func (p *geminiProvider) Models(ctx context.Context) ([]string, error) {
 }
 
 // geminiPart is one entry in a Gemini content array. Exactly one of
-// Text or InlineData should be set per part. omitempty on both keeps
-// the wire format clean for text-only requests, which preserves
-// backward compat with the existing test fixtures.
+// Text, InlineData, FunctionCall, or FunctionResponse should be set
+// per part. T807f adds FunctionCall / FunctionResponse so native
+// tool-use round-trips through the adapter — Gemini's functionCall
+// args are a raw JSON object (unlike OpenAI's string), which maps
+// cleanly onto ToolInput json.RawMessage.
 type geminiPart struct {
-	Text       string            `json:"text,omitempty"`
-	InlineData *geminiInlineData `json:"inlineData,omitempty"`
+	Text             string                  `json:"text,omitempty"`
+	InlineData       *geminiInlineData       `json:"inlineData,omitempty"`
+	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
+	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
 }
 
 // geminiInlineData carries a base64-encoded image with its MIME type.
@@ -60,6 +65,49 @@ type geminiPart struct {
 type geminiInlineData struct {
 	MimeType string `json:"mimeType"`
 	Data     string `json:"data"`
+}
+
+// geminiFunctionCall is an assistant-side tool call. Args is the raw
+// JSON arguments Gemini emits (or we echo back in a multi-turn).
+type geminiFunctionCall struct {
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
+}
+
+// geminiFunctionResponse is the caller-side tool result. Response
+// wraps the tool's output — Gemini expects an object containing at
+// least a `name` field echoing the function name, plus arbitrary
+// result data. We wrap raw JSON tool_result_content inside a
+// standard envelope.
+type geminiFunctionResponse struct {
+	Name     string          `json:"name"`
+	Response json.RawMessage `json:"response"`
+}
+
+// geminiFunctionDeclaration is the top-level tool schema Gemini
+// accepts via tools[0].functionDeclarations. Parameters is a JSON
+// Schema object, forwarded verbatim from ToolDefinition.InputSchema.
+type geminiFunctionDeclaration struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+type geminiToolsEntry struct {
+	FunctionDeclarations []geminiFunctionDeclaration `json:"functionDeclarations,omitempty"`
+}
+
+// geminiToolConfig constrains function calling — the shape Gemini
+// ships for its own computer-use tool preview. Mode is "AUTO" /
+// "ANY" / "NONE"; allowedFunctionNames narrows "ANY" mode to a
+// specific named tool.
+type geminiToolConfig struct {
+	FunctionCallingConfig geminiFunctionCallingConfig `json:"functionCallingConfig"`
+}
+
+type geminiFunctionCallingConfig struct {
+	Mode                 string   `json:"mode"`
+	AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"`
 }
 
 type geminiContent struct {
@@ -73,9 +121,11 @@ type geminiGenConfig struct {
 }
 
 type geminiRequest struct {
-	Contents          []geminiContent  `json:"contents"`
-	SystemInstruction *geminiContent   `json:"systemInstruction,omitempty"`
-	GenerationConfig  *geminiGenConfig `json:"generationConfig,omitempty"`
+	Contents          []geminiContent    `json:"contents"`
+	SystemInstruction *geminiContent     `json:"systemInstruction,omitempty"`
+	GenerationConfig  *geminiGenConfig   `json:"generationConfig,omitempty"`
+	Tools             []geminiToolsEntry `json:"tools,omitempty"`
+	ToolConfig        *geminiToolConfig  `json:"toolConfig,omitempty"`
 }
 
 type geminiResponse struct {
@@ -98,6 +148,24 @@ func (p *geminiProvider) ChatCompletion(ctx context.Context, req ChatRequest) (C
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
 		}
+	}
+	// Tool definitions (T807f). Gemini groups every functionDeclaration
+	// under a single tools[0] entry. We preserve the caller's order so
+	// a model that cares about declaration order sees the same list
+	// every run.
+	if len(req.Tools) > 0 {
+		decls := make([]geminiFunctionDeclaration, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			decls = append(decls, geminiFunctionDeclaration{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+			})
+		}
+		upstream.Tools = []geminiToolsEntry{{FunctionDeclarations: decls}}
+	}
+	if req.ToolChoice != nil {
+		upstream.ToolConfig = translateGeminiToolConfig(req.ToolChoice)
 	}
 	for _, m := range req.Messages {
 		if m.Role == "system" {
@@ -148,17 +216,70 @@ func (p *geminiProvider) ChatCompletion(ctx context.Context, req ChatRequest) (C
 		},
 	}
 	for _, c := range parsed.Candidates {
-		var text string
+		// Detect function calls so we can build a multipart message
+		// if present; fall back to the legacy text-only path for
+		// pure chat responses.
+		hasFn := false
 		for _, part := range c.Content.Parts {
-			text += part.Text
+			if part.FunctionCall != nil {
+				hasFn = true
+				break
+			}
+		}
+		var content MessageContent
+		if hasFn {
+			parts := make([]ContentPart, 0, len(c.Content.Parts))
+			for _, part := range c.Content.Parts {
+				switch {
+				case part.FunctionCall != nil:
+					// Gemini doesn't return a call id — we synthesize
+					// one from the tool name so downstream code that
+					// pairs tool_use with tool_result has a non-empty
+					// identifier to work with. Multi-call responses
+					// use a suffix for uniqueness.
+					id := "gemini-call-" + part.FunctionCall.Name
+					parts = append(parts, ToolUsePart(id, part.FunctionCall.Name, part.FunctionCall.Args))
+				case part.Text != "":
+					parts = append(parts, TextPart(part.Text))
+				}
+			}
+			content = MultipartContent(parts...)
+		} else {
+			var text string
+			for _, part := range c.Content.Parts {
+				text += part.Text
+			}
+			content = TextContent(text)
 		}
 		out.Choices = append(out.Choices, Choice{
 			Index:        c.Index,
-			Message:      Message{Role: "assistant", Content: TextContent(text)},
+			Message:      Message{Role: "assistant", Content: content},
 			FinishReason: c.FinishReason,
 		})
 	}
 	return out, nil
+}
+
+// translateGeminiToolConfig maps the gateway ToolChoice onto Gemini's
+// functionCallingConfig enum. "tool" and "any"/"required" both map to
+// ANY mode; "tool" additionally narrows via allowedFunctionNames.
+// Empty Mode → AUTO (default behavior, same as omitting tool_config).
+func translateGeminiToolConfig(tc *ToolChoice) *geminiToolConfig {
+	switch tc.Mode {
+	case "tool":
+		return &geminiToolConfig{
+			FunctionCallingConfig: geminiFunctionCallingConfig{
+				Mode:                 "ANY",
+				AllowedFunctionNames: []string{tc.Name},
+			},
+		}
+	case "any", "required":
+		return &geminiToolConfig{FunctionCallingConfig: geminiFunctionCallingConfig{Mode: "ANY"}}
+	case "none":
+		return &geminiToolConfig{FunctionCallingConfig: geminiFunctionCallingConfig{Mode: "NONE"}}
+	default:
+		return &geminiToolConfig{FunctionCallingConfig: geminiFunctionCallingConfig{Mode: "AUTO"}}
+	}
 }
 
 // messageContentToGeminiParts maps a gateway MessageContent into the
@@ -177,9 +298,9 @@ func messageContentToGeminiParts(mc MessageContent) []geminiPart {
 	out := make([]geminiPart, 0, len(mc.Parts()))
 	for _, p := range mc.Parts() {
 		switch p.Type {
-		case "text":
+		case ContentPartText:
 			out = append(out, geminiPart{Text: p.Text})
-		case "image_url":
+		case ContentPartImageURL:
 			if p.ImageURL == nil {
 				continue
 			}
@@ -188,6 +309,30 @@ func messageContentToGeminiParts(mc MessageContent) []geminiPart {
 			} else {
 				out = append(out, geminiPart{Text: "[image: " + p.ImageURL.URL + "]"})
 			}
+		case ContentPartToolUse:
+			// Echo an assistant-side tool_use back to Gemini (the
+			// second turn of a multi-turn loop where the caller
+			// preserved history). Gemini parses args as a raw JSON
+			// object, matching what we stored in ToolInput.
+			out = append(out, geminiPart{
+				FunctionCall: &geminiFunctionCall{
+					Name: p.ToolName,
+					Args: p.ToolInput,
+				},
+			})
+		case ContentPartToolResult:
+			// Caller-side tool result. Gemini wraps it in a
+			// functionResponse envelope keyed by function name —
+			// which we don't have on the ContentPart (ToolResultID
+			// is the call id, not the tool name). For now we
+			// forward the ID as the name, which round-trips cleanly
+			// with our synthetic "gemini-call-<name>" id scheme.
+			out = append(out, geminiPart{
+				FunctionResponse: &geminiFunctionResponse{
+					Name:     strings.TrimPrefix(p.ToolResultID, "gemini-call-"),
+					Response: p.ToolResultContent,
+				},
+			})
 		}
 	}
 	return out

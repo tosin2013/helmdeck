@@ -7,6 +7,16 @@ import (
 	"strings"
 )
 
+// Content part type constants — the wire-level `type` field on every
+// ContentPart. Kept as exported constants so provider adapters can
+// branch on them without stringly-typed comparisons.
+const (
+	ContentPartText       = "text"
+	ContentPartImageURL   = "image_url"
+	ContentPartToolUse    = "tool_use"    // model emitted a tool call (assistant-role message)
+	ContentPartToolResult = "tool_result" // caller returned a tool result (user-role message)
+)
+
 // MessageContent is the content body of a chat Message. It can be
 // either a plain text string (the legacy / text-only path) or an
 // ordered array of typed content parts (text + images, matching the
@@ -30,13 +40,42 @@ type MessageContent struct {
 	hasContent bool // distinguishes "" text from a missing content field
 }
 
-// ContentPart is one entry in a multipart message body. Type is
-// "text" or "image_url" today; future part types (audio, video,
-// tool_use) extend the union without breaking the marshaler.
+// ContentPart is one entry in a multipart message body. Type is one
+// of the ContentPart* constants above. The union is open-ended: new
+// part types extend the struct with optional fields rather than
+// breaking the JSON shape.
+//
+// T807f adds tool_use (assistant-role tool calls) and tool_result
+// (user-role tool-result blocks). Both are used by capability packs
+// that route native provider computer-use tool schemas through the
+// gateway — see internal/vision/vision.go StepNative().
 type ContentPart struct {
 	Type     string        `json:"type"`
 	Text     string        `json:"text,omitempty"`
 	ImageURL *ImageURLPart `json:"image_url,omitempty"`
+
+	// Tool-use block fields (Type == ContentPartToolUse). The LLM
+	// emits these on assistant-role messages. ID uniquely identifies
+	// the call within the current request so the caller can pair
+	// each result back in a follow-up tool_result block. Name is the
+	// tool name from the request's Tools[] array. Input is the
+	// tool's arguments as a raw JSON object — handed to the handler
+	// verbatim so the handler can unmarshal into its own input type.
+	ToolUseID    string          `json:"tool_use_id,omitempty"`
+	ToolName     string          `json:"tool_name,omitempty"`
+	ToolInput    json.RawMessage `json:"tool_input,omitempty"`
+
+	// Tool-result block fields (Type == ContentPartToolResult). The
+	// caller emits these on user-role messages in follow-up turns.
+	// ToolResultID must match the ID of the tool_use block being
+	// answered. Content is the tool's output rendered for the model
+	// (typically a string, but raw JSON is accepted so handlers can
+	// return structured data). IsError=true flags a failed tool call
+	// so the model sees "this attempt failed" and can retry or
+	// change strategy.
+	ToolResultID      string          `json:"tool_result_id,omitempty"`
+	ToolResultContent json.RawMessage `json:"tool_result_content,omitempty"`
+	IsError           bool            `json:"is_error,omitempty"`
 }
 
 // ImageURLPart is the OpenAI vision image_url block. URL accepts
@@ -66,7 +105,7 @@ func MultipartContent(parts ...ContentPart) MessageContent {
 // TextPart wraps a text string as a ContentPart. Equivalent to
 // {"type":"text","text":s} on the wire.
 func TextPart(s string) ContentPart {
-	return ContentPart{Type: "text", Text: s}
+	return ContentPart{Type: ContentPartText, Text: s}
 }
 
 // ImageURLPartFromURL builds an image content part from a URL. The
@@ -74,7 +113,39 @@ func TextPart(s string) ContentPart {
 // inline blob — providers that don't accept inline data must extract
 // and re-upload, which is the per-provider adapter's job.
 func ImageURLPartFromURL(url string) ContentPart {
-	return ContentPart{Type: "image_url", ImageURL: &ImageURLPart{URL: url}}
+	return ContentPart{Type: ContentPartImageURL, ImageURL: &ImageURLPart{URL: url}}
+}
+
+// ToolUsePart wraps a model-emitted tool call as a ContentPart.
+// Typically constructed by provider adapters when decoding an upstream
+// tool-use block, not by callers directly. id is the provider's call
+// identifier (e.g. Anthropic's `toolu_...`, OpenAI's `call_...`); name
+// is the tool name from the original request; input is the raw JSON
+// arguments the model chose for this call.
+func ToolUsePart(id, name string, input json.RawMessage) ContentPart {
+	return ContentPart{
+		Type:      ContentPartToolUse,
+		ToolUseID: id,
+		ToolName:  name,
+		ToolInput: input,
+	}
+}
+
+// ToolResultPart wraps a caller-provided tool result as a ContentPart.
+// Callers use this in follow-up turns to hand the tool's output back to
+// the model so it can decide the next action. toolUseID MUST match the
+// id from the original ToolUsePart being answered. content is the raw
+// JSON the model sees; simple string outputs should be json.Marshal'd
+// first so the provider adapter can render them in the upstream shape.
+// Pass isError=true to flag a failed tool call — the model will see
+// "this attempt failed" and is free to retry or change strategy.
+func ToolResultPart(toolUseID string, content json.RawMessage, isError bool) ContentPart {
+	return ContentPart{
+		Type:              ContentPartToolResult,
+		ToolResultID:      toolUseID,
+		ToolResultContent: content,
+		IsError:           isError,
+	}
 }
 
 // IsMultipart reports whether the content is a parts array. Used by

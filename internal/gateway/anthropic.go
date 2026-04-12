@@ -63,10 +63,11 @@ type anthropicMessage struct {
 	Content any    `json:"content"`
 }
 
-// anthropicTextBlock and anthropicImageBlock are the two content
-// block shapes we emit. Anthropic's full schema also includes
-// tool_use / tool_result blocks; those land alongside the Pack
-// Execution Engine's tool routing in a future ADR.
+// anthropicTextBlock, anthropicImageBlock, anthropicToolUseBlock, and
+// anthropicToolResultBlock are the four content block shapes we emit.
+// T807f adds the tool_use / tool_result pair so gateway-level tool
+// routing works end-to-end — vision.* StepNative and any other pack
+// using native computer-use tool schemas depends on this.
 type anthropicTextBlock struct {
 	Type string `json:"type"` // "text"
 	Text string `json:"text"`
@@ -78,28 +79,80 @@ type anthropicImageBlock struct {
 }
 
 type anthropicImageBlockSource struct {
-	Type      string `json:"type"`       // "base64" or "url"
+	Type      string `json:"type"` // "base64" or "url"
 	MediaType string `json:"media_type,omitempty"`
 	Data      string `json:"data,omitempty"`
 	URL       string `json:"url,omitempty"`
 }
 
-type anthropicRequest struct {
-	Model       string             `json:"model"`
-	System      string             `json:"system,omitempty"`
-	Messages    []anthropicMessage `json:"messages"`
-	MaxTokens   int                `json:"max_tokens"`
-	Temperature *float64           `json:"temperature,omitempty"`
+// anthropicToolUseBlock is an assistant-role content block: the model's
+// tool call. Input is the provider-native JSON object for the tool's
+// arguments — Anthropic wants a decoded object, not a raw string, so
+// we use json.RawMessage and let the marshaller embed it verbatim.
+type anthropicToolUseBlock struct {
+	Type  string          `json:"type"` // "tool_use"
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
 }
 
+// anthropicToolResultBlock is a user-role content block: the caller
+// handing a tool's output back for the next turn. Content is forwarded
+// as an opaque JSON value so callers can return strings, structured
+// objects, or anything else the model can parse.
+type anthropicToolResultBlock struct {
+	Type      string          `json:"type"` // "tool_result"
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
+}
+
+// anthropicTool is the top-level tool definition — the shape Anthropic
+// expects in request.tools. InputSchema is forwarded verbatim from the
+// gateway ToolDefinition so pack authors can hand in a JSON Schema
+// document and have it reach the model unchanged.
+type anthropicTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+// anthropicToolChoice constrains the model's tool selection. Anthropic
+// accepts {type: "auto"}, {type: "any"}, {type: "tool", name: "..."}.
+// We also pass {type: "none"} through when the caller explicitly sets
+// Mode to "none" — Anthropic treats that as "do not call any tools,"
+// which is the same semantics as the OpenAI and Gemini variants.
+type anthropicToolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
+}
+
+type anthropicRequest struct {
+	Model       string               `json:"model"`
+	System      string               `json:"system,omitempty"`
+	Messages    []anthropicMessage   `json:"messages"`
+	MaxTokens   int                  `json:"max_tokens"`
+	Temperature *float64             `json:"temperature,omitempty"`
+	Tools       []anthropicTool      `json:"tools,omitempty"`
+	ToolChoice  *anthropicToolChoice `json:"tool_choice,omitempty"`
+}
+
+// anthropicResponse decodes Anthropic's /v1/messages response. The
+// Content array is a union of text and tool_use blocks (plus image
+// blocks on the request side, never on the response side). We keep
+// every field we might care about in one struct and branch in the
+// caller — simpler than a json.RawMessage + second decode.
 type anthropicResponse struct {
 	ID      string `json:"id"`
 	Type    string `json:"type"`
 	Role    string `json:"role"`
 	Model   string `json:"model"`
 	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type  string          `json:"type"`
+		Text  string          `json:"text,omitempty"`
+		ID    string          `json:"id,omitempty"`    // tool_use id
+		Name  string          `json:"name,omitempty"`  // tool_use name
+		Input json.RawMessage `json:"input,omitempty"` // tool_use arguments
 	} `json:"content"`
 	StopReason string `json:"stop_reason"`
 	Usage      struct {
@@ -121,6 +174,23 @@ func (p *anthropicProvider) ChatCompletion(ctx context.Context, req ChatRequest)
 		Model:       req.Model,
 		MaxTokens:   maxTokens,
 		Temperature: req.Temperature,
+	}
+	// Tool definitions + tool choice (T807f). Empty Tools is the
+	// chat-only path and leaves both fields nil so the wire shape is
+	// unchanged for legacy callers. Each ToolDefinition translates
+	// 1:1 to the Anthropic top-level tool schema.
+	if len(req.Tools) > 0 {
+		upstream.Tools = make([]anthropicTool, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			upstream.Tools = append(upstream.Tools, anthropicTool{
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+			})
+		}
+	}
+	if req.ToolChoice != nil {
+		upstream.ToolChoice = translateAnthropicToolChoice(req.ToolChoice)
 	}
 	for _, m := range req.Messages {
 		if m.Role == "system" {
@@ -155,20 +225,48 @@ func (p *anthropicProvider) ChatCompletion(ctx context.Context, req ChatRequest)
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return ChatResponse{}, err
 	}
-	// Concatenate text blocks. Tool-use blocks are dropped at this layer
-	// — the Pack Execution Engine (T205) handles tool calls; the raw
-	// gateway is just for chat passthrough.
-	var content string
+	// Build the assistant message. Two shapes:
+	//   (a) Text-only response — legacy chat path, fold every text
+	//       block into a single TextContent for backward compat.
+	//   (b) Any response containing a tool_use block — emit
+	//       MultipartContent with a mix of TextPart and ToolUsePart
+	//       so packs that drive tool-use can see the model's call
+	//       alongside any accompanying text.
+	var hasTool bool
 	for _, b := range parsed.Content {
-		if b.Type == "text" {
-			content += b.Text
+		if b.Type == "tool_use" {
+			hasTool = true
+			break
 		}
+	}
+	var message Message
+	if hasTool {
+		parts := make([]ContentPart, 0, len(parsed.Content))
+		for _, b := range parsed.Content {
+			switch b.Type {
+			case "text":
+				if b.Text != "" {
+					parts = append(parts, TextPart(b.Text))
+				}
+			case "tool_use":
+				parts = append(parts, ToolUsePart(b.ID, b.Name, b.Input))
+			}
+		}
+		message = Message{Role: "assistant", Content: MultipartContent(parts...)}
+	} else {
+		var content string
+		for _, b := range parsed.Content {
+			if b.Type == "text" {
+				content += b.Text
+			}
+		}
+		message = Message{Role: "assistant", Content: TextContent(content)}
 	}
 	return ChatResponse{
 		ID:      parsed.ID,
 		Object:  "chat.completion",
 		Model:   parsed.Model,
-		Choices: []Choice{{Index: 0, Message: Message{Role: "assistant", Content: TextContent(content)}, FinishReason: parsed.StopReason}},
+		Choices: []Choice{{Index: 0, Message: message, FinishReason: parsed.StopReason}},
 		Usage: Usage{
 			PromptTokens:     parsed.Usage.InputTokens,
 			CompletionTokens: parsed.Usage.OutputTokens,
@@ -177,12 +275,31 @@ func (p *anthropicProvider) ChatCompletion(ctx context.Context, req ChatRequest)
 	}, nil
 }
 
+// translateAnthropicToolChoice maps the gateway-agnostic ToolChoice
+// onto Anthropic's type-tagged shape. Mode defaults to "auto" when
+// blank or unknown so a caller that accidentally sends an empty
+// ToolChoice still gets sensible behavior.
+func translateAnthropicToolChoice(tc *ToolChoice) *anthropicToolChoice {
+	switch tc.Mode {
+	case "tool":
+		return &anthropicToolChoice{Type: "tool", Name: tc.Name}
+	case "any", "required":
+		return &anthropicToolChoice{Type: "any"}
+	case "none":
+		return &anthropicToolChoice{Type: "none"}
+	default:
+		return &anthropicToolChoice{Type: "auto"}
+	}
+}
+
 // anthropicContent translates a gateway MessageContent into the
 // shape Anthropic accepts on the wire. Text-only content stays as a
 // plain string (the legacy form, smaller payload). Multipart content
 // becomes a typed block array. Image data URIs are decoded into the
 // {type:"image", source:{type:"base64", ...}} form Anthropic expects;
 // http(s) URLs pass through as {source:{type:"url", url:"..."}}.
+// T807f adds tool_use / tool_result blocks so multi-turn tool
+// conversations round-trip correctly.
 func anthropicContent(mc MessageContent) any {
 	if !mc.IsMultipart() {
 		return mc.Text()
@@ -190,14 +307,31 @@ func anthropicContent(mc MessageContent) any {
 	blocks := make([]any, 0, len(mc.Parts()))
 	for _, p := range mc.Parts() {
 		switch p.Type {
-		case "text":
+		case ContentPartText:
 			blocks = append(blocks, anthropicTextBlock{Type: "text", Text: p.Text})
-		case "image_url":
+		case ContentPartImageURL:
 			if p.ImageURL == nil {
 				continue
 			}
 			src := imageURLToAnthropicSource(p.ImageURL.URL)
 			blocks = append(blocks, anthropicImageBlock{Type: "image", Source: src})
+		case ContentPartToolUse:
+			// An assistant-role tool_use block being echoed back to
+			// Anthropic (e.g. multi-turn tool loop where the caller
+			// preserves history). Input is forwarded verbatim.
+			blocks = append(blocks, anthropicToolUseBlock{
+				Type:  "tool_use",
+				ID:    p.ToolUseID,
+				Name:  p.ToolName,
+				Input: p.ToolInput,
+			})
+		case ContentPartToolResult:
+			blocks = append(blocks, anthropicToolResultBlock{
+				Type:      "tool_result",
+				ToolUseID: p.ToolResultID,
+				Content:   p.ToolResultContent,
+				IsError:   p.IsError,
+			})
 		}
 	}
 	return blocks

@@ -157,9 +157,14 @@ FIRECRAWL_UP=false
 DOCLING_UP=false
 LLM_AVAILABLE=false
 
-# Check Firecrawl by hitting the health endpoint through helmdeck's
-# baas-net — the control plane can reach helmdeck-firecrawl:3002.
-if run_pack "web.scrape" '{"url":"https://example.com"}' 2>/dev/null | jq -e '.markdown' >/dev/null 2>&1; then
+# Check Firecrawl by probing web.scrape. When HELMDECK_FIRECRAWL_ENABLED
+# is not set, the pack returns {"error":"invalid_input",...} — we detect
+# success by checking for a non-null, non-empty .markdown field in the
+# response. The probe must capture the full response (not pipe through
+# curl -f which swallows the body on 4xx).
+fc_probe=$(run_pack "web.scrape" '{"url":"https://example.com"}' 2>/dev/null || true)
+fc_md=$(echo "$fc_probe" | jq -r '.markdown // empty' 2>/dev/null || true)
+if [[ -n "$fc_md" ]]; then
   FIRECRAWL_UP=true
   green "  Firecrawl overlay: UP"
 else
@@ -167,19 +172,20 @@ else
 fi
 
 # Check Docling similarly.
-# (We probe with a known-good small URL — if Docling is down the
-# pack returns an actionable error we can detect.)
 docling_probe=$(run_pack "doc.parse" '{"source_url":"https://example.com","formats":["md"]}' 2>/dev/null || true)
-if echo "$docling_probe" | jq -e '.markdown' >/dev/null 2>&1; then
+dc_md=$(echo "$docling_probe" | jq -r '.markdown // empty' 2>/dev/null || true)
+if [[ -n "$dc_md" ]]; then
   DOCLING_UP=true
   green "  Docling overlay: UP"
 else
   yellow "  Docling overlay: not detected (doc.parse probes will skip)"
 fi
 
-# Check LLM availability via /v1/models.
+# Check LLM availability via /v1/models. Strip whitespace from jq
+# output so bash arithmetic doesn't choke on trailing newlines.
 models_resp=$(api_get "/v1/models" 2>/dev/null || true)
-model_count=$(echo "$models_resp" | jq -r '.data | length' 2>/dev/null || echo 0)
+model_count=$(echo "$models_resp" | jq -r '.data | length' 2>/dev/null | tr -d '[:space:]' || echo 0)
+if [[ -z "$model_count" ]]; then model_count=0; fi
 if [[ "$model_count" -gt 0 ]] && [[ "$SKIP_LLM" != true ]]; then
   LLM_AVAILABLE=true
   green "  LLM providers: $model_count model(s) available"

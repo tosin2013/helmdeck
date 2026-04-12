@@ -77,6 +77,17 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 
 ---
 
+## Default model selection
+
+Several packs require a `model` parameter (web.test, research.deep, content.ground, slides.narrate, vision.*). When the user does not specify a model:
+
+- **Use `openrouter/auto`** as the default — it routes to the best available model automatically
+- Do NOT ask the user "which model?" — just use the default and proceed
+- If `openrouter/auto` fails, try `openai/gpt-4o-mini` as a fallback
+- The user can always override by specifying a model in their prompt
+
+---
+
 ## Error handling rules
 
 **CRITICAL: Follow these rules when a tool call fails. Do NOT refuse to retry based on previous errors.**

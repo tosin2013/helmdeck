@@ -74,6 +74,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/packs"
@@ -257,11 +258,26 @@ func webTestHandler(d vision.Dispatcher, eg *security.EgressGuard, newClient fun
 		}
 
 		client := newClient(endpoint)
-		if err := client.Initialize(ctx); err != nil {
+		// Playwright MCP starts AFTER Chromium inside the sidecar
+		// entrypoint — there's a 2-5 second window where the port
+		// isn't listening yet. Retry Initialize with backoff so a
+		// fresh session doesn't race against the MCP startup.
+		var initErr error
+		for attempt := 0; attempt < 10; attempt++ {
+			initErr = client.Initialize(ctx)
+			if initErr == nil {
+				break
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			time.Sleep(time.Duration(500+attempt*500) * time.Millisecond)
+		}
+		if initErr != nil {
 			return nil, &packs.PackError{
 				Code:    packs.CodeHandlerFailed,
-				Message: fmt.Sprintf("playwright mcp initialize: %v", err),
-				Cause:   err,
+				Message: fmt.Sprintf("playwright mcp initialize (after retries): %v", initErr),
+				Cause:   initErr,
 			}
 		}
 

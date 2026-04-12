@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/packs"
@@ -305,9 +306,18 @@ func TestWebTest_EgressGuardBlocksMidTestNavigation(t *testing.T) {
 
 func TestWebTest_MCPInitializeFailure(t *testing.T) {
 	client := &scriptedPWMCP{initErr: errors.New("connection refused")}
-	_, err := runWebTestHandler(t, nil, &scriptedDispatcherWT{}, permissiveEgressWT(t), client,
-		sessionWithPWMCP("http://stub/mcp"),
-		`{"url":"https://example.com","instruction":"x","model":"openai/gpt-4o"}`)
+	// Use a short-deadline context so the retry loop in the handler
+	// breaks early instead of sleeping through all 10 attempts (~27s).
+	pack := WebTestWithClientFactory(&scriptedDispatcherWT{}, permissiveEgressWT(t), webTestClientFactory(client))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ec := &packs.ExecutionContext{
+		Pack:    pack,
+		Input:   json.RawMessage(`{"url":"https://example.com","instruction":"x","model":"openai/gpt-4o"}`),
+		Session: sessionWithPWMCP("http://stub/mcp"),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	_, err := pack.Handler(ctx, ec)
 	pe := &packs.PackError{}
 	if !errors.As(err, &pe) || pe.Code != packs.CodeHandlerFailed {
 		t.Errorf("want handler_failed, got %v", err)

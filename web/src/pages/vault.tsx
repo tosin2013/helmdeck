@@ -265,7 +265,7 @@ function AddCredentialModal({ onSuccess }: { onSuccess: () => void }) {
           name,
           type,
           host_pattern: hostPattern || undefined,
-          plaintext,
+          plaintext_b64: btoa(plaintext),
         }),
       });
       if (resp.ok) {

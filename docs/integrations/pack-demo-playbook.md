@@ -209,6 +209,66 @@ The best is yet to come.
 
 ---
 
+### Agent workflows — chaining packs for complex tasks
+
+These prompts show how the LLM can **compose multiple packs** in a single conversation to accomplish higher-level goals. No new tools needed — the LLM generates content and pipes it through existing packs.
+
+#### Marketing agent — generate a pitch deck video from an idea
+
+**Prompt:**
+```
+I need a 5-slide marketing pitch video for "Helmdeck — browser automation for AI agents". Target audience: DevOps engineers. Tone: professional but energetic.
+
+Please:
+1. Write the Marp markdown with compelling copy and speaker notes for narration
+2. Use the helmdeck slides narrate tool to create the video with YouTube metadata
+```
+
+**Expected:** The LLM writes a full Marp deck with `---` delimiters, `<!-- speaker notes -->` for each slide, then calls `slides.narrate` to produce an MP4 + YouTube metadata. The video has narrated voiceover from the speaker notes. Check `/artifacts` for both files.
+
+---
+
+#### Product launch video from bullet points
+
+**Prompt:**
+```
+Turn these bullet points into a narrated presentation video:
+
+- Product: CloudSync Pro
+- Problem: Teams waste hours manually syncing data between cloud services
+- Solution: Automated real-time sync with conflict resolution
+- Pricing: Free tier, $29/mo Pro, $99/mo Enterprise
+- CTA: Start your free trial at cloudsync.pro
+
+Create the Marp slides with speaker notes and use helmdeck slides narrate to make the video. Generate YouTube metadata too.
+```
+
+**Expected:** LLM generates 4-5 slides with professional copy, speaker notes that expand each bullet into a narration script, then produces a narrated MP4.
+
+---
+
+#### Technical blog writer — research + write + ground
+
+**Prompt:**
+```
+Write a 500-word blog post about "How Kubernetes handles pod scheduling" and ground it with real sources. Use the helmdeck content ground tool with rewrite true.
+```
+
+**Expected:** The LLM writes the blog post, passes it to `content.ground` with `rewrite: true`, and the pack searches for sources, verifies them, and rewrites claims to be more authoritative with inline citations. Download `grounded.md` from `/artifacts`.
+
+---
+
+#### Research report — deep search + formatted slides
+
+**Prompt:**
+```
+Research "edge computing trends 2026" using the helmdeck research deep tool with limit 5. Then create a presentation summarizing the findings and use slides narrate to make a video.
+```
+
+**Expected:** Two tool calls chained: (1) `research.deep` searches and synthesizes the topic, (2) LLM formats the synthesis into a Marp deck with speaker notes, (3) `slides.narrate` produces the video. Three artifacts total: research sources, video, YouTube metadata.
+
+---
+
 ### GitHub packs
 
 #### `github.list_issues` — List repository issues

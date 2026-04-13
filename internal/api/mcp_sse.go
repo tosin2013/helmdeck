@@ -45,6 +45,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/tosin2013/helmdeck/internal/mcp"
 )
@@ -152,6 +153,17 @@ func registerMCPSSERoutes(mux *http.ServeMux, deps Deps) {
 		// each message becomes one SSE event. Loop exits when
 		// the channel closes (Serve returned) or the request
 		// context is cancelled (client went away).
+		//
+		// Keepalive: send an SSE comment frame every 15 seconds
+		// while waiting for the pack to respond. Long-running
+		// packs (slides.narrate, research.deep, content.ground)
+		// can block for 60-120+ seconds — without keepalives,
+		// proxies, load balancers, and MCP clients drop the
+		// connection on inactivity timeout. SSE comment frames
+		// (lines starting with `:`) are ignored by all MCP
+		// clients per the SSE spec.
+		keepalive := time.NewTicker(15 * time.Second)
+		defer keepalive.Stop()
 		for {
 			select {
 			case msg, ok := <-sess.out:
@@ -159,6 +171,13 @@ func registerMCPSSERoutes(mux *http.ServeMux, deps Deps) {
 					return
 				}
 				if _, err := fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg); err != nil {
+					return
+				}
+				flusher.Flush()
+			case <-keepalive.C:
+				// SSE comment — keeps the connection alive through
+				// proxies without affecting the MCP protocol.
+				if _, err := fmt.Fprintf(w, ": keepalive\n\n"); err != nil {
 					return
 				}
 				flusher.Flush()

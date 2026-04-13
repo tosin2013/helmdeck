@@ -92,6 +92,17 @@ Several packs require a `model` parameter (web.test, research.deep, content.grou
 
 **CRITICAL: Follow these rules when a tool call fails. Do NOT refuse to retry based on previous errors.**
 
+### General rule: ALWAYS show the error
+When ANY tool call fails, you MUST:
+1. **Show the exact error code and message** in your response — never say "an error occurred" without the details
+2. **Diagnose it** using the rules below
+3. **Offer to file a GitHub issue** if it looks like a bug (see "When to create a GitHub issue" section below)
+4. If you're working with a developer, show the full stderr / error payload so they can debug
+
+### HTTP 401 "missing_bearer" or "token expired"
+**Cause:** The JWT used to authenticate with helmdeck has expired (default TTL is 12 hours).
+**Action:** Tell the user to re-mint the JWT and update the MCP server config. For OpenClaw: `openclaw-cli mcp set helmdeck '{"url":"...","headers":{"authorization":"Bearer NEW_TOKEN"}}'`
+
 ### "connection refused" on port 8931
 **Cause:** Playwright MCP is still starting inside the sidecar container (takes 2-5 seconds after session creation).
 **Action:** Wait 5 seconds and retry. The startup delay is normal. **Do not tell the user "the tool is unavailable" — it will be ready momentarily.**

@@ -58,8 +58,16 @@ type asyncJob struct {
 	Pack      string
 	StartedAt time.Time
 
+	// Webhook fields, set at job creation time when the caller wants
+	// helmdeck to POST the final result to a URL on completion. See
+	// docs/integrations/webhooks.md for the wire contract. Empty URL
+	// disables webhook delivery — the job still tracks state through
+	// pack.status / tasks/get either way.
+	WebhookURL    string
+	WebhookSecret string
+
 	mu       sync.Mutex
-	state    string // "running" | "done" | "failed"
+	state    string // "working" | "completed" | "failed" | "cancelled"
 	progress float64
 	message  string
 	result   *packs.Result
@@ -68,8 +76,12 @@ type asyncJob struct {
 	cancel   context.CancelFunc
 }
 
-// snapshot is what `pack.status` returns. Pulled atomically under
-// the job mutex so a polling client never sees a partial update.
+// jobSnapshot is the legacy `pack.status` response shape (kept for
+// backward compatibility with the pack.start/status/result trio
+// that shipped in commit 4e77494). State strings here ALSO use the
+// SEP-1686 vocabulary ("working"/"completed"/"failed"/"cancelled")
+// so the two paths return identical state values — clients can use
+// either entrypoint without translation.
 type jobSnapshot struct {
 	JobID     string  `json:"job_id"`
 	Pack      string  `json:"pack"`
@@ -99,6 +111,15 @@ func (j *asyncJob) snapshot() jobSnapshot {
 		out.Error = j.err.Error()
 	}
 	return out
+}
+
+// taskID returns the SEP-1686 task identifier. We prefix our internal
+// job IDs with "pack_" so the value reads as a task reference in
+// MCP-Inspector and other generic tooling rather than an opaque hex
+// blob. Backward-compatible: pack.status/result also accept the bare
+// hex form for jobs created before this prefix was introduced.
+func (j *asyncJob) taskID() string {
+	return "pack_" + j.ID
 }
 
 // jobRegistry holds active and recently-completed async jobs. The
@@ -164,23 +185,36 @@ func (r *jobRegistry) sweep(now time.Time) {
 	}
 }
 
+// asyncOptions configures startAsync. Zero value is "no webhook,
+// no extras" — the most common case from the SEP-1686 task envelope
+// path. The pack.start tool fills WebhookURL/WebhookSecret when the
+// caller asked for push delivery.
+type asyncOptions struct {
+	WebhookURL    string
+	WebhookSecret string
+}
+
 // startAsync spawns a goroutine that runs engine.Execute for pack
 // with input, capturing progress into the job. The returned job is
-// already registered and in state "running"; callers should not
-// touch it directly — go through the registry methods.
+// already registered and in state "working"; callers should not
+// mutate it directly — webhook fields and any other knobs must be
+// passed via opts so the goroutine sees a fully-initialised job
+// from the moment it spawns (no data race).
 //
 // The goroutine uses a detached context (context.Background) because
-// the SSE/WS request that triggered pack.start may close before the
+// the SSE/WS request that triggered the start may close before the
 // pack finishes — that's the whole point of the async pattern. We
 // keep the cancel handle on the job for a future `pack.cancel` tool.
-func (s *PackServer) startAsync(pack *packs.Pack, input json.RawMessage) *asyncJob {
+func (s *PackServer) startAsync(pack *packs.Pack, input json.RawMessage, opts asyncOptions) *asyncJob {
 	jobCtx, cancel := context.WithCancel(context.Background())
 	j := &asyncJob{
-		ID:        newJobID(),
-		Pack:      pack.Name,
-		StartedAt: time.Now().UTC(),
-		state:     "running",
-		cancel:    cancel,
+		ID:            newJobID(),
+		Pack:          pack.Name,
+		StartedAt:     time.Now().UTC(),
+		state:         "working",
+		cancel:        cancel,
+		WebhookURL:    opts.WebhookURL,
+		WebhookSecret: opts.WebhookSecret,
 	}
 	s.jobs.put(j)
 
@@ -203,11 +237,16 @@ func (s *PackServer) startAsync(pack *packs.Pack, input json.RawMessage) *asyncJ
 			j.state = "failed"
 			j.err = err
 		} else {
-			j.state = "done"
+			j.state = "completed"
 			j.result = res
 			j.progress = 100
 		}
 		j.mu.Unlock()
+		// Webhook fan-out runs after the lock is released so a slow
+		// receiver can't stall pack.status / tasks/get readers waiting
+		// on the same job. fireWebhook is a no-op when WebhookURL is
+		// empty.
+		s.fireWebhook(j)
 	}()
 
 	return j
@@ -222,6 +261,72 @@ func newJobID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// taskEnvelope returns the SEP-1686-shaped CallToolResult that MCP
+// servers send instead of a full result when starting an async pack.
+// Wire shape:
+//
+//	{
+//	  "_meta": { "modelcontextprotocol.io/related-task": { "taskId": "pack_<hex>" } },
+//	  "content": [{"type":"text","text":"<job snapshot json>"}],
+//	  "isError": false
+//	}
+//
+// The text content carries the same JSON snapshot pack.status would
+// return — agents that don't yet speak SEP-1686 can still parse the
+// taskId / state out of it without learning new semantics.
+func (j *asyncJob) taskEnvelope() map[string]any {
+	body, _ := json.Marshal(j.snapshot())
+	return map[string]any{
+		"_meta": map[string]any{
+			"modelcontextprotocol.io/related-task": map[string]any{
+				"taskId": j.taskID(),
+			},
+		},
+		"content": []map[string]any{
+			{"type": "text", "text": string(body)},
+		},
+		"isError": false,
+	}
+}
+
+// taskGetResult builds the SEP-1686 tasks/get response. When the job
+// is still working, only state + progress + pollFrequency are sent;
+// once completed, the full CallToolResult is inlined under "result"
+// so the client never has to make a follow-up call to retrieve the
+// payload. A pollFrequency of 5000ms is a deliberate compromise: low
+// enough that a 30s pack feels responsive, high enough that a 3-min
+// pack doesn't generate 36 status pings.
+func (s *PackServer) taskGetResult(ctx context.Context, j *asyncJob) map[string]any {
+	j.mu.Lock()
+	state := j.state
+	progress := j.progress
+	message := j.message
+	res := j.result
+	jobErr := j.err
+	endedAt := j.endedAt
+	j.mu.Unlock()
+
+	out := map[string]any{
+		"taskId":        j.taskID(),
+		"status":        state,
+		"progress":      progress,
+		"pollFrequency": 5000,
+	}
+	if message != "" {
+		out["message"] = message
+	}
+	if !endedAt.IsZero() {
+		out["endedAt"] = endedAt.UTC().Format(time.RFC3339)
+	}
+	switch state {
+	case "completed":
+		out["result"] = s.packResultAsToolResult(ctx, res)
+	case "failed":
+		out["result"] = packErrorAsToolResult(jobErr)
+	}
+	return out
+}
+
 // asyncPackTools are the three MCP tools exposed by the async layer.
 // They show up in tools/list alongside every regular pack so the
 // LLM can discover them. Schemas are intentionally permissive on the
@@ -231,8 +336,10 @@ func asyncPackTools() []Tool {
 	startSchema := mustJSON(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"pack":  map[string]any{"type": "string", "description": "Pack name to run asynchronously, e.g. \"slides.narrate\""},
-			"input": map[string]any{"type": "object", "description": "Arguments object that would normally be passed directly to the pack."},
+			"pack":           map[string]any{"type": "string", "description": "Pack name to run asynchronously, e.g. \"slides.narrate\""},
+			"input":          map[string]any{"type": "object", "description": "Arguments object that would normally be passed directly to the pack."},
+			"webhook_url":    map[string]any{"type": "string", "description": "Optional. When set, helmdeck POSTs the final result to this URL on completion (HMAC-SHA256 signed via X-Helmdeck-Signature). Receivers can re-inject into the agent's chat as a fresh message — see docs/integrations/webhooks.md."},
+			"webhook_secret": map[string]any{"type": "string", "description": "Optional. Shared secret used to sign the webhook payload. Strongly recommended whenever webhook_url is set; receivers MUST verify the signature."},
 		},
 		"required": []string{"pack"},
 	})
@@ -270,8 +377,10 @@ func (s *PackServer) dispatchAsyncTool(name string, arguments json.RawMessage) (
 	switch name {
 	case "pack.start":
 		var args struct {
-			Pack  string          `json:"pack"`
-			Input json.RawMessage `json:"input"`
+			Pack          string          `json:"pack"`
+			Input         json.RawMessage `json:"input"`
+			WebhookURL    string          `json:"webhook_url,omitempty"`
+			WebhookSecret string          `json:"webhook_secret,omitempty"`
 		}
 		if err := json.Unmarshal(arguments, &args); err != nil {
 			return errorToolResult("invalid_input", "pack.start: "+err.Error()), true
@@ -287,7 +396,10 @@ func (s *PackServer) dispatchAsyncTool(name string, arguments json.RawMessage) (
 		if len(input) == 0 {
 			input = json.RawMessage("{}")
 		}
-		j := s.startAsync(pack, input)
+		j := s.startAsync(pack, input, asyncOptions{
+			WebhookURL:    args.WebhookURL,
+			WebhookSecret: args.WebhookSecret,
+		})
 		body, _ := json.Marshal(j.snapshot())
 		return map[string]any{
 			"content": []map[string]any{{"type": "text", "text": string(body)}},
@@ -316,11 +428,11 @@ func (s *PackServer) dispatchAsyncTool(name string, arguments json.RawMessage) (
 		jobErr := j.err
 		j.mu.Unlock()
 		switch state {
-		case "running":
-			return errorToolResult("not_ready", fmt.Sprintf("pack.result: job %s still running — keep polling pack.status", j.ID)), true
+		case "working":
+			return errorToolResult("not_ready", fmt.Sprintf("pack.result: job %s still working — keep polling pack.status", j.ID)), true
 		case "failed":
 			return packErrorAsToolResult(jobErr), true
-		case "done":
+		case "completed":
 			s.jobs.drop(j.ID)
 			return s.packResultAsToolResult(context.Background(), res), true
 		default:
@@ -330,17 +442,39 @@ func (s *PackServer) dispatchAsyncTool(name string, arguments json.RawMessage) (
 	return nil, false
 }
 
-// lookupJob extracts the job_id from a tool-call arguments blob and
-// returns the matching job. Both pack.status and pack.result use the
-// same shape, so the parsing is shared.
+// lookupJob extracts the job_id (or task_id) from a tool-call
+// arguments blob and returns the matching job. Both pack.status and
+// pack.result use the same shape; the SEP-1686 tasks/get path also
+// reuses this via lookupJobByID.
 func (s *PackServer) lookupJob(arguments json.RawMessage) (*asyncJob, bool) {
 	var args struct {
-		JobID string `json:"job_id"`
+		JobID  string `json:"job_id"`
+		TaskID string `json:"task_id"` // tolerated alias
 	}
-	if err := json.Unmarshal(arguments, &args); err != nil || args.JobID == "" {
+	if err := json.Unmarshal(arguments, &args); err != nil {
 		return nil, false
 	}
-	return s.jobs.get(args.JobID)
+	id := args.JobID
+	if id == "" {
+		id = args.TaskID
+	}
+	if id == "" {
+		return nil, false
+	}
+	return s.lookupJobByID(id)
+}
+
+// lookupJobByID finds a job by either its raw hex ID or its
+// SEP-1686-prefixed taskID ("pack_<hex>"). Centralized so the
+// SEP-1686 method handler in server.go and the legacy pack.* tools
+// share one resolution policy.
+func (s *PackServer) lookupJobByID(id string) (*asyncJob, bool) {
+	// Strip the SEP-1686 "pack_" prefix if present so the registry
+	// (keyed by raw hex) can find the entry.
+	if len(id) > 5 && id[:5] == "pack_" {
+		id = id[5:]
+	}
+	return s.jobs.get(id)
 }
 
 // errorToolResult formats a typed error as an MCP tool-result so the

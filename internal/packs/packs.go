@@ -108,6 +108,23 @@ type Pack struct {
 	// either especially short-lived (e.g. one-off screenshots) or
 	// especially valuable (e.g. rendered slide decks the user shares).
 	ArtifactTTL time.Duration
+
+	// Async, when true, tells the MCP layer to route tools/call for
+	// this pack through the async job registry instead of executing
+	// inline. The initial JSON-RPC response returns a SEP-1686 task
+	// envelope (taskId in _meta.modelcontextprotocol.io/related-task)
+	// rather than the full result, so the call completes in
+	// milliseconds and never trips the client's per-request JSON-RPC
+	// timeout. Clients that speak SEP-1686 then poll tasks/get under
+	// the hood; older clients can poll the equivalent
+	// pack.start/pack.status/pack.result trio.
+	//
+	// Set this on packs whose handler routinely runs longer than ~30s
+	// (slides.narrate, research.deep, content.ground rewrite).
+	// Short packs MUST NOT set Async — the round-trip cost outweighs
+	// the benefit and the LLM has to interpret a task reference
+	// instead of an immediate result.
+	Async bool
 }
 
 // HandlerFunc is the per-pack work function. It receives an

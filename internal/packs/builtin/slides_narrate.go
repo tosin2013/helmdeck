@@ -104,6 +104,13 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store) *packs.Pack {
 			},
 		},
 		Handler: slidesNarrateHandler(d, vs),
+		// Heavy: 60-180s wall-clock typical (Marp render + per-slide
+		// TTS + ffmpeg encode + concat). Async=true routes the
+		// MCP tools/call through the SEP-1686 task envelope path so
+		// no JSON-RPC request blocks long enough to trip the client's
+		// per-request timeout. See internal/mcp/jobs.go for the wire
+		// shape and docs/integrations/webhooks.md for push delivery.
+		Async: true,
 	}
 }
 

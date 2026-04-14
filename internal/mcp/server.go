@@ -260,6 +260,30 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 				_ = writeFrame(progressNotification(tok, pct, message))
 			})
 		}
+		// SEP-1686 task envelope path: packs that declare Async=true
+		// route through the job registry so the JSON-RPC response
+		// returns in milliseconds. The client either polls tasks/get
+		// (SEP-1686-aware SDKs do this automatically) or — when the
+		// caller embedded webhook_url + webhook_secret in arguments —
+		// receives the result via outbound HTTP POST when the job
+		// terminates. Webhook params are stripped before passing the
+		// remaining input to the engine since the underlying pack
+		// handler shouldn't see them.
+		if pack.Async {
+			webhookURL, webhookSecret, cleanInput := extractWebhookFields(input)
+			j := s.startAsync(pack, cleanInput, asyncOptions{
+				WebhookURL:    webhookURL,
+				WebhookSecret: webhookSecret,
+			})
+			// Notify subscribed clients that a task was created.
+			// Clients that don't speak SEP-1686 ignore the
+			// notification harmlessly; clients that do can begin
+			// polling tasks/get without waiting for the response.
+			_ = writeFrame(taskCreatedNotification(j.taskID()))
+			span.SetStatus(codes.Ok, "")
+			span.End()
+			return mk(j.taskEnvelope(), nil)
+		}
 		res, err := s.engine.Execute(ctx, pack, input)
 		if err != nil {
 			span.RecordError(err)
@@ -271,8 +295,75 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 		span.End()
 		return mk(s.packResultAsToolResult(ctx, res), nil)
 
+	case "tasks/get":
+		// SEP-1686 (Final, 2025-10-20). Clients call this to poll a
+		// task started via the Async tools/call path. We accept both
+		// the SEP-1686 prefixed taskId form ("pack_<hex>") and the
+		// raw hex job ID for symmetry with pack.status. Returns the
+		// canonical SEP-1686 shape including pollFrequency so the
+		// client knows how often to come back.
+		var params struct {
+			TaskID string `json:"taskId"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil || params.TaskID == "" {
+			return mk(nil, &rpcError{Code: -32602, Message: "tasks/get: taskId required"})
+		}
+		j, ok := s.lookupJobByID(params.TaskID)
+		if !ok {
+			return mk(nil, &rpcError{Code: -32602, Message: "tasks/get: unknown taskId " + params.TaskID})
+		}
+		return mk(s.taskGetResult(ctx, j), nil)
+
 	default:
 		return mk(nil, &rpcError{Code: -32601, Message: "method not found: " + req.Method})
+	}
+}
+
+// extractWebhookFields pulls webhook_url + webhook_secret out of a
+// pack input blob and returns them alongside the input with those
+// fields removed. The underlying pack handler must NEVER see the
+// webhook secret — it's MCP-server-level metadata that bypasses
+// the pack's own schema. When the input isn't valid JSON or has no
+// webhook fields, the original bytes are returned unmodified.
+func extractWebhookFields(input json.RawMessage) (url, secret string, cleaned json.RawMessage) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(input, &m); err != nil || len(m) == 0 {
+		return "", "", input
+	}
+	if raw, ok := m["webhook_url"]; ok {
+		_ = json.Unmarshal(raw, &url)
+		delete(m, "webhook_url")
+	}
+	if raw, ok := m["webhook_secret"]; ok {
+		_ = json.Unmarshal(raw, &secret)
+		delete(m, "webhook_secret")
+	}
+	if url == "" {
+		return "", "", input
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return url, secret, input
+	}
+	return url, secret, out
+}
+
+// taskCreatedNotification builds the SEP-1686 notifications/tasks/created
+// frame. Clients that subscribe to the notification can begin
+// polling tasks/get immediately; clients that don't subscribe
+// ignore it harmlessly. Like progressNotification, this is a
+// JSON-RPC notification (no id field) — never a request.
+func taskCreatedNotification(taskID string) any {
+	return map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "notifications/tasks/created",
+		"params": map[string]any{
+			"_meta": map[string]any{
+				"modelcontextprotocol.io/related-task": map[string]any{
+					"taskId": taskID,
+				},
+			},
+		},
 	}
 }
 

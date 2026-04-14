@@ -82,37 +82,56 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 
 ---
 
-## Long-running packs — use the async pattern
+## Long-running packs — three paths, in priority order
 
-Some packs do heavy work that takes 60-120+ seconds (especially with open-weight models). Most MCP clients (anything built on the official TypeScript SDK — that includes OpenClaw) have a default per-request JSON-RPC timeout of 60 seconds and **do not reset it on progress notifications**. If you call these packs synchronously you will get `MCP error -32001: Request timed out` even though the work is still running fine on the server.
+Some packs do heavy work that takes 60-120+ seconds (especially with open-weight models). Calling them synchronously through MCP TS-SDK clients (which OpenClaw is built on; default 60s per-request JSON-RPC timeout) returns `MCP error -32001: Request timed out` even though the work is still running fine on the server.
 
-**Use the async pattern for these packs:**
+**Heavy packs that need special handling:**
 - `slides.narrate` — video rendering takes 60-180s
 - `research.deep` with `limit > 3` — search + scrape + synthesize is 30-90s
 - `content.ground` with `rewrite: true` — multiple LLM passes can run 60-120s
 - Any future pack the user describes as "long" or "heavy" (book writing, multi-chapter generation, large batch operations)
 
-**The pattern:**
-1. Call `pack.start` with `{pack: "<name>", input: {<the args you'd normally pass>}}`. Returns a `job_id` immediately.
-2. Loop: call `pack.status({job_id})` every 2-5 seconds. The response includes `progress` (0-100) and `message`. Surface progress to the user when meaningful.
-3. When `state == "done"`, call `pack.result({job_id})` to get the final pack output (artifacts and all).
-4. If `state == "failed"`, the response from `pack.result` contains the error.
+These three packs are now marked `Async: true` server-side, which means **a normal `tools/call` no longer blocks** — it returns a SEP-1686 task envelope in milliseconds. The server then runs the pack in a background goroutine. There are three ways to retrieve the result, listed in order of preference:
 
-**Example — `slides.narrate` async:**
+### Path 1 — SEP-1686 `tasks/get` polling (most clients)
+
+The server's response carries a task ID in `_meta.modelcontextprotocol.io/related-task.taskId`. SEP-1686-aware MCP SDKs auto-poll `tasks/get` under the hood and surface the eventual result to the LLM as if it were a normal sync return. **You don't have to do anything** — just call the pack the normal way; the SDK handles polling. If the SDK doesn't speak SEP-1686 yet, fall through to Path 2.
+
+### Path 2 — Manual `pack.start` / `pack.status` / `pack.result` polling (universal fallback)
+
+If the user reports "I called slides.narrate and got -32001," the client SDK isn't doing the polling for you. Manually use the trio:
+
+1. Call `pack.start` with `{pack: "<name>", input: {...}}`. Returns `{job_id, state: "working"}`.
+2. Loop: call `pack.status({job_id})` every 2-5 seconds. State transitions: `working` → `completed` or `failed`. Surface the `progress` and `message` fields to the user.
+3. When `state == "completed"`, call `pack.result({job_id})` to retrieve the full pack output. When `state == "failed"`, `pack.result` returns the error.
+
+### Path 3 — Webhook push (no polling at all)
+
+If the user has a webhook receiver wired up (commonly: the bundled `helmdeck-callback` service from `examples/webhook-openclaw/`), pass `webhook_url` and `webhook_secret` in the pack's input arguments:
+
 ```
-1. pack.start({pack: "slides.narrate", input: {markdown: "...", metadata_model: "openrouter/auto"}})
-   → {job_id: "abc123", state: "running"}
-2. (wait 5s) pack.status({job_id: "abc123"})
-   → {state: "running", progress: 35, message: "audio 3/8"}
-3. (wait 5s) pack.status({job_id: "abc123"})
-   → {state: "running", progress: 75, message: "encoding segment 6/8"}
-4. (wait 5s) pack.status({job_id: "abc123"})
-   → {state: "done", progress: 100}
-5. pack.result({job_id: "abc123"})
-   → {video.mp4 + metadata.json artifacts}
+slides.narrate({
+  markdown: "---\nmarp: true\n---\n# Hello",
+  metadata_model: "openrouter/auto",
+  webhook_url: "http://helmdeck-callback:8080/done",
+  webhook_secret: "<secret-from-the-user>"
+})
 ```
 
-**For short packs (`browser.screenshot_url`, `web.scrape`, `github.*`, `fs.*`)** — keep calling them directly. The async pattern only helps when the timeout is the actual problem.
+The pack returns a SEP-1686 task envelope immediately; when the work completes (60-180s later), helmdeck POSTs the result to the webhook URL, which re-injects it into the chat as a fresh system message. **You'll see the result arrive as new context on a future turn — don't poll, don't wait, just acknowledge and let the user drive the next action.**
+
+The user explicitly opts in by giving you a webhook_url + webhook_secret; never invent these on your own.
+
+### Quick decision
+
+| Situation | Path |
+|---|---|
+| Normal `tools/call` for a heavy pack returns task envelope | Path 1 (the SDK is handling it; do nothing) |
+| Normal `tools/call` returned `-32001` | Path 2 (use pack.start/status/result manually) |
+| User provided a webhook_url | Path 3 (pass it through; don't poll) |
+
+**For short packs (`browser.screenshot_url`, `web.scrape`, `github.*`, `fs.*`)** — keep calling them directly. The whole task envelope/webhook story only applies to packs marked `Async: true` server-side.
 
 ---
 

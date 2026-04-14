@@ -301,7 +301,45 @@ Revenue, headcount, and customer satisfaction all up.
 Three priorities for Q2.
 ```
 
-**Expected:** The agent calls `pack.start` and gets back a `job_id`. It then polls `pack.status` and reports progress messages like "audio 1/2", "encoding segment 2/2", "concatenating final video". Once `state` is `done`, it calls `pack.result` and shows the video artifact link. Total wall time is the same as a direct call — the win is that NO 60s timeout fires because each individual JSON-RPC request finishes in milliseconds.
+**Expected:** The agent calls `pack.start` and gets back a `job_id`. It then polls `pack.status` and reports progress messages like "audio 1/2", "encoding segment 2/2", "concatenating final video". Once `state` is `completed`, it calls `pack.result` and shows the video artifact link. Total wall time is the same as a direct call — the win is that NO 60s timeout fires because each individual JSON-RPC request finishes in milliseconds.
+
+---
+
+#### Webhook push — no polling, result delivered as a fresh chat message
+
+**Prereq:** The `helmdeck-callback` sidecar from `examples/webhook-openclaw/` is running and reachable from helmdeck (see `docs/integrations/openclaw.md#webhook-callback`).
+
+**Prompt:**
+```
+Render this Marp deck as a narrated video using helmdeck slides narrate.
+Pass webhook_url=http://helmdeck-callback:8080/done and
+webhook_secret=$HELMDECK_WEBHOOK_SECRET in the input.
+Don't poll — I'll get notified in chat when it's ready.
+
+---
+marp: true
+---
+
+# Push Demo
+
+<!-- This is a demo of the helmdeck webhook push flow. -->
+
+The result will arrive as a system message.
+```
+
+**Expected:**
+1. The agent calls `slides.narrate` ONCE with the webhook params; the response is a SEP-1686 task envelope (no polling).
+2. The agent acknowledges: "Started slides.narrate, task ID `pack_…`. Waiting for the webhook."
+3. ~60-180s later, a fresh **system message** appears in chat:
+   ```
+   [helmdeck] Pack `slides.narrate` completed.
+     video_artifact_key: http://localhost:3000/artifacts/slides.narrate/<key>/video.mp4
+     metadata_artifact_key: http://localhost:3000/artifacts/slides.narrate/<key>/metadata.json
+     job_id: <hex>
+   ```
+4. The agent's next turn picks up that context and offers follow-ups (e.g. "Want me to upload this to YouTube?").
+
+This proves the push-to-LLM path: helmdeck → callback bridge → OpenClaw chat injection → fresh LLM turn. NO -32001, NO polling, NO chained tool calls.
 
 ---
 

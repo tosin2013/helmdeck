@@ -3,10 +3,17 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
 )
@@ -299,11 +306,11 @@ func TestPackServerAsyncToolLifecycle(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		write(`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"pack.status","arguments":{"job_id":"` + jobID + `"}}}`)
 		statusResp = read()
-		if strings.Contains(statusResp, `\"state\":\"done\"`) {
+		if strings.Contains(statusResp, `\"state\":\"completed\"`) {
 			break
 		}
 	}
-	if !strings.Contains(statusResp, `\"state\":\"done\"`) {
+	if !strings.Contains(statusResp, `\"state\":\"completed\"`) {
 		t.Fatalf("job never reached done state: %s", statusResp)
 	}
 
@@ -320,5 +327,180 @@ func TestPackServerAsyncToolLifecycle(t *testing.T) {
 	gone := read()
 	if !strings.Contains(gone, `unknown_job`) {
 		t.Errorf("expected unknown_job after pack.result consumed the job, got: %s", gone)
+	}
+}
+
+// asyncFixture builds a registry with an Async-marked pack so we can
+// exercise the SEP-1686 routing path without dragging in a real
+// heavy pack. The handler completes instantly so we don't have to
+// wait in tests.
+func asyncFixture(t *testing.T) (*packs.Registry, *packs.Engine) {
+	t.Helper()
+	reg := packs.NewPackRegistry()
+	_ = reg.Register(&packs.Pack{
+		Name: "slow", Version: "v1", Description: "fakes a heavy pack",
+		Async: true,
+		Handler: func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+			ec.Report(50, "halfway")
+			return json.RawMessage(`{"ok":true}`), nil
+		},
+	})
+	return reg, packs.New()
+}
+
+// TestPackServerAsyncEnvelopeReturnsTaskID asserts that a tools/call
+// against a pack with Async=true returns immediately with a SEP-1686
+// task envelope (taskId in _meta.modelcontextprotocol.io/related-task)
+// instead of blocking until the pack completes. This is the whole
+// point of the hybrid plan: SEP-1686-aware clients see a sync return
+// and the SDK polls tasks/get under the hood — the LLM never sees
+// -32001 because the JSON-RPC request finished in milliseconds.
+func TestPackServerAsyncEnvelopeReturnsTaskID(t *testing.T) {
+	reg, eng := asyncFixture(t)
+	write, read, stop := startPackServerScanner(t, reg, eng)
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"slow","arguments":{}}}`)
+	// First frame: notifications/tasks/created announces the task
+	// to subscribed clients. Second frame: the actual response.
+	first := read()
+	if !strings.Contains(first, `notifications/tasks/created`) {
+		t.Fatalf("expected tasks/created notification first, got: %s", first)
+	}
+	if !strings.Contains(first, `"taskId":"pack_`) {
+		t.Errorf("notification missing taskId: %s", first)
+	}
+	resp := read()
+	if !strings.Contains(resp, `"id":20`) {
+		t.Fatalf("expected response id=20 after notification, got: %s", resp)
+	}
+	if !strings.Contains(resp, `modelcontextprotocol.io/related-task`) {
+		t.Errorf("response envelope missing related-task _meta: %s", resp)
+	}
+	if !strings.Contains(resp, `"taskId":"pack_`) {
+		t.Errorf("response envelope missing taskId: %s", resp)
+	}
+	// The full {ok:true} pack output should NOT be in this response —
+	// it's still being computed when the envelope is sent. (For the
+	// test pack the goroutine completes immediately, but the envelope
+	// path returns BEFORE the result is captured.)
+}
+
+// TestPackServerTasksGetLifecycle exercises the SEP-1686 polling
+// path: tools/call returns a task envelope, then tasks/get returns
+// the canonical SEP-1686 status shape (status, pollFrequency, and
+// the inline result when completed).
+func TestPackServerTasksGetLifecycle(t *testing.T) {
+	reg, eng := asyncFixture(t)
+	write, read, stop := startPackServerScanner(t, reg, eng)
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"slow","arguments":{}}}`)
+	_ = read() // notifications/tasks/created
+	resp := read()
+	// Pull taskId out of the unescaped _meta block (the same string
+	// is also present escaped inside the text content, but _meta is
+	// the canonical SEP-1686 home).
+	idx := strings.Index(resp, `"taskId":"`)
+	if idx < 0 {
+		t.Fatalf("could not locate taskId in: %s", resp)
+	}
+	tail := resp[idx+len(`"taskId":"`):]
+	taskID := tail[:strings.Index(tail, `"`)]
+
+	// Poll tasks/get until the task reaches a terminal state.
+	var got string
+	for i := 0; i < 50; i++ {
+		write(`{"jsonrpc":"2.0","id":31,"method":"tasks/get","params":{"taskId":"` + taskID + `"}}`)
+		got = read()
+		if strings.Contains(got, `"status":"completed"`) {
+			break
+		}
+	}
+	if !strings.Contains(got, `"status":"completed"`) {
+		t.Fatalf("tasks/get never returned completed: %s", got)
+	}
+	// SEP-1686 canonical fields must be present.
+	if !strings.Contains(got, `"pollFrequency":5000`) {
+		t.Errorf("tasks/get missing pollFrequency: %s", got)
+	}
+	// Completed status must inline the result so no second fetch
+	// is needed.
+	if !strings.Contains(got, `"result"`) {
+		t.Errorf("completed tasks/get missing inline result: %s", got)
+	}
+	if !strings.Contains(got, `\"ok\":true`) {
+		t.Errorf("inline result missing pack output: %s", got)
+	}
+}
+
+// TestPackServerAsyncWebhookFires verifies that when an Async pack
+// is invoked through pack.start with webhook_url set, helmdeck POSTs
+// the final payload to the URL with a valid HMAC-SHA256 signature.
+// This is the push-to-LLM path: the receiver is a stand-in for an
+// agent gateway that re-injects results into a chat session.
+func TestPackServerAsyncWebhookFires(t *testing.T) {
+	reg, eng := asyncFixture(t)
+
+	// Spin up a stub receiver that captures the body + signature.
+	var hits int32
+	var capturedSig string
+	var capturedBody []byte
+	done := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		capturedSig = r.Header.Get("X-Helmdeck-Signature")
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	}))
+	defer srv.Close()
+
+	write, read, stop := startPackServerScanner(t, reg, eng)
+	defer stop()
+
+	secret := "test-secret-" + hex.EncodeToString([]byte{0x42, 0x43})
+	startReq := `{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"pack.start","arguments":{"pack":"slow","input":{},"webhook_url":"` + srv.URL + `","webhook_secret":"` + secret + `"}}}`
+	write(startReq)
+	_ = read() // pack.start response
+
+	// Wait for the webhook to fire (the test pack completes
+	// immediately, but the goroutine + HTTP round trip takes a
+	// moment). 5s is generous; the actual delivery is sub-second.
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("webhook never fired")
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("expected 1 webhook hit, got %d", got)
+	}
+	// HMAC verification: receivers reproduce the signature from the
+	// raw body and compare. The wire format is "sha256=<hex>".
+	if !strings.HasPrefix(capturedSig, "sha256=") {
+		t.Fatalf("signature missing sha256 prefix: %q", capturedSig)
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(capturedBody)
+	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if capturedSig != want {
+		t.Errorf("signature mismatch: got %q want %q", capturedSig, want)
+	}
+	// Sanity: the body decodes to a webhookPayload-shaped object.
+	var payload map[string]any
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("body not valid JSON: %v", err)
+	}
+	if payload["event_type"] != "pack.complete" {
+		t.Errorf("event_type = %v, want pack.complete", payload["event_type"])
+	}
+	if payload["pack"] != "slow" {
+		t.Errorf("pack = %v, want slow", payload["pack"])
+	}
+	if !strings.HasPrefix(payload["task_id"].(string), "pack_") {
+		t.Errorf("task_id missing pack_ prefix: %v", payload["task_id"])
 	}
 }

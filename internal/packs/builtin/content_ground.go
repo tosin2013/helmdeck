@@ -160,6 +160,13 @@ func ContentGround(d vision.Dispatcher) *packs.Pack {
 			},
 		},
 		Handler: contentGroundHandler(d),
+		// Heavy: extract → per-claim search → per-claim verify (LLM)
+		// → optional whole-document rewrite (LLM). With rewrite=true
+		// and a handful of claims, 60-120s is typical. Async=true
+		// keeps the JSON-RPC request short via the SEP-1686 task
+		// envelope; clients that need synchronous behavior can still
+		// use the legacy pack.start/status/result trio explicitly.
+		Async: true,
 	}
 }
 

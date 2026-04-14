@@ -227,6 +227,84 @@ function buildSseEventSourceFetch(headers) {
 
 This eliminates the case-collision regardless of how the user wrote the key.
 
+## Webhook callback — push pack results to OpenClaw
+
+Heavy packs (`slides.narrate`, `research.deep`, `content.ground`) automatically return a SEP-1686 task envelope so the JSON-RPC request never blocks. Most clients SHOULD just poll, but if you want **true push semantics** — the LLM's next turn fires when a pack completes, no polling at all — wire up the webhook receiver bundled in [`examples/webhook-openclaw/`](../../examples/webhook-openclaw/).
+
+### Architecture
+
+```
+┌─────────────────┐    1. tools/call slides.narrate
+│   OpenClaw LLM  ├─────────────────────────────────┐
+└─────────────────┘                                 ▼
+                                          ┌──────────────────┐
+                                          │ helmdeck-control │
+                                          │  -plane (MCP)    │
+                                          └────────┬─────────┘
+                  3. POST /helmdeck-callback       │
+                     X-Helmdeck-Signature: sha256= │  (60-180s
+                  ┌─────────────────────────────────┘   later)
+                  ▼
+         ┌─────────────────┐    4. POST /chat/inject
+         │ helmdeck-callback ├──────────┐
+         │  (Node, ~50 LOC)  │          ▼
+         └─────────────────┘   ┌──────────────────┐
+                               │ OpenClaw chat-   │
+                               │ injection API    │
+                               └──────────────────┘
+                                        │
+                       5. LLM sees: "[helmdeck] Pack
+                          completed. Video: <url>"
+```
+
+Step 2 (helmdeck task envelope returns immediately) and step 3 (helmdeck POSTs the result when done) are independent — the LLM doesn't have to wait or poll.
+
+### Setup
+
+1. **Run the receiver** alongside helmdeck and OpenClaw:
+
+   ```yaml
+   # in your docker-compose override
+   services:
+     helmdeck-callback:
+       build: ./examples/webhook-openclaw
+       environment:
+         OPENCLAW_INJECT_URL: http://openclaw-openclaw-gateway-1:3210/api/chat/inject
+         WEBHOOK_SECRET: ${HELMDECK_WEBHOOK_SECRET}
+       networks: [helmdeck_default, openclaw_default]
+   ```
+
+2. **Set the shared secret** in your `.env.local`:
+
+   ```bash
+   HELMDECK_WEBHOOK_SECRET=$(openssl rand -hex 32)
+   ```
+
+3. **Tell the LLM to use the webhook** in your prompt. SKILLS.md teaches the LLM the pattern; for an explicit prompt:
+
+   ```
+   Render this Marp deck as a narrated video. Use webhook_url=http://helmdeck-callback:8080/done
+   and webhook_secret=<your-secret>. Don't poll — I'll get notified when it's ready.
+
+   ---
+   marp: true
+   ---
+
+   # My Deck
+   <!-- Welcome to my deck. -->
+   The future is now.
+   ```
+
+4. **What you'll see**: the LLM calls `slides.narrate` once, gets back "task started" (SEP-1686 envelope), and a few minutes later you see a fresh chat message:
+
+   > **system:** [helmdeck] Pack `slides.narrate` completed. Video artifact: `slides.narrate/<key>/video.mp4` — open at `http://localhost:3000/artifacts/...`
+
+   The LLM can then respond to that message in its normal turn cycle.
+
+### Generic spec
+
+For non-OpenClaw clients (custom A2A bridges, Slack bots, anything else) the same webhook fires with the same payload. See [`docs/integrations/webhooks.md`](./webhooks.md) for the wire contract.
+
 ## Troubleshooting
 
 - **`origin not allowed (use HTTPS or localhost secure context)`** — OpenClaw's Control UI requires a secure context. Use the SSH tunnel from step 2, not the public IP.

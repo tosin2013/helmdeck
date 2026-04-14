@@ -132,6 +132,11 @@ func ResearchDeep(d vision.Dispatcher) *packs.Pack {
 			},
 		},
 		Handler: researchDeepHandler(d),
+		// Heavy: search + N source scrapes + synthesis call. With
+		// limit=5 and an open-weight model this routinely runs 30-90s.
+		// Async=true keeps the JSON-RPC request short by returning
+		// a SEP-1686 task envelope.
+		Async: true,
 	}
 }
 

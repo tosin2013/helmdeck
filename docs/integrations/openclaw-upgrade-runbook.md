@@ -64,21 +64,20 @@ docker exec openclaw-openclaw-gateway-1 openclaw mcp set helmdeck \
   "{\"url\":\"http://helmdeck-control-plane:3000/api/v1/mcp/sse\",\"headers\":{\"authorization\":\"Bearer $TOKEN\"},\"timeoutMs\":300000}"
 ```
 
-### 2. SKILLS.md systemPromptOverride survived
+### 2. helmdeck skill installed and at the right version
+
+Helmdeck ships agent instructions as a native OpenClaw Skill (see `skills/helmdeck/SKILL.md` in this repo). The configure script installs it at `~/.openclaw/skills/helmdeck/SKILL.md` inside the OpenClaw container, stamped with the helmdeck commit hash in its frontmatter.
 
 ```bash
+docker exec openclaw-openclaw-gateway-1 openclaw skills list | grep helmdeck
+# Expect: ✓ ready 📦 helmdeck ...
+
 docker exec openclaw-openclaw-gateway-1 sh -c \
-  'openclaw config get agents.defaults.systemPromptOverride | wc -c'
+  'grep -oE "helmdeckVersion: *\"[^\"]+\"" /home/node/.openclaw/skills/helmdeck/SKILL.md'
+# Expect: helmdeckVersion: "<your current helmdeck commit short-hash>"
 ```
 
-Expected: ~20000 characters (the full SKILLS.md). If it comes back as 0 or much smaller, re-push:
-
-```bash
-docker cp /root/helmdeck/docs/integrations/SKILLS.md openclaw-openclaw-gateway-1:/tmp/SKILLS.md
-docker exec openclaw-openclaw-gateway-1 sh -c \
-  'openclaw config set agents.defaults.systemPromptOverride "$(cat /tmp/SKILLS.md)"'
-docker restart openclaw-openclaw-gateway-1
-```
+If the helmdeckVersion in the container doesn't match your local `git rev-parse --short HEAD`, the agent is on a stale copy — re-run `./scripts/configure-openclaw.sh` to refresh. (The historical `systemPromptOverride` mechanism has been retired; the script clears any leftover override on upgrade.)
 
 ### 3. Docker networks still bridged
 

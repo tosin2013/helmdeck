@@ -4,6 +4,30 @@ Forward-looking changelog. Each release maps 1:1 to a phase milestone (`MILESTON
 
 ---
 
+## Agent sync checklist — every release
+
+Helmdeck ships its agent instructions as a native **OpenClaw Skill** at `skills/helmdeck/SKILL.md`, stamped with the helmdeck commit hash in its frontmatter (`metadata.openclaw.helmdeckVersion`). The stamp is how operators detect drift between their deployed agent and the latest release.
+
+**Every release — required:**
+
+1. **Update the pack count and decision tables** in `skills/helmdeck/SKILL.md` if this release adds/removes packs, changes an error code, or revises a pattern (e.g. the `repo.fetch` signals table).
+2. **Bump the `helmdeckVersion` stamp** — `scripts/configure-openclaw.sh` regenerates this automatically from `git rev-parse --short HEAD` at install time, so you don't edit it by hand. Ensure the release commit lands on `main` before operators run the configure script, otherwise the stamp reflects a stale pointer.
+3. **Call out new packs** in the release notes under "Ships" with their full `helmdeck__<name>` MCP prefix, so operators (and agents reading the release notes post-fact) know what's new.
+4. **Tell deployed operators to refresh**:
+   ```bash
+   cd /path/to/helmdeck && git pull
+   ./scripts/configure-openclaw.sh            # reinstalls the versioned SKILL.md
+   ```
+   The script is idempotent; re-running it without other flags will only touch the skill, the JWT (if expiring), and the model pin.
+5. **Document upstream regressions** — if OpenClaw itself ships a breaking change between our tested versions and the current one, add a row to the table in `docs/integrations/openclaw-upgrade-runbook.md` pointing at the affected version range and the workaround.
+
+**Related:**
+- [OpenClaw upgrade runbook](integrations/openclaw-upgrade-runbook.md) — the operator-facing sync procedure
+- [ADR 025 — MCP client integrations](adrs/025-mcp-client-integrations.md) — architecture decision record; the §2026-04-18 revision covers CLI vs chat-UI regression policy
+- `skills/helmdeck/SKILL.md` — the canonical agent skill file (source of truth)
+
+---
+
 ## v0.1.0 — Core Infrastructure (Week 4)
 **Theme:** "A browser session is one REST call away."
 

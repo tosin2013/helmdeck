@@ -4,9 +4,15 @@
 #
 # Codifies every manual step from docs/integrations/openclaw-upgrade-runbook.md:
 # network bridge, JWT mint with iss=helmdeck, MCP config with
-# lowercase authorization (issue #1 workaround), SKILLS.md push,
-# tool-capable model pin, optional identity seed so the BOOTSTRAP.md
-# loop doesn't hijack the agent. Idempotent — re-runs are safe.
+# lowercase authorization (issue #1 workaround), native OpenClaw
+# skill install (skills/helmdeck/SKILL.md), tool-capable model pin,
+# optional identity seed so the BOOTSTRAP.md loop doesn't hijack
+# the agent. Idempotent — re-runs are safe.
+#
+# Release sync: the skill carries a `helmdeckVersion` stamp in its
+# frontmatter (derived from git HEAD short-hash at install time).
+# After any helmdeck release, re-run this script to refresh the
+# stamped skill so agents see new packs and updated decision tables.
 #
 # Usage:
 #   ./scripts/configure-openclaw.sh                           # configure agents.defaults
@@ -50,6 +56,13 @@ JWT_TTL_DAYS="${JWT_TTL_DAYS:-7}"
 JWT_REFRESH_WINDOW_HOURS="${JWT_REFRESH_WINDOW_HOURS:-24}"
 
 SKILLS_FILE="${SKILLS_FILE:-${HELMDECK_ROOT}/docs/integrations/SKILLS.md}"
+SKILL_FILE="${SKILL_FILE:-${HELMDECK_ROOT}/skills/helmdeck/SKILL.md}"
+SKILL_NAME="${SKILL_NAME:-helmdeck}"
+# Path inside the container where OpenClaw scans for machine-managed
+# skills (see /app/docs/tools/skills.md load precedence — managed
+# local skills live at ~/.openclaw/skills and are visible to every
+# agent on the machine).
+OPENCLAW_SKILL_ROOT="${OPENCLAW_SKILL_ROOT:-/home/node/.openclaw/skills}"
 
 # --- arg parse -------------------------------------------------------------
 
@@ -185,16 +198,43 @@ print(json.dumps({
 	docker exec "$OPENCLAW_CONTAINER" openclaw mcp set helmdeck "$mcp_json" >/dev/null
 fi
 
-# --- 4. SKILLS.md as systemPromptOverride --------------------------------
+# --- 4. install helmdeck as a native OpenClaw Skill ----------------------
 
 if [[ "$SKIP_SKILLS" == "true" ]]; then
-	log "skills: --skip-skills set, leaving systemPromptOverride untouched"
+	log "skills: --skip-skills set, leaving skill and systemPromptOverride untouched"
 else
-	[[ -f "$SKILLS_FILE" ]] || die "SKILLS.md not found at $SKILLS_FILE"
-	log "skills: pushing SKILLS.md to agents.${AGENT}.systemPromptOverride ($(wc -c < "$SKILLS_FILE") bytes)"
-	docker cp "$SKILLS_FILE" "${OPENCLAW_CONTAINER}:/tmp/SKILLS.md"
-	docker exec "$OPENCLAW_CONTAINER" sh -c \
-		"openclaw config set agents.${AGENT}.systemPromptOverride \"\$(cat /tmp/SKILLS.md)\"" >/dev/null
+	[[ -f "$SKILL_FILE" ]] || die "SKILL.md not found at $SKILL_FILE — run from a helmdeck checkout"
+	log "skills: installing $SKILL_NAME skill from $SKILL_FILE ($(wc -c < "$SKILL_FILE") bytes)"
+
+	# Copy SKILL.md into the managed-skill root so OpenClaw's loader
+	# finds it via the documented precedence. We provision the
+	# directory first so docker cp has a target (cp won't create
+	# intermediate dirs).
+	docker exec "$OPENCLAW_CONTAINER" mkdir -p "${OPENCLAW_SKILL_ROOT}/${SKILL_NAME}"
+	docker cp "$SKILL_FILE" \
+		"${OPENCLAW_CONTAINER}:${OPENCLAW_SKILL_ROOT}/${SKILL_NAME}/SKILL.md"
+
+	# Mark the skill enabled in skills.entries so an explicit
+	# allowlist later doesn't accidentally hide it. Empty object
+	# means "enabled with default settings."
+	docker exec "$OPENCLAW_CONTAINER" \
+		openclaw config set "skills.entries.${SKILL_NAME}" '{"enabled":true}' >/dev/null
+
+	# Clear any stale systemPromptOverride left over from the
+	# pre-skill era of this script. Two copies of the same prompt
+	# (one in systemPromptOverride, one loaded via the skill) would
+	# double the token bill and confuse the agent on conflicts.
+	# Using config unset so the key is removed, not set-to-empty.
+	if docker exec "$OPENCLAW_CONTAINER" \
+		 openclaw config get "agents.${AGENT}.systemPromptOverride" 2>/dev/null \
+		 | grep -q 'helmdeck'; then
+		docker exec "$OPENCLAW_CONTAINER" \
+			openclaw config unset "agents.${AGENT}.systemPromptOverride" >/dev/null 2>&1 || true
+		log "skills: cleared stale agents.${AGENT}.systemPromptOverride (migrated to skill)"
+	fi
+
+	stamp="$(grep -oE 'helmdeckVersion: *"[^"]+"' "$SKILL_FILE" | head -1 | sed 's/.*"\([^"]*\)".*/\1/')"
+	[[ -n "$stamp" ]] && log "skills: stamped helmdeck version ${stamp}"
 fi
 
 # --- 5. pin a tool-capable model + fallback chain ------------------------

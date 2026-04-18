@@ -1,14 +1,17 @@
-# Helmdeck Agent Skills
-
-**Load this file into your MCP client's system prompt or agent config.** It teaches the LLM how to use helmdeck's 36 capability packs correctly, retry transient errors, diagnose failures, chain multi-step workflows, and file bug reports.
-
-**How to load:**
-- **Claude Code**: This is referenced from `CLAUDE.md` at the repo root (auto-loaded)
-- **OpenClaw**: Paste into your agent's system prompt or custom instructions
-- **Claude Desktop / Gemini CLI**: Add to the system message in your MCP config
-- **Any other client**: Include this text as context before the first tool call
-
 ---
+name: helmdeck
+description: Use helmdeck's 36 capability packs (browser, web scraping, slides, repo orientation, filesystem, git, GitHub, HTTP, vision, document OCR/parse, Python/Node execution) via MCP — all prefixed `helmdeck__*` in the tool catalog.
+metadata:
+  openclaw:
+    skillKey: helmdeck
+    helmdeckVersion: "24bd0c3"
+    source: https://github.com/tosin2013/helmdeck/blob/main/skills/helmdeck/SKILL.md
+---
+
+<!-- This SKILL.md is the canonical helmdeck agent skill. Stamped at
+     helmdeck commit 24bd0c3. Re-run scripts/configure-openclaw.sh
+     after any helmdeck release so your OpenClaw agent picks up new packs
+     and updated decision tables. -->
 
 ## You are connected to helmdeck
 

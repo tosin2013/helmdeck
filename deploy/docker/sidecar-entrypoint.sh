@@ -127,6 +127,19 @@ case "${HELMDECK_MODE}" in
     dbus-launch --exit-with-session startxfce4 >/tmp/xfce.log 2>&1 &
     XFCE_PID=$!
 
+    # x11vnc bridges the Xvfb display to port 5900 where websockify
+    # connects. Without this, websockify serves the noVNC HTML fine
+    # but the WebSocket upgrade to /websockify can't actually reach
+    # a VNC server — browsers show "Failed to connect to server"
+    # after the viewer page loads. -forever keeps the VNC server
+    # running across client disconnects; -shared allows multiple
+    # simultaneous viewers (common: ops + agent witness mode);
+    # -nopw is fine because noVNC is only reachable via the socat/
+    # SSH forwarding chain controlled by the operator, not exposed
+    # to the internet. -rfbport pins 5900 to match websockify.
+    x11vnc -display "${DISPLAY}" -forever -shared -nopw \
+        -rfbport 5900 -bg -o /tmp/x11vnc.log
+
     websockify --web=/usr/share/novnc/ 6080 localhost:5900 >/tmp/novnc.log 2>&1 &
 
     chromium "${CHROME_FLAGS[@]}" >/tmp/chromium.log 2>&1 &

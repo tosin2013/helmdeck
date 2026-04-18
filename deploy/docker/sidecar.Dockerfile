@@ -78,6 +78,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       dbus-x11 \
       novnc \
       websockify \
+      x11vnc \
       x11-utils \
       x11-xserver-utils \
  && rm -rf /var/lib/apt/lists/*

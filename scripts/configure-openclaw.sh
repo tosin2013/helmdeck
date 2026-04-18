@@ -13,7 +13,8 @@
 #   ./scripts/configure-openclaw.sh --agent coder             # configure agents.coder only
 #   ./scripts/configure-openclaw.sh --seed-identity           # also seed IDENTITY/USER/SOUL
 #   ./scripts/configure-openclaw.sh --rotate-jwt              # force fresh JWT
-#   ./scripts/configure-openclaw.sh --model <id>              # pin a different model
+#   ./scripts/configure-openclaw.sh --model <id>              # pin a different primary model
+#   ./scripts/configure-openclaw.sh --fallbacks a,b,c         # comma-separated fallback chain
 #   ./scripts/configure-openclaw.sh --skip-mcp --skip-skills  # only refresh identity
 #
 # Exits 0 on success. Prints the verification probe commands at
@@ -24,7 +25,8 @@ set -euo pipefail
 # --- defaults --------------------------------------------------------------
 
 AGENT="defaults"
-MODEL="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+MODEL="anthropic/claude-sonnet-4.6"
+FALLBACKS_CSV="minimax/minimax-m2.7"
 SEED_IDENTITY="false"
 ROTATE_JWT="false"
 SKIP_MCP="false"
@@ -54,6 +56,7 @@ while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--agent)          AGENT="$2"; shift 2 ;;
 		--model)          MODEL="$2"; shift 2 ;;
+		--fallbacks)      FALLBACKS_CSV="$2"; shift 2 ;;
 		--seed-identity)  SEED_IDENTITY="true"; shift ;;
 		--rotate-jwt)     ROTATE_JWT="true"; shift ;;
 		--skip-mcp)       SKIP_MCP="true"; shift ;;
@@ -188,11 +191,23 @@ else
 		"openclaw config set agents.${AGENT}.systemPromptOverride \"\$(cat /tmp/SKILLS.md)\"" >/dev/null
 fi
 
-# --- 5. pin a tool-capable model -----------------------------------------
+# --- 5. pin a tool-capable model + fallback chain ------------------------
 
 log "model: pinning agents.${AGENT}.model.primary = ${MODEL}"
 docker exec "$OPENCLAW_CONTAINER" \
 	openclaw config set "agents.${AGENT}.model.primary" "$MODEL" >/dev/null
+
+# Fallback chain — comma-separated to JSON array. Empty string clears it.
+if [[ -n "$FALLBACKS_CSV" ]]; then
+	fallbacks_json="$(FALLBACKS_CSV="$FALLBACKS_CSV" python3 -c "
+import json, os
+items = [s.strip() for s in os.environ['FALLBACKS_CSV'].split(',') if s.strip()]
+print(json.dumps(items))
+")"
+	log "model: pinning agents.${AGENT}.model.fallbacks = ${fallbacks_json}"
+	docker exec "$OPENCLAW_CONTAINER" \
+		openclaw config set "agents.${AGENT}.model.fallbacks" "$fallbacks_json" >/dev/null
+fi
 
 # --- 6. optional: seed identity so BOOTSTRAP.md doesn't loop -------------
 

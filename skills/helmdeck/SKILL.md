@@ -36,6 +36,13 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 - `slides.render` — Convert Marp markdown to PDF, PPTX, or HTML.
 - `slides.narrate` — Convert Marp markdown to a narrated MP4 video with ElevenLabs TTS and YouTube metadata. Speaker notes (`<!-- ... -->`) become narration. **CRITICAL: Pass the markdown EXACTLY as the user provides it — preserve `---` slide delimiters, `<!-- -->` HTML comments, and newlines. Do NOT escape or strip any formatting.** The markdown field must start with `---\nmarp: true\n---` frontmatter.
   - **Resource scaling**: encoding is sequential, so memory is bounded per-segment — not per-deck. Slide count scales **time** (~10-30s per slide) and **disk in `/tmp`** (~30-50 MB per segment MP4 until concat); it does **NOT** scale memory. The memory knob is `resolution`: default `1920x1080` needs ~1.1 GB for ffmpeg + ~700 MB for the Chromium baseline, which the session's 2 GB cap covers. Larger resolutions (e.g. `3840x2160`) may OOM — drop to `1280x720` if the user reports exit 137 from ffmpeg. Decks of 20-25 slides at 1080p are the tested default; anything much longer just takes longer, not more memory.
+  - **Duration & YouTube optimization**: each slide's on-screen time = length of its TTS audio (slides without speaker notes get `default_slide_duration`, default 5s). ElevenLabs runs at ~150-160 wpm, so **1 word of speaker notes ≈ 0.4s of video**. Total length = sum of per-slide TTS durations (returned as `total_duration_s` in the output). Targets for a 20-25 slide deck:
+    - **<30 words/slide** → <4 min video (too short for YouTube; feels thin)
+    - **30-60 words/slide** → 4-7 min (short-form)
+    - **80-120 words/slide** → **8-12 min (YouTube sweet spot; unlocks mid-roll ads at ≥8 min and keeps retention for tutorial content)**
+    - **150-200 words/slide** → 15-20 min (long-form, viable for deep-dive content)
+    - **250+ words/slide** → 25+ min (risky on retention unless the content is dense / entertainment-grade)
+  When the user asks for a video about topic X without specifying a target length, default to **~100 words per slide** aiming for the 8-12 min sweet spot. When the user says "make me a 10-minute video from N slides," compute `target_words_per_slide ≈ (600 / N) * (150/60) ≈ 1500/N` and shape speaker notes to that word count. Trust `total_duration_s` in the result — that's the authoritative timing after ElevenLabs has actually synthesized.
 
 ### GitHub
 - `github.create_issue` — Create an issue on a GitHub repo.

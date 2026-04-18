@@ -96,7 +96,7 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 Some packs do heavy work that takes 60-120+ seconds (especially with open-weight models). Calling them synchronously through MCP TS-SDK clients (which OpenClaw is built on; default 60s per-request JSON-RPC timeout) returns `MCP error -32001: Request timed out` even though the work is still running fine on the server.
 
 **Heavy packs that need special handling:**
-- `slides.narrate` — video rendering takes 60-180s
+- `slides.narrate` — wall-clock **scales with slide count**: roughly 30-60s per slide (ElevenLabs TTS + per-segment 1080p ffmpeg). A 20-slide deck is typically 10-20 minutes end-to-end; a 5-slide teaser is 2-5 minutes. The pack's session timeout is 30 minutes; decks with >40 slides or 4K resolution may need a longer override. Tell the user the ballpark upfront so they know to expect it.
 - `research.deep` with `limit > 3` — search + scrape + synthesize is 30-90s
 - `content.ground` with `rewrite: true` — multiple LLM passes can run 60-120s
 - Any future pack the user describes as "long" or "heavy" (book writing, multi-chapter generation, large batch operations)
@@ -128,7 +128,7 @@ slides.narrate({
 })
 ```
 
-The pack returns a SEP-1686 task envelope immediately; when the work completes (60-180s later), helmdeck POSTs the result to the webhook URL, which re-injects it into the chat as a fresh system message. **You'll see the result arrive as new context on a future turn — don't poll, don't wait, just acknowledge and let the user drive the next action.**
+The pack returns a SEP-1686 task envelope immediately; when the work completes (minutes to tens of minutes later, depending on the pack — see the wall-clock estimates in the "heavy packs" list above), helmdeck POSTs the result to the webhook URL, which re-injects it into the chat as a fresh system message. **You'll see the result arrive as new context on a future turn — don't poll, don't wait, just acknowledge and let the user drive the next action.**
 
 The user explicitly opts in by giving you a webhook_url + webhook_secret; never invent these on your own.
 

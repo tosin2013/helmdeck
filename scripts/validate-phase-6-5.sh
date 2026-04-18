@@ -391,9 +391,133 @@ test_T807f_desktop() {
   $all_ok
 }
 
+# ── T622a: repo.fetch context envelope ───────────────────────────
+#
+# Closes the 2026-04-14 OpenClaw "empty repo" false-positive. The
+# workshop repo uses README.adoc, not README.md — an envelope-less
+# repo.fetch response forced agents to guess at discovery. The
+# envelope now surfaces the README inline + a signals block so
+# the agent can branch deterministically.
+
+test_T622a_envelope() {
+  local resp
+  resp=$(run_pack "repo.fetch" \
+    '{"url":"https://github.com/tosin2013/low-latency-performance-workshop.git","depth":1}')
+
+  # Use the JSON shape as the pass signal — run_pack's LAST_STATUS
+  # is set in a subshell and is unreliable for callers (pre-existing
+  # idiom in this script; see test_T807b which checks .output.markdown
+  # directly rather than HTTP status).
+  if [[ -z "$(echo "$resp" | jq -r '.output.clone_path // empty')" ]]; then
+    red "  repo.fetch did not return clone_path"
+    echo "  response: $(echo "$resp" | head -c 300)"
+    return 1
+  fi
+
+  # All envelope fields must be present.
+  local readme_path readme_truncated signals_has_readme sparse has_docs_dir code_count
+  readme_path=$(echo "$resp" | jq -r '.output.readme.path // empty')
+  readme_truncated=$(echo "$resp" | jq -r '.output.readme.truncated // empty')
+  signals_has_readme=$(echo "$resp" | jq -r '.output.signals.has_readme // empty')
+  sparse=$(echo "$resp" | jq -r '.output.signals.sparse // empty')
+  has_docs_dir=$(echo "$resp" | jq -r '.output.signals.has_docs_dir // empty')
+  code_count=$(echo "$resp" | jq -r '.output.signals.code_file_count // empty')
+
+  local ok=true
+  if [[ "$readme_path" != "README.adoc" ]]; then
+    red "  readme.path = '$readme_path', want 'README.adoc' (glob-detect is broken)"
+    ok=false
+  fi
+  if [[ "$signals_has_readme" != "true" ]]; then
+    red "  signals.has_readme = '$signals_has_readme', want true"
+    ok=false
+  fi
+  if [[ "$has_docs_dir" != "true" ]]; then
+    red "  signals.has_docs_dir = '$has_docs_dir', want true (repo has content/, docs/, blog-posts/)"
+    ok=false
+  fi
+  if [[ "$sparse" == "true" ]]; then
+    red "  signals.sparse = true on a 190-file repo — threshold is busted"
+    ok=false
+  fi
+  # tree should be an array with ≥10 entries for a real repo
+  local tree_len
+  tree_len=$(echo "$resp" | jq -r '.output.tree | length')
+  if [[ "$tree_len" -lt 10 ]]; then
+    red "  tree length = $tree_len, want ≥10"
+    ok=false
+  fi
+
+  echo "  readme=$readme_path truncated=$readme_truncated tree_len=$tree_len code=$code_count"
+  $ok
+}
+
+# ── T622a: repo.map ──────────────────────────────────────────────
+#
+# Aider-style structural symbol map. Runs the full ctags + python3
+# reducer pipeline inside the sidecar against helmdeck's own Go
+# source, verifies budget enforcement and --languages filtering.
+
+test_T622a_map() {
+  # Clone helmdeck to exercise real Go code.
+  local fetch
+  fetch=$(run_pack "repo.fetch" \
+    '{"url":"https://github.com/tosin2013/helmdeck.git","depth":1}')
+  local session_id clone_path
+  session_id=$(echo "$fetch" | jq -r '.session_id // empty')
+  clone_path=$(echo "$fetch" | jq -r '.output.clone_path // empty')
+  if [[ -z "$session_id" || -z "$clone_path" ]]; then
+    red "  bootstrap clone did not return session_id + clone_path"
+    echo "  response: $(echo "$fetch" | head -c 300)"
+    return 1
+  fi
+
+  # Map with a 1500-token budget restricted to Go, which is what
+  # agents naturally reach for when asking "where is X defined."
+  local map_resp
+  map_resp=$(run_pack "repo.map" \
+    "{\"_session_id\":\"$session_id\",\"clone_path\":\"$clone_path\",\"token_budget\":1500,\"languages\":[\"Go\"]}")
+  if [[ -z "$(echo "$map_resp" | jq -r '.output.map // empty' 2>/dev/null)" ]]; then
+    red "  repo.map did not return a map field"
+    echo "  response: $(echo "$map_resp" | head -c 300)"
+    return 1
+  fi
+
+  local covered total tokens map_text
+  covered=$(echo "$map_resp" | jq -r '.output.files_covered')
+  total=$(echo "$map_resp" | jq -r '.output.files_total')
+  tokens=$(echo "$map_resp" | jq -r '.output.tokens_estimated')
+  map_text=$(echo "$map_resp" | jq -r '.output.map')
+
+  local ok=true
+  if [[ "$covered" -lt 1 ]]; then
+    red "  files_covered = $covered, want ≥1 (ctags found nothing in a Go repo?)"
+    ok=false
+  fi
+  if [[ "$tokens" -gt 2000 ]]; then
+    red "  tokens_estimated = $tokens, expected ≤1500 + small slack (budget ignored)"
+    ok=false
+  fi
+  if [[ "$covered" -ge "$total" && "$total" -gt 10 ]]; then
+    red "  covered=$covered >= total=$total on a big repo — budget should have truncated"
+    ok=false
+  fi
+  # The default excludes should keep package-lock.json and node_modules out.
+  if grep -qE 'package-lock\.json|node_modules/' <<<"$map_text"; then
+    red "  junk files leaked into the map (defaultExcludes not applied)"
+    ok=false
+  fi
+
+  echo "  files_covered=$covered/$total tokens=$tokens"
+  $ok
+}
+
 # ── run all tests ─────────────────────────────────────────────────
 
 run_test "T807a" "Playwright MCP endpoint on session" test_T807a
+
+run_test "T622a-envelope" "repo.fetch context envelope (readme auto-detect + signals)" test_T622a_envelope
+run_test "T622a-map"      "repo.map structural symbol map (budget + language filter + junk exclude)" test_T622a_map
 
 if [[ "$FIRECRAWL_UP" == true ]]; then
   run_test "T807b" "web.scrape via Firecrawl" test_T807b

@@ -25,8 +25,14 @@ set -euo pipefail
 # --- defaults --------------------------------------------------------------
 
 AGENT="defaults"
-MODEL="anthropic/claude-sonnet-4.6"
-FALLBACKS_CSV="minimax/minimax-m2.7"
+# Model refs are parsed by splitting on the first '/' (see OpenClaw
+# /app/docs/cli/models.md). Prefix with `openrouter/` to route through
+# the OpenRouter auth profile instead of the direct Anthropic/MiniMax
+# APIs, which require their own per-provider keys we typically don't
+# have configured. Override with --model / --fallbacks for a different
+# environment (e.g. a Bedrock-routed stack).
+MODEL="openrouter/anthropic/claude-sonnet-4.6"
+FALLBACKS_CSV="openrouter/minimax/minimax-m2.7"
 SEED_IDENTITY="false"
 ROTATE_JWT="false"
 SKIP_MCP="false"

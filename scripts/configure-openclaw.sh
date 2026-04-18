@@ -206,12 +206,28 @@ else
 	[[ -f "$SKILL_FILE" ]] || die "SKILL.md not found at $SKILL_FILE — run from a helmdeck checkout"
 	log "skills: installing $SKILL_NAME skill from $SKILL_FILE ($(wc -c < "$SKILL_FILE") bytes)"
 
+	# Re-stamp the helmdeckVersion frontmatter with the current git
+	# HEAD short-hash before copying, so the installed skill points
+	# at whatever the operator has checked out — NOT whatever hash
+	# was baked in at commit time (which is always one commit stale
+	# for the SKILL.md file itself). Fall back to the committed
+	# stamp if we're not in a git checkout or git isn't installed.
+	stamp_tmp="$(mktemp -t helmdeck-skill.XXXXXX.md)"
+	# shellcheck disable=SC2064
+	trap "rm -f '$stamp_tmp'" EXIT
+	if git_hash="$(cd "$HELMDECK_ROOT" && git rev-parse --short HEAD 2>/dev/null)"; then
+		sed -E 's/(helmdeckVersion: *")[^"]*(")/\1'"$git_hash"'\2/' \
+			"$SKILL_FILE" > "$stamp_tmp"
+	else
+		cp "$SKILL_FILE" "$stamp_tmp"
+	fi
+
 	# Copy SKILL.md into the managed-skill root so OpenClaw's loader
 	# finds it via the documented precedence. We provision the
 	# directory first so docker cp has a target (cp won't create
 	# intermediate dirs).
 	docker exec "$OPENCLAW_CONTAINER" mkdir -p "${OPENCLAW_SKILL_ROOT}/${SKILL_NAME}"
-	docker cp "$SKILL_FILE" \
+	docker cp "$stamp_tmp" \
 		"${OPENCLAW_CONTAINER}:${OPENCLAW_SKILL_ROOT}/${SKILL_NAME}/SKILL.md"
 
 	# Mark the skill enabled in skills.entries so an explicit
@@ -233,7 +249,7 @@ else
 		log "skills: cleared stale agents.${AGENT}.systemPromptOverride (migrated to skill)"
 	fi
 
-	stamp="$(grep -oE 'helmdeckVersion: *"[^"]+"' "$SKILL_FILE" | head -1 | sed 's/.*"\([^"]*\)".*/\1/')"
+	stamp="$(grep -oE 'helmdeckVersion: *"[^"]+"' "$stamp_tmp" | head -1 | sed 's/.*"\([^"]*\)".*/\1/')"
 	[[ -n "$stamp" ]] && log "skills: stamped helmdeck version ${stamp}"
 fi
 

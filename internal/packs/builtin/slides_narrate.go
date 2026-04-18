@@ -111,6 +111,20 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store) *packs.Pack {
 		// per-request timeout. See internal/mcp/jobs.go for the wire
 		// shape and docs/integrations/webhooks.md for push delivery.
 		Async: true,
+		// Memory: encoding is serial (one ffmpeg per segment, then
+		// stream-copy concat), so peak RAM is bounded by a single
+		// ffmpeg + the Chromium baseline — not by slide count.
+		// Measured footprints on libx264/stillimage + AAC 192k:
+		//   720p  ≈ 500 MB ffmpeg RSS
+		//   1080p ≈ 1.1 GB ffmpeg RSS
+		// Adding Chromium/Playwright baseline (~700 MB) we need
+		// ~2 GB to comfortably encode 1080p (the default). The
+		// runtime's 1 GB default OOM-killed ffmpeg on segment 4 of
+		// a 19-slide fixture. Override here so the pack is
+		// resolution-safe out of the box. Operators rendering at
+		// 4K or on machines with sharper memory pressure can still
+		// override via SessionSpec at registration time.
+		SessionSpec: session.Spec{MemoryLimit: "2g"},
 	}
 }
 

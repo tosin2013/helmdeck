@@ -35,6 +35,7 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 ### Slides
 - `slides.render` — Convert Marp markdown to PDF, PPTX, or HTML.
 - `slides.narrate` — Convert Marp markdown to a narrated MP4 video with ElevenLabs TTS and YouTube metadata. Speaker notes (`<!-- ... -->`) become narration. **CRITICAL: Pass the markdown EXACTLY as the user provides it — preserve `---` slide delimiters, `<!-- -->` HTML comments, and newlines. Do NOT escape or strip any formatting.** The markdown field must start with `---\nmarp: true\n---` frontmatter.
+  - **Resource scaling**: encoding is sequential, so memory is bounded per-segment — not per-deck. Slide count scales **time** (~10-30s per slide) and **disk in `/tmp`** (~30-50 MB per segment MP4 until concat); it does **NOT** scale memory. The memory knob is `resolution`: default `1920x1080` needs ~1.1 GB for ffmpeg + ~700 MB for the Chromium baseline, which the session's 2 GB cap covers. Larger resolutions (e.g. `3840x2160`) may OOM — drop to `1280x720` if the user reports exit 137 from ffmpeg. Decks of 20-25 slides at 1080p are the tested default; anything much longer just takes longer, not more memory.
 
 ### GitHub
 - `github.create_issue` — Create an issue on a GitHub repo.

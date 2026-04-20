@@ -47,6 +47,7 @@ func LoadCustomOpenAIProviders(reg *Registry, logger *slog.Logger) {
 		return
 	}
 	loadOpenRouter(reg, logger)
+	loadMistral(reg,logger)
 }
 
 func loadOpenRouter(reg *Registry, logger *slog.Logger) {

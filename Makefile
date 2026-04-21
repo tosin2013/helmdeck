@@ -33,6 +33,14 @@ test: ## Run unit tests
 vet: ## go vet
 	$(GO) vet ./...
 
+.PHONY: check
+check: vet test build ## Run everything CI runs (vet + race test + build)
+
+.PHONY: install-hooks
+install-hooks: ## Wire .githooks/ into this clone (opt-in pre-push runs `make check`)
+	git config core.hooksPath .githooks
+	@echo "git hooks installed. 'git push' now runs 'make check' first."
+
 .PHONY: fmt
 fmt: ## gofmt -w
 	gofmt -w cmd internal

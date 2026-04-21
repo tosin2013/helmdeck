@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Opt-in pre-push hook — runs `make check` to catch CI failures
+# locally before they hit the PR. Enable with `make install-hooks`.
+set -e
+exec make check

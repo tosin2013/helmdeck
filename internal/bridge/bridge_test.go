@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,29 @@ import (
 	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/packs"
 )
+
+// safeBuffer is a mutex-guarded bytes.Buffer. Run() writes to
+// stdout/stderr from a background goroutine while TestBridgeRoundTrip
+// polls them for substrings; plain *bytes.Buffer is not safe for
+// concurrent use and -race flags it. Production bridge.go writes to
+// os.Stdout/os.Stderr (file descriptors serialized by the kernel),
+// so no wrapper is needed there.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
 
 // startServer brings up a real helmdeck control plane (just the
 // pack registry + MCP server route) so the bridge has something to
@@ -68,8 +92,7 @@ func TestBridgeRoundTrip(t *testing.T) {
 	// terminates cleanly. We need to leave the stdout pipe open
 	// long enough to read the response before closing it.
 	stdinR, stdinW := io.Pipe()
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
+	var stdout, stderr safeBuffer
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

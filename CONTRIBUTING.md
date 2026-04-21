@@ -141,6 +141,9 @@ the project also welcomes:
 make test
 go test ./... -count=1
 
+# Or run the full CI gate locally (vet + race test + build) before pushing
+make check
+
 # Build the control plane binary
 make build
 
@@ -155,9 +158,14 @@ make smoke
 ```
 
 The CI workflow runs `go vet`, `go test -race`, `make build`, and a
-Trivy filesystem scan on every PR. All four must pass before merge.
-The Trivy scan fails on CRITICAL findings — see
+Trivy filesystem scan on every PR. Run `make check` locally first to
+catch the first three before they fail in CI. All four must pass
+before merge. The Trivy scan fails on CRITICAL findings — see
 `docs/SECURITY-HARDENING.md` for the triage runbook.
+
+To wire `make check` into `git push`, run `make install-hooks` once in
+your clone. This is opt-in — it sets `core.hooksPath` to the project's
+`.githooks/` directory and only affects your local copy.
 
 ## Reporting security issues
 

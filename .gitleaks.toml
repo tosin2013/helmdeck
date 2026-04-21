@@ -1,0 +1,14 @@
+# gitleaks configuration — extends the built-in ruleset with a
+# project-specific allowlist for stable dev credentials that look
+# like secrets but are intentionally checked in.
+#
+# Keep this list small and surgical. Prefer fixing the source
+# (redact/obfuscate the value, or externalize it) over adding to
+# the allowlist.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Stable dev credentials baked into the Compose stack (rpc_secret, admin_token, metrics_token). Overridden in production via a mounted custom garage.toml — see the file's own header comment."
+paths = ['''deploy/compose/garage\.toml''']

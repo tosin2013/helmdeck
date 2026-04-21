@@ -80,10 +80,13 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           format: table
-          # Skip the helmdeck-managed sidecar entrypoint script —
-          # trivy treats every shell heredoc as a "secret" and floods
-          # the report. Real secrets are caught by gitleaks in a
-          # separate workflow.
+          # Only scan for vulnerabilities + misconfigurations here.
+          # Secrets are gitleaks' job in a separate workflow — trivy's
+          # secret scanner false-positives on UI placeholder strings
+          # (e.g. `ghp_xxxx...` in web/src/pages/vault.tsx) and shell
+          # heredocs in the sidecar entrypoint. Duplicating secret
+          # detection across two tools just produces noise.
+          scanners: vuln,misconfig
           skip-files: 'deploy/docker/sidecar-entrypoint.sh'
 
       - name: Run Trivy filesystem scan (full SARIF report)
@@ -96,6 +99,7 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           ignore-unfixed: true
+          scanners: vuln,misconfig
           skip-files: 'deploy/docker/sidecar-entrypoint.sh'
 
       - name: Upload SARIF to GitHub Security

@@ -1,0 +1,40 @@
+name: gitleaks
+
+# Secret detection on every push + PR. Complements the trivy fs scan
+# (which runs `scanners: vuln,misconfig` and explicitly leaves secret
+# detection to this workflow so the two don't double-report).
+#
+# Allowlist lives in `.gitleaks.toml` at the repo root — add known
+# false positives there, not inline here, so the list is one file.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitleaks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: gitleaks secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans commit history, not just the working tree,
+          # so the default shallow clone would miss historical leaks.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE is required only if helmdeck moves under
+          # a GitHub organization. It's free for public personal
+          # repos; no secret needs to be set today.

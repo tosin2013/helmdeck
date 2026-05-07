@@ -185,6 +185,79 @@ Public beta continues. Tag `v0.8.0` (shipped 2026-04-12). Sets up Phase 7 (Kuber
 
 ---
 
+## v0.9.0 — Polish + plumbing (Phase 6.5+) — ✅ Shipped 2026-05-07 {#v090}
+
+**Theme:** "Tighten what shipped before adding more."
+
+> **Milestone:** Continuation of v0.8 / Phase 6.5 — no new milestone created. Aggregates 70 commits of post-v0.8.0 hardening.
+
+### Ships
+
+No new packs. No API changes. The 36-pack catalog from v0.8.0 stays the surface area. Operationally: a real install fix, public docs site at [helmdeck.dev](https://helmdeck.dev/), two community-contributed AI provider adapters (Groq, Mistral), gitleaks secret scanning, the planning-doc cross-references that were documented-but-not-implemented at v0.8.0, and the priority-label taxonomy (`priority/P0..P3`) on every issue.
+
+See the full per-section breakdown in [`CHANGELOG.md` v0.9.0](https://github.com/tosin2013/helmdeck/blob/main/CHANGELOG.md#090---2026-05-07).
+
+### Audience
+
+Existing v0.8.0 operators. A direct upgrade — `git pull && make install` picks up everything (the install fix is the highest-value change for fresh deploys; existing deploys can ignore it).
+
+---
+
+## v0.10.0 — Pack authoring + Test Runner (planned) {#v0100}
+
+**Theme:** "Anyone with Python or Node can ship a helmdeck pack."
+
+> **Milestone:** new milestone, slotted between v0.8 and v1.0. Phase number TBD (likely Phase 6.7 or a renamed Phase 7-pre).
+
+### Ships (planned)
+
+- **T606a** — Pack Test Runner UI tab on the Capability Packs panel. Form derived from input schema, dispatches `POST /api/v1/packs/{name}`, renders typed output + artifact links inline. Closes the gap that left every per-pack reference page saying "no UI today".
+- **T811** — `command` handler type. Subprocess packs in any language (stdin JSON / stdout JSON protocol) with the same egress guard + audit logging as built-in Go packs. Removes the "you must contribute Go" barrier.
+- **Pack authoring tutorial series** — a full `build-your-first-pack.md` tutorial + how-to recipes for the three common shapes (REST API wrap, CLI wrap, webhook receiver). Worked-example pack picked from the candidate-pack research. The other candidates ship as `pack-candidate` issues for community contribution.
+- **`docs/explanation/pack-architecture.md`** — the why behind the schema + handler split, vault placeholder system, error-code closed set, and MCP tool exposure under the hood.
+
+### Hard exit gate
+
+A non-maintainer can follow the tutorial against a fresh `make install` and ship a working pack against an external service in under 60 minutes.
+
+### Audience
+
+Community contributors. Sets up the marketplace in v0.11.0.
+
+---
+
+## v0.11.0 — Marketplace beta (planned) {#v0110}
+
+**Theme:** "Discover and install community packs."
+
+### Ships (planned)
+
+- **T810** — Pack marketplace registry model. `index.yaml` catalog schema, `helmdeck-pack.yaml` manifest, cosign trust verification, `HELMDECK_MARKETPLACE_URL` env var, catalog refresh endpoint.
+- **T812** — `helmdeck pack install/uninstall` CLI commands + `POST /api/v1/marketplace/install` REST endpoint. Hot-load (no restart).
+- **T813** — Marketplace UI panel at `/marketplace`. Browse-by-category, search, pack detail, install/uninstall, trust badges (Core / Signed / Unsigned).
+- **T814** — Community marketplace repo (`tosin2013/helmdeck-marketplace`) seeded with the worked-example pack from v0.10 + initial catalog from accepted `pack-candidate` issues.
+
+### Audience
+
+Operators looking for "an existing pack for X" before writing one. Designed to land before K8s so community surface area precedes enterprise surface area.
+
+---
+
+## v1.0.0-rc1 — Kubernetes preview (planned) {#v100rc1}
+
+**Theme:** "Helm install works; production hardening pending."
+
+### Ships (planned)
+
+- **T701** `client-go` `SessionRuntime` backend.
+- **T702** Helm chart `charts/baas-platform/`.
+- **T703** PostgreSQL StatefulSet sub-chart (Bitnami) with `database.external.enabled` toggle.
+- **T704** Session pod template (seccomp, restartPolicy: Never, memory-backed `/dev/shm`).
+
+Operators can install on GKE/EKS but production-hardening items (NetworkPolicy, isolation tiers, TLS, audit) are not gates.
+
+---
+
 ## v1.0.0 — Kubernetes & GA (Week 22)
 **Theme:** "Production."
 

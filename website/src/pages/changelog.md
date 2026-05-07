@@ -16,9 +16,90 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-07
+
+A "polish + plumbing" release. No new packs and no API changes — the 36
+packs from v0.8.0 stay the surface area. What landed: a real install
+fix that was breaking first-session sessions, a public docs site at
+helmdeck.dev, two community-contributed AI provider adapters, secret
+scanning in CI, and the planning-doc cross-references that were
+documented-but-not-implemented at v0.8.0.
+
 ### Added
-- Documentation site (Docusaurus 3, Diataxis-organized) deployed to Vercel.
-- Top-level `CHANGELOG.md`, `SECURITY.md`, and `CODE_OF_CONDUCT.md` for OSS hygiene.
+- **Documentation site** at [helmdeck.dev](https://helmdeck.dev/) —
+  Docusaurus 3, Diataxis-organized (Tutorials / How-to / Reference /
+  Explanation), deployed to Vercel with auto-preview on PRs. Search via
+  `@easyops-cn/docusaurus-search-local`. SEO-tuned for Google Search
+  Console submission: explicit titles, OG social card, robots.txt,
+  sitemap with per-route priority bumps, schema.org/WebSite +
+  FAQPage JSON-LD.
+- **Install tutorials** — `docs/tutorials/install-cli.md` (10-minute
+  walkthrough from `git clone` to running stack) and
+  `docs/tutorials/install-ui-walkthrough.md` (panel-by-panel UI tour).
+- **Troubleshooting how-to** — `docs/howto/troubleshoot-install.md`
+  with FAQPage schema covering 10 known sharp edges (502 on first
+  session, GHCR pull failures, lost admin password, etc.).
+- **Per-pack documentation framework** — `docs/reference/packs/` with
+  template + fully-written browser family (`browser.screenshot_url`,
+  `browser.interact`). 12 family-tracking issues opened for community
+  to pick up the remaining 34 packs.
+- **OSS hygiene files** at repo root — `CHANGELOG.md`, `SECURITY.md`
+  (90-day disclosure window), `CODE_OF_CONDUCT.md` (Contributor
+  Covenant 2.1).
+- **GitHub priority taxonomy** — `priority/P0..P3` labels applied to
+  all 39 open issues. P1 cohort (14 items) is the next-release
+  shortlist.
+- **`docs/sitemap.xml`** — documcp-generated source-side sitemap for
+  link audits and search-engine submission tracking, separate from
+  Docusaurus's runtime sitemap.
+- **Custom logo** — helm-wheel + H letterform mark, light/dark
+  variants, SVG favicon. Replaced the scaffolded Docusaurus brand
+  assets.
+- **Provider adapters via community PRs** — Groq (PR #45 by @Dev-31)
+  and Mistral (PR #47, resolved from @vijit-vishnoi's PR #46) both
+  ride the `HELMDECK_{PROVIDER}_API_KEY[_FILE]` / `_BASE_URL` /
+  `_MODELS` env-var contract introduced for OpenRouter in v0.8.0.
+
+### Changed
+- **Planning docs** (`RELEASES.md`, `MILESTONES.md`, `TASKS.md`) are
+  now cross-linked. Every release has a Milestone + Tasks pointer;
+  every milestone has a Ships-in pointer; the v0.8.0 RELEASES section
+  was added (was missing). 19 task IDs that lived in MILESTONES
+  without rows in TASKS got promoted into proper rows.
+- README's install section links to the new tutorial pages.
+- Trivy CI scan scope narrowed to `scanners: vuln,misconfig`. Action
+  pin bumped 0.28.0 → 0.35.0.
+
+### Fixed
+- **Install bug** — `docker compose up -d --build` only builds
+  services with a `build:` clause, so published images (Garage, the
+  GHCR-published sidecar tag) weren't pulled before stack-up. Result:
+  first session calls hung on a 30-second timeout. Fix: new
+  `compose_pull` step in `scripts/install.sh` runs `docker compose
+  pull --ignore-buildable` between sidecar build and `compose up`,
+  fast-failing on network/proxy issues with an actionable error. The
+  `sidecar-warm` service no longer swallows pull failures with
+  `|| true`.
+- **CI race** — `TestBridgeRoundTrip`'s shared `bytes.Buffer` between
+  the test goroutine and the bridge writer. Wrapped in a
+  `sync.Mutex`-guarded `safeBuffer`. Production code unchanged.
+- **`vercel.json`** — `cleanUrls: true` added so `/PACKS` resolves to
+  `/PACKS.html` (matched to Docusaurus's `trailingSlash: false`).
+
+### Security
+- **Gitleaks** secret-scanning CI workflow on every push + PR. Runs
+  via `gitleaks/gitleaks-action@v2` with `fetch-depth: 0` so the
+  scanner walks full history. Allowlist covers stable dev credentials
+  in `deploy/compose/garage.toml` (file header already documents
+  these as override-in-production).
+- **`serialize-javascript`** bumped 6.0.2 → 7.0.5 via npm `overrides`
+  to address GHSA-5c6j-r48x-rmvq (HIGH) and CVE-2026-34043 (MEDIUM).
+  Both shipped as transitive deps in @docusaurus/bundler.
+
+### Developer experience
+- **`make check`** target wraps `vet + race test + build` — exactly
+  what CI's `vet + test + build` job runs. Plus `make install-hooks`
+  to wire an opt-in `pre-push` hook.
 
 ## [0.8.0] - 2026-04-12
 
@@ -105,7 +186,8 @@ and the hard exit gates for each — see
 - Single-node Compose deployment (`deploy/compose/compose.yaml`).
 - `make smoke` end-to-end harness in CI.
 
-[Unreleased]: https://github.com/tosin2013/helmdeck/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/tosin2013/helmdeck/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/tosin2013/helmdeck/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/tosin2013/helmdeck/compare/v0.5.1...v0.8.0
 [0.5.1]: https://github.com/tosin2013/helmdeck/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/tosin2013/helmdeck/compare/v0.3.0...v0.5.0

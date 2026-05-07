@@ -178,6 +178,26 @@ docker compose -f /root/openclaw/docker-compose.yml run --rm openclaw-cli \
 
 > **Helmdeck-as-LLM-gateway path:** OpenClaw's docs do not clearly document a custom OpenAI-compatible base URL escape hatch as of v0.6.0 of helmdeck. If we confirm via inspection of `models.json` that an arbitrary `base_url` works, this section will gain a "Route OpenClaw's LLM through helmdeck" subsection that points OpenClaw at `http://helmdeck-control-plane:3000/v1/chat/completions` so the T607 success-rate panel lights up from OpenClaw runs. Until then, OpenClaw uses its OpenRouter key directly and helmdeck only sees the MCP tool calls.
 
+## 5b. Confirm the catalog is visible from OpenClaw
+
+Before opening the chat UI, smoke-test the MCP handshake from the CLI side. This proves the JWT works, the `authorization` header case is right, the network bridge is wired, and the model can see the tool catalog:
+
+```bash
+docker compose -f /root/openclaw/docker-compose.yml run --rm -T openclaw-cli agent \
+  --agent main \
+  --json \
+  --message "List every MCP tool whose name starts with helmdeck__. Just the names, one per line."
+```
+
+You should see the assistant reply listing **39 `helmdeck__*` tools** — the 36 capability packs plus 3 async wrappers (`helmdeck__pack-start`, `helmdeck__pack-status`, `helmdeck__pack-result`).
+
+> 🧩 **Naming convention**: MCP tool names can't contain dots, so helmdeck's `browser.screenshot_url` becomes `helmdeck__browser-screenshot_url` over MCP. The mapping is mechanical — `<family>.<action>` → `helmdeck__<family>-<action>`. Pack reference pages list both forms.
+
+If the response says "I don't have access to MCP tools" or returns 0 helmdeck tools:
+- Check `docker logs helmdeck-control-plane | grep mcp/sse` — should show recent `GET /api/v1/mcp/sse` entries.
+- Check the JWT in OpenClaw's MCP config didn't expire (default 7-day window from `configure-openclaw.sh`); rotate with `./scripts/configure-openclaw.sh --rotate-jwt`.
+- Confirm the lowercase `authorization` header survived any manual edits to `~/.openclaw/openclaw.json` (issue #1 workaround — Pascal-cased `Authorization` 401's against OpenClaw 2026.4+).
+
 ## 6. Walk the Phase 5.5 code-edit loop
 
 Open `http://localhost:18789` in your browser, paste the OpenClaw gateway token into Settings, then send a chat prompt:

@@ -123,9 +123,14 @@ provider_from_model() {
 }
 PROVIDER="$(provider_from_model "$MODEL")"
 if [[ "$PROVIDER" != "openclaw" && "$PROVIDER" != "" ]]; then
+	# OpenClaw 2026.5.6 'models auth list' output shape:
+	#   Profiles:
+	#   - openrouter:default [openrouter/api_key]
+	# So the provider line is `- <provider>:<profile-id> [<provider>/<auth-method>]`.
+	# Grep for "^- <provider>(:| )" to match the profile entry across older + newer formats.
 	if ! docker compose -f /root/openclaw/docker-compose.yml \
-			run --rm openclaw-cli models auth list 2>/dev/null \
-			| grep -qiE "^[[:space:]]*${PROVIDER}([[:space:]]|$)"; then
+			run --rm -T openclaw-cli models auth list 2>/dev/null \
+			| grep -qiE "^[-* ]+${PROVIDER}([:[:space:]]|$)"; then
 		warn "OpenClaw has no '${PROVIDER}' auth configured."
 		warn ""
 		warn "  Run this once, paste your API key when prompted, then re-run me:"

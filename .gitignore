@@ -2,6 +2,10 @@
 # Auto-generated MCP server context (added automatically)
 .mcp-server-context.md
 
+# Root-level npm artifacts (root package.json carries only the vercel CLI;
+# website/ has its own workspace).
+/node_modules/
+
 # Local PRD (input to ADR generation; not tracked)
 PRD.md
 

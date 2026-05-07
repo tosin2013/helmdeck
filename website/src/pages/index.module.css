@@ -1,0 +1,68 @@
+.heroBanner {
+  padding: 4rem 0;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+@media screen and (max-width: 996px) {
+  .heroBanner {
+    padding: 2rem;
+  }
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.heroSecondary {
+  --ifm-button-color: var(--ifm-color-white);
+}
+
+.quadrants {
+  padding: 4rem 0;
+  background: var(--ifm-background-surface-color);
+}
+
+.quadrantGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.5rem;
+}
+
+.quadrantCard {
+  display: block;
+  padding: 1.75rem;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  background: var(--ifm-background-color);
+  color: inherit;
+  text-decoration: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.quadrantCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  border-color: var(--ifm-color-primary);
+  text-decoration: none;
+}
+
+.quadrantCard h3 {
+  margin: 0 0 0.5rem 0;
+  color: var(--ifm-color-primary);
+}
+
+.quadrantCard p {
+  margin: 0 0 1rem 0;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.quadrantArrow {
+  font-weight: 600;
+  color: var(--ifm-color-primary);
+}

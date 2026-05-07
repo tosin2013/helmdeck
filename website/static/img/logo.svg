@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke-linecap="round" aria-label="Helmdeck logo">
+  <title>Helmdeck</title>
+  <!-- outer wheel rim -->
+  <circle cx="32" cy="32" r="23" stroke="#2563EB" stroke-width="3.5"/>
+  <!-- 4 cardinal handles -->
+  <line x1="32" y1="2"  x2="32" y2="8"  stroke="#2563EB" stroke-width="3.5"/>
+  <line x1="32" y1="56" x2="32" y2="62" stroke="#2563EB" stroke-width="3.5"/>
+  <line x1="2"  y1="32" x2="8"  y2="32" stroke="#2563EB" stroke-width="3.5"/>
+  <line x1="56" y1="32" x2="62" y2="32" stroke="#2563EB" stroke-width="3.5"/>
+  <!-- inner H letterform (helmdeck mark) -->
+  <line x1="23" y1="20" x2="23" y2="44" stroke="#2563EB" stroke-width="3.5"/>
+  <line x1="41" y1="20" x2="41" y2="44" stroke="#2563EB" stroke-width="3.5"/>
+  <line x1="23" y1="32" x2="41" y2="32" stroke="#2563EB" stroke-width="3.5"/>
+  <!-- center hub -->
+  <circle cx="32" cy="32" r="3" fill="#2563EB"/>
+</svg>

@@ -1,7 +1,10 @@
 ---
 title: Configure helmdeck via the Management UI
-description: A panel-by-panel walkthrough of the post-install configuration steps every operator needs.
+description: Panel-by-panel walkthrough of the post-install configuration steps every operator needs — AI providers, vault credentials, MCP client connect, sessions, audit log.
+keywords: [helmdeck, management UI, configuration, AI providers, credential vault, MCP client, JWT]
 sidebar_position: 3
+priority: 0.8
+changefreq: monthly
 ---
 
 # Configure helmdeck via the Management UI

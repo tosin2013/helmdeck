@@ -1,3 +1,9 @@
+---
+title: Claude Code MCP integration
+description: Wire Anthropic's Claude Code CLI to a self-hosted helmdeck stack via MCP. Install steps, JWT mint, sidecar wiring, and the Phase 5.5 code-edit loop walkthrough.
+keywords: [helmdeck, Claude Code, MCP integration, Anthropic, JWT, capability packs, code edit loop]
+---
+
 # Claude Code
 
 > **Status:** 🟡 Documented, not yet verified end-to-end

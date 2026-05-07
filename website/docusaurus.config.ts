@@ -11,8 +11,9 @@ const config: Config = {
     v4: true,
   },
 
-  url: 'https://helmdeck.vercel.app',
+  url: 'https://helmdeck.dev',
   baseUrl: '/',
+  trailingSlash: false,
 
   organizationName: 'tosin2013',
   projectName: 'helmdeck',
@@ -48,6 +49,35 @@ const config: Config = {
         theme: {
           customCss: './src/css/custom.css',
         },
+        sitemap: {
+          changefreq: 'weekly',
+          priority: 0.5,
+          filename: 'sitemap.xml',
+          ignorePatterns: ['/search'],
+          // Per-route priority/changefreq bumps for the highest-value
+          // pages. Docusaurus's default sitemap plugin does NOT read
+          // frontmatter priority/changefreq, so we override here.
+          createSitemapItems: async (params) => {
+            const {defaultCreateSitemapItems, ...rest} = params;
+            const items = await defaultCreateSitemapItems(rest);
+            const bump = (urlSuffix: string, priority: number, changefreq?: 'weekly' | 'monthly' | 'yearly') =>
+              items
+                .filter((i) => i.url.endsWith(urlSuffix))
+                .forEach((i) => {
+                  i.priority = priority;
+                  if (changefreq) i.changefreq = changefreq;
+                });
+            bump('/', 1.0, 'weekly');                                  // landing
+            bump('/PACKS', 0.9, 'weekly');
+            bump('/integrations/SKILLS', 0.9, 'weekly');
+            bump('/integrations', 0.8, 'weekly');                      // index
+            bump('/tutorials/install-cli', 0.8, 'monthly');
+            bump('/tutorials/install-ui-walkthrough', 0.8, 'monthly');
+            bump('/integrations/pack-demo-playbook', 0.8, 'monthly');
+            bump('/howto/troubleshoot-install', 0.7, 'monthly');
+            return items;
+          },
+        },
       } satisfies Preset.Options,
     ],
   ],
@@ -64,7 +94,58 @@ const config: Config = {
     ],
   ],
 
+  // SEO: site-wide structured data + GSC verification slot. The GSC
+  // entry stays commented until the property is created (DNS-domain
+  // verification preferred — uncomment only if URL-prefix verification
+  // is chosen instead).
+  headTags: [
+    {
+      tagName: 'script',
+      attributes: {type: 'application/ld+json'},
+      innerHTML: JSON.stringify({
+        '@context': 'https://schema.org',
+        '@type': 'WebSite',
+        name: 'Helmdeck',
+        url: 'https://helmdeck.dev',
+        description:
+          'Self-hosted AI agent platform with 36 capability packs for browser automation, code edits, slides, vision, and desktop control. Optimized for small open-weight models.',
+        publisher: {
+          '@type': 'Organization',
+          name: 'Helmdeck contributors',
+          url: 'https://github.com/tosin2013/helmdeck',
+        },
+        potentialAction: {
+          '@type': 'SearchAction',
+          target: {
+            '@type': 'EntryPoint',
+            urlTemplate: 'https://helmdeck.dev/search?q={search_term_string}',
+          },
+          'query-input': 'required name=search_term_string',
+        },
+      }),
+    },
+  ],
+
   themeConfig: {
+    image: 'img/social-card.png',
+    metadata: [
+      {
+        name: 'description',
+        content:
+          'Self-hosted AI agent platform with 36 capability packs for browser automation, code edits, slides, vision, and desktop control. Optimized for small open-weight models. Apache 2.0.',
+      },
+      {
+        name: 'keywords',
+        content:
+          'helmdeck, AI agents, MCP, capability packs, self-hosted, open-source, small models, OpenClaw, Claude Code, browser automation, agent platform',
+      },
+      {name: 'twitter:card', content: 'summary_large_image'},
+      {name: 'twitter:site', content: '@tosin2013'},
+      // Uncomment + paste the token if you choose URL-prefix verification
+      // in Google Search Console. DNS-domain verification (TXT record)
+      // doesn't need this.
+      // {name: 'google-site-verification', content: 'PASTE-TOKEN-HERE'},
+    ],
     colorMode: {
       respectPrefersColorScheme: true,
     },

@@ -1,3 +1,12 @@
+---
+title: Capability pack catalog
+description: Reference table for every shipped helmdeck capability pack — input/output schema, session requirement, execution engine, vault credentials. 36 packs total.
+keywords: [helmdeck, capability packs, browser automation, web scraping, GitHub, vault, MCP, slides, vision, repo, filesystem]
+sidebar_label: PACKS reference
+priority: 0.9
+changefreq: weekly
+---
+
 # Helmdeck — Built-in Capability Pack Reference
 
 36 packs ship in the control plane binary. All are available as MCP tools (via `/api/v1/mcp/sse` or `/api/v1/mcp/ws`) and as REST endpoints (`POST /api/v1/packs/<name>`).

@@ -1,3 +1,9 @@
+---
+title: Claude Desktop MCP integration
+description: Wire Anthropic's Claude Desktop app (macOS/Windows) to a self-hosted helmdeck stack via MCP. Config-file path, JWT mint, and the Phase 5.5 code-edit loop walkthrough.
+keywords: [helmdeck, Claude Desktop, MCP integration, Anthropic, capability packs]
+---
+
 # Claude Desktop
 
 > **Status:** 🟡 Documented, not yet verified end-to-end

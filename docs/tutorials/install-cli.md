@@ -96,7 +96,9 @@ You'll land on the Dashboard. From here, the [UI walkthrough tutorial](./install
 
 ## Anatomy of `.env.local`
 
-The secrets file at `deploy/compose/.env.local` carries everything the control plane needs at startup:
+The secrets file at `deploy/compose/.env.local` carries everything the control plane reads from environment variables at startup. There are three layers — what `install.sh` writes for you, what you may want to add for optional integrations, and what you should **not** put here (it goes through the UI instead).
+
+### What `install.sh` writes for you (always present)
 
 | Variable | Purpose | Rotate? |
 |---|---|---|
@@ -104,8 +106,52 @@ The secrets file at `deploy/compose/.env.local` carries everything the control p
 | `HELMDECK_VAULT_KEY` | AES-256-GCM key for the credential vault. **Lose this and every stored credential becomes unrecoverable.** | Re-encrypt the vault before rotating. |
 | `HELMDECK_KEYSTORE_KEY` | AES-256-GCM key for the AI provider key store. | Same caution as vault key. |
 | `HELMDECK_ADMIN_PASSWORD` | Initial admin password. The control plane bcrypt-hashes this on first boot; subsequent restarts ignore it unless `--reset`. | Use the UI password change flow once available; until then, `--reset` is the path. |
+| `HELMDECK_ADMIN_USERNAME` | Defaults to `admin`. | Edit and restart control plane. |
+| `HELMDECK_DOCKER_GID` | Host docker group GID — auto-detected so the non-root control-plane container can read `/var/run/docker.sock`. | Override only if your host remaps the docker group. |
+| `HELMDECK_SIDECAR_IMAGE` | Pinned to `helmdeck-sidecar:dev` (the local `make sidecar-build` output). Falls back to the published `ghcr.io` tag if unset. | Edit only if you publish your own sidecar fork. |
 
-Never commit this file. The repo `.gitignore` already excludes `deploy/compose/.env.local`, but always double-check `git status` before committing if you've been editing in that directory.
+### What you may want to add (optional, depends on which packs you'll use)
+
+These are commented-out in `deploy/compose/.env.example`. Uncomment + edit `.env.local` when you want the corresponding pack to work. After any change here, **recreate the control-plane container** (`docker compose -f deploy/compose/compose.yaml --env-file deploy/compose/.env.local up -d --force-recreate control-plane`) — `restart` does not re-read env files.
+
+| Variable | Set to | Required by | Notes |
+|---|---|---|---|
+| `HELMDECK_FIRECRAWL_ENABLED` | `true` | `web.scrape`, `research.deep`, `content.ground` | Also bring up the Firecrawl overlay: `docker compose -f deploy/compose/compose.yaml -f deploy/compose/compose.firecrawl.yml --env-file deploy/compose/.env.local up -d`. |
+| `HELMDECK_DOCLING_ENABLED` | `true` | `doc.parse` | Also bring up the Docling overlay: same pattern with `compose.docling.yml`. `doc.ocr` (Tesseract fallback) works without this. |
+| `HELMDECK_PLAYWRIGHT_MCP_ENABLED` | `false` (override default `true`) | `web.test` (when disabled, returns clear error) | Default is on. Set `false` only on tiny VMs to skip ~80 MB of Node + Playwright in the sidecar. |
+| `HELMDECK_SIDECAR_PYTHON` | `helmdeck-sidecar-python:dev` | `python.run` | Run `make sidecars` first to build the image. Without this, the pack returns `session_unavailable: No such image: ghcr.io/tosin2013/helmdeck-sidecar-python:latest`. |
+| `HELMDECK_SIDECAR_NODE` | `helmdeck-sidecar-node:dev` | `node.run` | Same shape as above. |
+| `HELMDECK_OPENROUTER_API_KEY` | `sk-or-v1-…` | The OpenRouter env-var fast path on the helmdeck **gateway** (NOT OpenClaw — see below) | Provider keys normally go in the UI's *AI Providers* panel; this is the escape hatch for OpenAI-compatible aggregators not yet modeled in the keystore schema. Same pattern: `HELMDECK_GROQ_API_KEY`, `HELMDECK_MISTRAL_API_KEY`. |
+| `HELMDECK_EGRESS_ALLOWLIST` | comma-separated CIDRs | Pack handlers reaching internal hosts | Default blocks RFC 1918, metadata IP, loopback. Add your internal CI server / git server here if a pack needs to reach it. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` + `HELMDECK_OTEL_ENABLED=true` | OTLP receiver URL | Anyone wanting traces | Compatible with Tempo, Jaeger, Honeycomb, Datadog, Langfuse. |
+
+### What does **not** go in `.env.local`
+
+These credentials live in encrypted stores accessed through the Management UI — `.env.local` is the wrong place to put them:
+
+| Credential | Goes where | Path |
+|---|---|---|
+| Anthropic / OpenAI / Gemini / Ollama / Deepseek / Groq / Mistral provider API keys | **AI Providers** panel | `http://localhost:3000/admin/ai-providers` — encrypted with `HELMDECK_KEYSTORE_KEY` |
+| `github-token` (for `repo.fetch`/`repo.push` against private repos and the `github.*` family) | **Vault** panel | `http://localhost:3000/admin/vault` — encrypted with `HELMDECK_VAULT_KEY` |
+| `elevenlabs-key` (for `slides.narrate` full TTS) | **Vault** panel | same as above |
+| Per-pack `${vault:NAME}` placeholders for `http.fetch` | **Vault** panel | same as above |
+| OpenClaw's **own** OpenRouter / OpenAI / Bedrock model auth (the LLM that drives the agent — separate from helmdeck's gateway) | OpenClaw's auth flow | `docker compose -f /root/openclaw/docker-compose.yml run --rm openclaw-gateway node dist/index.js models auth login <provider>` — stored under `~/.openclaw/`. **Not** a helmdeck concern. |
+
+### Why the split matters
+
+The two encryption keys (`HELMDECK_VAULT_KEY`, `HELMDECK_KEYSTORE_KEY`) are intentionally separate per [ADR 007](/adrs/credential-vault-with-placeholder-tokens) so a leak of one domain doesn't compromise the other. The UI flow encrypts at write, and the Vault panel records every read in a usage log for audit. Putting raw API keys in `.env.local` defeats both.
+
+### Three-store cheat-sheet
+
+When a pack page says "needs an API key", check **which store**:
+
+- For **invoking models** → AI Providers UI panel.
+- For **the pack to call upstream services** (GitHub, ElevenLabs, third-party REST) → Vault UI panel.
+- For **the agent client (e.g. OpenClaw) talking to its model** → that client's auth flow, not helmdeck.
+
+### `.gitignore` reminder
+
+Never commit `deploy/compose/.env.local`. The repo `.gitignore` already excludes it, but always double-check `git status` before committing if you've been editing in that directory.
 
 ## Troubleshooting
 

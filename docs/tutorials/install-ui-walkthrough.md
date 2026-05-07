@@ -11,7 +11,7 @@ changefreq: monthly
 
 You ran `make install` and you're staring at the Dashboard. This page is the panel-by-panel tour of what to configure, in roughly the order you'll need each piece.
 
-If you haven't installed yet, start with the [CLI install walkthrough](./install-cli.md).
+If you haven't installed yet, start with the [CLI install walkthrough](./install-cli.md). For the env-var side of configuration (the optional toggles operators need to enable for overlay-gated packs like `web.scrape` / `doc.parse` / `python.run` / `node.run`), see **[Anatomy of `.env.local`](./install-cli.md#anatomy-of-envlocal)** in the CLI tutorial.
 
 ## What ships UI-only vs CLI-only
 

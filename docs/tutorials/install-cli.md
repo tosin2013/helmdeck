@@ -1,7 +1,10 @@
 ---
 title: Install helmdeck (CLI walkthrough)
-description: A 10-minute walkthrough from `git clone` to a running stack with the admin password printed in your terminal.
+description: A 10-minute walkthrough from `git clone` to a running stack with the admin password printed in your terminal. Covers prereqs, what each step does, smoke testing, and the .env.local secrets layout.
+keywords: [helmdeck, install, getting started, docker compose, make install, self-hosted, AI agent, setup]
 sidebar_position: 2
+priority: 0.8
+changefreq: monthly
 ---
 
 # Install helmdeck (CLI walkthrough)

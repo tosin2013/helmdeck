@@ -1,0 +1,9 @@
+# robots.txt for https://helmdeck.dev
+
+User-agent: *
+Allow: /
+
+# Local search results page is generated client-side; high noise, no SEO value.
+Disallow: /search
+
+Sitemap: https://helmdeck.dev/sitemap.xml

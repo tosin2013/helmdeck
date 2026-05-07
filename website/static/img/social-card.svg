@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <radialGradient id="bg" cx="30%" cy="35%" r="80%">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="60%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- Helmdeck mark, scaled. Drawn directly in viewport coordinates so
+       rsvg-convert handles the strokes reliably. Center (290, 315). -->
+  <g stroke="#60A5FA" stroke-width="22" stroke-linecap="round" fill="none">
+    <!-- outer wheel rim -->
+    <circle cx="290" cy="315" r="143"/>
+    <!-- 4 cardinal handles -->
+    <line x1="290" y1="135" x2="290" y2="172"/>
+    <line x1="290" y1="458" x2="290" y2="495"/>
+    <line x1="110" y1="315" x2="147" y2="315"/>
+    <line x1="433" y1="315" x2="470" y2="315"/>
+    <!-- inner H letterform -->
+    <line x1="234" y1="240" x2="234" y2="390"/>
+    <line x1="346" y1="240" x2="346" y2="390"/>
+    <line x1="234" y1="315" x2="346" y2="315"/>
+  </g>
+  <!-- center hub -->
+  <circle cx="290" cy="315" r="20" fill="#60A5FA"/>
+
+  <!-- Wordmark + tagline -->
+  <text x="540" y="270" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"
+        font-size="116" font-weight="800" fill="#F8FAFC" letter-spacing="-2">Helmdeck</text>
+
+  <text x="540" y="335" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"
+        font-size="32" font-weight="500" fill="#94A3B8">Self-hosted AI agent platform</text>
+  <text x="540" y="378" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"
+        font-size="32" font-weight="500" fill="#94A3B8">for small open-weight models</text>
+
+  <!-- Highlight strip -->
+  <rect x="540" y="430" width="500" height="3" fill="#2563EB"/>
+
+  <text x="540" y="478" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"
+        font-size="24" font-weight="600" fill="#60A5FA">36 capability packs · MCP-native · Apache 2.0</text>
+
+  <text x="1100" y="585" text-anchor="end"
+        font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+        font-size="22" font-weight="500" fill="#475569">helmdeck.dev</text>
+</svg>

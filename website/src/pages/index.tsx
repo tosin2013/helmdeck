@@ -74,8 +74,8 @@ export default function Home(): ReactNode {
   const {siteConfig} = useDocusaurusContext();
   return (
     <Layout
-      title={siteConfig.title}
-      description={siteConfig.tagline}>
+      title={`${siteConfig.title} — ${siteConfig.tagline}`}
+      description="Self-hosted AI agent platform with 36 capability packs for browser automation, code edits, slides, vision, and desktop control. Optimized for small open-weight models. Apache 2.0.">
       <HomepageHeader />
       <main>
         <Quadrants />

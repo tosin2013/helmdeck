@@ -1,3 +1,11 @@
+---
+title: Pack demo playbook
+description: 20+ copy-pasteable LLM prompts that exercise every shipped helmdeck capability pack against any MCP client (OpenClaw, Claude Code, Claude Desktop, Gemini CLI, Hermes Agent). Use it to verify a fresh install or demo helmdeck.
+keywords: [helmdeck, demo playbook, MCP test prompts, pack validation, OpenClaw, Claude Code, integration test]
+priority: 0.8
+changefreq: monthly
+---
+
 # Pack Demo Playbook — LLM Prompts for Testing Every Pack
 
 **Status:** v0.8.0 · 35 packs · validated against OpenClaw (23/23 pass)

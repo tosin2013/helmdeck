@@ -1,3 +1,9 @@
+---
+title: Gemini CLI MCP integration
+description: Wire Google's Gemini CLI to a self-hosted helmdeck stack via MCP. Install steps, JWT mint, and the Phase 5.5 code-edit loop walkthrough.
+keywords: [helmdeck, Gemini CLI, Google, MCP integration, capability packs]
+---
+
 # Gemini CLI
 
 > **Status:** 🟡 Documented, not yet verified end-to-end

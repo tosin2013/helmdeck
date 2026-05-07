@@ -1,3 +1,11 @@
+---
+title: Agent skills (load into your MCP client prompt)
+description: Drop-in agent guidance for helmdeck's 36 capability packs. Teaches the LLM how to call each pack, retry transient errors, chain workflows, and file bug reports. Load this into your MCP client's system prompt.
+keywords: [helmdeck, agent skills, MCP, system prompt, OpenClaw, Claude Code, Claude Desktop, Gemini CLI, capability packs, weak models]
+priority: 0.9
+changefreq: weekly
+---
+
 # Helmdeck Agent Skills
 
 **Load this file into your MCP client's system prompt or agent config.** It teaches the LLM how to use helmdeck's 36 capability packs correctly, retry transient errors, diagnose failures, chain multi-step workflows, and file bug reports.

@@ -1,3 +1,11 @@
+---
+title: Client integrations index
+description: Sidecar topology and per-client guide map for wiring helmdeck into Claude Code, Claude Desktop, OpenClaw, Gemini CLI, Hermes Agent, and Nemoclaw via MCP.
+keywords: [helmdeck, MCP integrations, Claude Code, Claude Desktop, OpenClaw, Gemini CLI, Hermes Agent, Nemoclaw, sidecar topology]
+priority: 0.8
+changefreq: weekly
+---
+
 # Helmdeck Client Integrations
 
 **Helmdeck is a capability sidecar.** You install it next to your MCP-capable client — same machine for desktop CLIs, same docker network for containerized agents — and the client gets a battery of safe, audited tools (browser automation, filesystem, git, vault, OCR, repo fetch, slides, …) without you wiring each one up by hand. Drop helmdeck in, point your client at it, ship.

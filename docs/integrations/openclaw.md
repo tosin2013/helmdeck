@@ -1,3 +1,9 @@
+---
+title: OpenClaw MCP integration
+description: Wire OpenClaw (open-source Claude-compatible agent) to a self-hosted helmdeck stack via the SSE MCP transport. Install, JWT mint, gateway config, and known regressions on the CLI path.
+keywords: [helmdeck, OpenClaw, MCP integration, SSE, JWT, Phase 5.5 code edit loop]
+---
+
 # OpenClaw
 
 > **Status (chat UI path):** ✅ Verified on OpenClaw `2026.4.18` with helmdeck `1b91f6c`. Gateway chat UI at `http://localhost:18789` sees the full 36-pack catalog (prefixed `helmdeck__`) and SSE handshake succeeds.

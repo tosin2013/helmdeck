@@ -59,6 +59,25 @@ Useful flags:
 
 Or via `make`: `make install`.
 
+### Connect a client
+
+A running stack is just the platform — the value is **packs called by an
+agent**. Wire one of the supported MCP clients to your fresh install:
+
+| Client | Status | Setup guide |
+|---|---|---|
+| **OpenClaw** | ✅ validated end-to-end | [`docs/integrations/openclaw.md`](docs/integrations/openclaw.md) |
+| Claude Code | 🟡 documented | [`docs/integrations/claude-code.md`](docs/integrations/claude-code.md) |
+| Claude Desktop | 🟡 documented | [`docs/integrations/claude-desktop.md`](docs/integrations/claude-desktop.md) |
+| Gemini CLI | 🟡 documented | [`docs/integrations/gemini-cli.md`](docs/integrations/gemini-cli.md) |
+| Hermes Agent | 🟡 documented | [`docs/integrations/hermes-agent.md`](docs/integrations/hermes-agent.md) |
+
+Once a client is connected, work through the
+[`pack-demo-playbook.md`](docs/integrations/pack-demo-playbook.md) — 20+
+copy-pasteable prompts that exercise every pack. The
+[per-pack reference](https://helmdeck.dev/reference/packs/) covers each
+pack's contract, error codes, and chained workflows.
+
 ### Advanced: manual setup
 
 If you'd rather drive each step yourself instead of running the install script:

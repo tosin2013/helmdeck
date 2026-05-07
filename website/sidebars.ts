@@ -63,6 +63,52 @@ const sidebars: SidebarsConfig = {
             'reference/packs/browser/interact',
           ],
         },
+        {
+          type: 'category',
+          label: 'http',
+          items: ['reference/packs/http/fetch'],
+        },
+        {
+          type: 'category',
+          label: 'doc',
+          items: [
+            'reference/packs/doc/ocr',
+            'reference/packs/doc/parse',
+          ],
+        },
+        {
+          type: 'category',
+          label: 'fs',
+          items: [
+            'reference/packs/fs/read',
+            'reference/packs/fs/write',
+            'reference/packs/fs/list',
+            'reference/packs/fs/patch',
+            'reference/packs/fs/delete',
+          ],
+        },
+        {
+          type: 'category',
+          label: 'cmd',
+          items: ['reference/packs/cmd/run'],
+        },
+        {
+          type: 'category',
+          label: 'git',
+          items: [
+            'reference/packs/git/commit',
+            'reference/packs/git/diff',
+            'reference/packs/git/log',
+          ],
+        },
+        {
+          type: 'category',
+          label: 'language',
+          items: [
+            'reference/packs/language/python-run',
+            'reference/packs/language/node-run',
+          ],
+        },
       ],
     },
     {

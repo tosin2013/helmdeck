@@ -476,6 +476,13 @@ print_summary() {
   printf "    Connect an MCP client:   %s%s/admin/connect%s\n" "${C_CYAN}" "${URL}" "${C_RESET}"
   printf "    Add a vault credential:  %s%s/admin/vault%s\n" "${C_CYAN}" "${URL}" "${C_RESET}"
   echo
+  printf "  %sConnect an MCP client (next required step for actual use):%s\n" "${C_BOLD}" "${C_RESET}"
+  printf "    OpenClaw (validated end-to-end): %sdocs/integrations/openclaw.md%s\n" "${C_DIM}" "${C_RESET}"
+  printf "    Claude Code:                     %sdocs/integrations/claude-code.md%s\n" "${C_DIM}" "${C_RESET}"
+  printf "    Claude Desktop:                  %sdocs/integrations/claude-desktop.md%s\n" "${C_DIM}" "${C_RESET}"
+  printf "    Gemini CLI:                      %sdocs/integrations/gemini-cli.md%s\n" "${C_DIM}" "${C_RESET}"
+  printf "    Pack demo prompts:               %sdocs/integrations/pack-demo-playbook.md%s\n" "${C_DIM}" "${C_RESET}"
+  echo
   printf "  %sFirst session note:%s\n" "${C_BOLD}" "${C_RESET}"
   printf "    The browser sidecar image was just built. Your first session create call\n"
   printf "    will be quick. If you ever see a 502 on first session, the sidecar image\n"

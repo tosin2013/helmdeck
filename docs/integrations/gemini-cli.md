@@ -85,11 +85,32 @@ brew install tosin2013/helmdeck/helmdeck-mcp
 
 Run `gemini` and the helmdeck packs appear in the tool catalog.
 
-## 3. (LLM gateway) — not supported
+## 3. Load the agent skills
+
+Gemini CLI auto-loads a `GEMINI.md` file from the working directory (project-scoped) or `~/.gemini/GEMINI.md` (global). Drop helmdeck's [`SKILLS.md`](./SKILLS) into one:
+
+```bash
+# Project-scoped — applies only when running gemini from this directory:
+curl -fsSL https://raw.githubusercontent.com/tosin2013/helmdeck/main/docs/integrations/SKILLS.md \
+  > GEMINI.md
+
+# Or global — applies to every gemini invocation:
+mkdir -p ~/.gemini
+curl -fsSL https://raw.githubusercontent.com/tosin2013/helmdeck/main/docs/integrations/SKILLS.md \
+  > ~/.gemini/GEMINI.md
+```
+
+Source: [Gemini CLI memory/context docs](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/memory.md).
+
+Verify: run `gemini` and ask *"what helmdeck packs do you know about?"* — the model should list the full catalog (browser, web, repo, github, fs, cmd, git, http, doc, slides, vision, language). If it doesn't, check that the file is at the path Gemini CLI reads (`gemini --help` shows the precedence).
+
+Refresh after pulling a new helmdeck release — the catalog grows over time.
+
+## 4. (LLM gateway) — not supported
 
 Gemini CLI is hard-wired to Google's Gemini API and Vertex AI. There is no documented escape hatch for an OpenAI-compatible base URL. Helmdeck-as-LLM-gateway is **not applicable** — Gemini CLI will always call Google directly, and helmdeck only sees the MCP tool calls.
 
-## 4. Walk the Phase 5.5 code-edit loop
+## 5. Walk the Phase 5.5 code-edit loop
 
 Prompt Gemini CLI:
 

@@ -70,7 +70,29 @@ mcp_servers:
 
 Note: the same JWT works for both the LLM gateway and the MCP bridge — they share helmdeck's auth surface.
 
-## 4. Verify the LLM gateway path
+## 4. Load the agent skills
+
+Hermes' `~/.hermes/config.yaml` accepts a `system_prompt_file` field. Pointing it at a checked-out copy of [`SKILLS.md`](./SKILLS) keeps the agent's skill in sync with helmdeck pulls:
+
+```yaml
+# Add to ~/.hermes/config.yaml alongside the model/mcp_servers blocks:
+system_prompt_file: /path/to/helmdeck/docs/integrations/SKILLS.md
+```
+
+Or paste the contents inline if your config is checked into version control on the same machine where helmdeck doesn't live:
+
+```yaml
+system_prompt: |
+  <paste the contents of helmdeck/docs/integrations/SKILLS.md here>
+```
+
+Source: [Hermes Agent configuration docs](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/).
+
+Verify: `hermes "what helmdeck packs do you know about?"` should rattle off the full catalog (browser, web, repo, github, fs, cmd, git, http, doc, slides, vision, language). If not, check the config-file path Hermes is actually reading (`hermes --version` or its docs).
+
+Refresh after pulling a new helmdeck release — `system_prompt_file` re-reads on every Hermes invocation, so a `git pull` in the helmdeck checkout is enough; no Hermes restart needed.
+
+## 5. Verify the LLM gateway path
 
 Run a one-shot Hermes prompt and watch helmdeck's provider_calls fill in:
 
@@ -87,7 +109,7 @@ sqlite3 /root/helmdeck/helmdeck.db \
 
 You should see at least one `openrouter | minimax/minimax-m2.7 | success` row. Open the helmdeck UI's **AI Providers** panel and confirm the Model Success Rates section shows the row.
 
-## 5. Walk the Phase 5.5 code-edit loop
+## 6. Walk the Phase 5.5 code-edit loop
 
 ```bash
 hermes "Use the helmdeck packs to:

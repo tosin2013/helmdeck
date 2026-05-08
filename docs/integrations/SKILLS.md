@@ -10,11 +10,74 @@ changefreq: weekly
 
 **Load this file into your MCP client's system prompt or agent config.** It teaches the LLM how to use helmdeck's 36 capability packs correctly, retry transient errors, diagnose failures, chain multi-step workflows, and file bug reports.
 
-**How to load:**
-- **Claude Code**: This is referenced from `CLAUDE.md` at the repo root (auto-loaded)
-- **OpenClaw**: Paste into your agent's system prompt or custom instructions
-- **Claude Desktop / Gemini CLI**: Add to the system message in your MCP config
-- **Any other client**: Include this text as context before the first tool call
+The intent is the same across every client: this file's content must be in the model's context **before** it sees the user's first prompt. The mechanism varies — pick the subsection that matches your client.
+
+### OpenClaw (validated end-to-end)
+
+If you ran `scripts/configure-openclaw.sh --seed-identity` from a helmdeck checkout, this file is already stamped into `~/.openclaw/skills/helmdeck/SKILL.md` inside the OpenClaw container and the agent loads it automatically every turn. **Nothing else to do.**
+
+To refresh after a SKILLS.md edit (e.g. after pulling a new helmdeck release), re-run the script — it idempotently overwrites the stamped copy:
+
+```bash
+cd /path/to/helmdeck && ./scripts/configure-openclaw.sh
+```
+
+Verify: in the OpenClaw chat UI, ask *"what helmdeck packs do you know about?"* — the model should rattle off the catalog. If it doesn't, see [`docs/integrations/openclaw.md`](./openclaw.md) §"Load the agent skills".
+
+### Claude Code
+
+Claude Code auto-loads a `CLAUDE.md` from the working directory on every invocation. Drop this file's content into one:
+
+```bash
+# From the project where you'll run claude:
+curl -fsSL https://raw.githubusercontent.com/tosin2013/helmdeck/main/docs/integrations/SKILLS.md \
+  > CLAUDE.md
+```
+
+Or for a project-wide skill that applies to every helmdeck-using repo, see Claude Code's `--append-system-prompt` flag in [Claude Code's docs](https://code.claude.com/docs/en/setup) — point it at a checked-out copy of this file.
+
+Verify: run `claude` in that directory and ask *"what helmdeck packs do you know about?"* — the model should list them.
+
+### Claude Desktop
+
+Claude Desktop has no system-prompt field in `claude_desktop_config.json` — it's intentionally a per-conversation setting via the **Projects** feature in the GUI:
+
+1. Create a new Project (or open an existing helmdeck-related one).
+2. Paste this entire file into the project's **Custom Instructions**.
+3. Attach the helmdeck MCP server (see [`claude-desktop.md`](./claude-desktop.md)).
+4. Start every helmdeck-related conversation from that project.
+
+Verify: ask the model what packs it can call — should match the catalog above.
+
+### Gemini CLI
+
+Gemini CLI auto-loads a `GEMINI.md` from the working directory or `~/.gemini/GEMINI.md` globally. Either works:
+
+```bash
+# Project-scoped:
+curl -fsSL https://raw.githubusercontent.com/tosin2013/helmdeck/main/docs/integrations/SKILLS.md \
+  > GEMINI.md
+
+# Or global:
+mkdir -p ~/.gemini && curl -fsSL https://raw.githubusercontent.com/tosin2013/helmdeck/main/docs/integrations/SKILLS.md \
+  > ~/.gemini/GEMINI.md
+```
+
+Source: [Gemini CLI memory/context docs](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/memory.md). Verify the load with `gemini` and the same "what packs do you know about?" question.
+
+### Hermes Agent
+
+Hermes' `~/.hermes/config.yaml` accepts a `system_prompt` (or `system_prompt_file`) field. Pointing it at a checked-out copy of SKILLS.md keeps it in sync with helmdeck pulls:
+
+```yaml
+system_prompt_file: /path/to/helmdeck/docs/integrations/SKILLS.md
+```
+
+Source: [Hermes configuration docs](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/). Verify with `hermes "what helmdeck packs do you know about?"`.
+
+### Any other MCP client
+
+Find the client's "system prompt" / "custom instructions" / "agent context" field and paste the contents of this file into it. If the client genuinely has no system-prompt surface, prepend this file's contents to the user's first message in every helmdeck-related conversation. The functional outcome is the same.
 
 ---
 

@@ -65,11 +65,25 @@ Add a `mcpServers` entry:
 
 Restart Claude Desktop (fully quit + relaunch — the file is read at startup). The hammer icon in the message composer should show the helmdeck packs.
 
-## 4. (LLM gateway) — not supported
+## 4. Load the agent skills
+
+Claude Desktop has **no system-prompt field in `claude_desktop_config.json`** — the system prompt lives per-conversation via the **Projects** feature in the GUI. Set helmdeck's [`SKILLS.md`](./SKILLS) as the project's Custom Instructions before starting any helmdeck-related conversation:
+
+1. In Claude Desktop's left sidebar, click **Projects** → **+ New project**.
+2. Name it "Helmdeck" (or similar).
+3. Open the project's **Custom Instructions** field.
+4. Paste the entire contents of `https://github.com/tosin2013/helmdeck/blob/main/docs/integrations/SKILLS.md` (raw). Save.
+5. Start every helmdeck-related conversation **inside this project** (the chat starter at the top of the project page) — not from the global "New chat" button, which won't apply the instructions.
+
+Verify: in a project conversation, ask *"what helmdeck packs do you know about?"* — the model should list the full catalog (browser, web, repo, github, fs, cmd, git, http, doc, slides, vision, language). If it doesn't, the project instructions didn't apply — re-check that you started the chat from the project, not from "New chat".
+
+Refresh the Custom Instructions after a helmdeck release if the pack catalog has grown.
+
+## 5. (LLM gateway) — not supported
 
 Claude Desktop's docs do not document any way to point it at a custom Anthropic-compatible (or OpenAI-compatible) base URL. Helmdeck-as-LLM-gateway is **not applicable** to Claude Desktop. Claude Desktop will always call api.anthropic.com directly, and helmdeck will only see the MCP tool calls (not the LLM dispatches). This is a Claude Desktop limitation, not a helmdeck one.
 
-## 5. Walk the Phase 5.5 code-edit loop
+## 6. Walk the Phase 5.5 code-edit loop
 
 Prompt Claude Desktop:
 

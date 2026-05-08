@@ -75,13 +75,36 @@ Run `claude` and execute `/mcp` — `helmdeck` should show as connected with the
 
 Source: <https://code.claude.com/docs/en/mcp>
 
-## 3. (Optional) Route Claude Code's LLM through helmdeck — blocked on T201b
+## 3. Load the agent skills
+
+Claude Code auto-loads a `CLAUDE.md` from the working directory on every invocation. The helmdeck pack catalog, schemas, error-handling rules, session-chaining contract, and freshness contract all live in [`SKILLS.md`](./SKILLS) — drop them into your project's `CLAUDE.md` so the model has the full skill in context before its first turn:
+
+```bash
+# From the project where you'll run claude:
+curl -fsSL https://raw.githubusercontent.com/tosin2013/helmdeck/main/docs/integrations/SKILLS.md \
+  > CLAUDE.md
+```
+
+If your project already has a `CLAUDE.md` you want to keep, append instead:
+
+```bash
+echo >> CLAUDE.md && curl -fsSL https://raw.githubusercontent.com/tosin2013/helmdeck/main/docs/integrations/SKILLS.md \
+  >> CLAUDE.md
+```
+
+For a project-wide skill that applies to every helmdeck-using repo, see Claude Code's `--append-system-prompt` flag.
+
+Verify: run `claude` in that directory and ask *"what helmdeck packs do you know about?"* — the model should list the full catalog (browser, web, repo, github, fs, cmd, git, http, doc, slides, vision, language). If it doesn't, the skill didn't load.
+
+Refresh after pulling a new helmdeck release — the catalog grows over time.
+
+## 4. (Optional) Route Claude Code's LLM through helmdeck — blocked on T201b
 
 Claude Code reads `ANTHROPIC_BASE_URL` to point at an LLM gateway. The gateway must speak Anthropic's `/v1/messages` shape, **not** OpenAI's `/v1/chat/completions`. Helmdeck currently only exposes the OpenAI shape, so this path is blocked until **T201b** lands an Anthropic-compatible facade. Until then, Claude Code uses its own Anthropic credentials directly and helmdeck sees only the MCP tool calls (not the LLM dispatches).
 
 Tracking: T201b in `docs/MILESTONES.md`.
 
-## 4. Walk the Phase 5.5 code-edit loop
+## 5. Walk the Phase 5.5 code-edit loop
 
 Prompt Claude Code:
 

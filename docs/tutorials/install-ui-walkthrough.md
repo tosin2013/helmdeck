@@ -142,6 +142,20 @@ For each MCP-capable client (Claude Code, Claude Desktop, OpenClaw, Gemini CLI, 
 
 The snippet mints a fresh JWT scoped to the client subject. It's the single piece of config you give your client; the client never sees the underlying credentials in the vault.
 
+#### Then load the agent skills
+
+Connecting the client gets the **packs** to it — but the model still doesn't know how to use them well (which to chain, when to re-call, what the schema for `fs.patch` looks like, what the closed-set error codes mean). That's what [`SKILLS.md`](/integrations/SKILLS) provides.
+
+| Client | Where to load |
+|---|---|
+| OpenClaw | Already stamped automatically by `scripts/configure-openclaw.sh`. Re-run after a helmdeck release. |
+| Claude Code | Drop SKILLS.md into the project's `CLAUDE.md` ([details](/integrations/claude-code#3-load-the-agent-skills)). |
+| Claude Desktop | Paste into a Project's Custom Instructions ([details](/integrations/claude-desktop#4-load-the-agent-skills)). |
+| Gemini CLI | Drop into `GEMINI.md` (project) or `~/.gemini/GEMINI.md` (global) ([details](/integrations/gemini-cli#3-load-the-agent-skills)). |
+| Hermes Agent | Set `system_prompt_file:` in `~/.hermes/config.yaml` ([details](/integrations/hermes-agent#4-load-the-agent-skills)). |
+
+Verify in any client by asking *"what helmdeck packs do you know about?"* — the model should rattle off the catalog (browser, web, repo, github, fs, cmd, git, http, doc, slides, vision, language). If it can't, the skill didn't load.
+
 ### 8. Security Policies (`/admin/security`)
 
 Read-only snapshot of the currently-enforced security policy:

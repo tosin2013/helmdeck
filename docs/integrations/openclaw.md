@@ -198,6 +198,20 @@ If the response says "I don't have access to MCP tools" or returns 0 helmdeck to
 - Check the JWT in OpenClaw's MCP config didn't expire (default 7-day window from `configure-openclaw.sh`); rotate with `./scripts/configure-openclaw.sh --rotate-jwt`.
 - Confirm the lowercase `authorization` header survived any manual edits to `~/.openclaw/openclaw.json` (issue #1 workaround — Pascal-cased `Authorization` 401's against OpenClaw 2026.4+).
 
+## 5c. Load the agent skills
+
+The helmdeck pack catalog, schemas, error-handling rules, session-chaining contract, and freshness contract live in [`SKILLS.md`](./SKILLS). The `configure-openclaw.sh` script you ran in §4 already stamped this file into `~/.openclaw/skills/helmdeck/SKILL.md` inside the OpenClaw gateway container, where the agent loads it automatically every turn.
+
+**You don't have to do anything here on a first install.** This section is for the refresh case — after pulling a new helmdeck release that grew the catalog or updated the contracts, re-stamp the skill so OpenClaw sees the new content:
+
+```bash
+cd /path/to/helmdeck && ./scripts/configure-openclaw.sh
+```
+
+The script is idempotent — it only re-writes the stamped skill, leaving JWTs, network bridges, and MCP config untouched.
+
+Verify by repeating the catalog smoke test from §5b — the response should include any newly-added pack names.
+
 ## 6. Walk the Phase 5.5 code-edit loop
 
 Open `http://localhost:18789` in your browser, paste the OpenClaw gateway token into Settings, then send a chat prompt:

@@ -481,7 +481,13 @@ print_summary() {
   printf "    Claude Code:                     %sdocs/integrations/claude-code.md%s\n" "${C_DIM}" "${C_RESET}"
   printf "    Claude Desktop:                  %sdocs/integrations/claude-desktop.md%s\n" "${C_DIM}" "${C_RESET}"
   printf "    Gemini CLI:                      %sdocs/integrations/gemini-cli.md%s\n" "${C_DIM}" "${C_RESET}"
+  printf "    Hermes Agent:                    %sdocs/integrations/hermes-agent.md%s\n" "${C_DIM}" "${C_RESET}"
   printf "    Pack demo prompts:               %sdocs/integrations/pack-demo-playbook.md%s\n" "${C_DIM}" "${C_RESET}"
+  echo
+  printf "  %sLoad the agent skills (required for the model to know which packs to call):%s\n" "${C_BOLD}" "${C_RESET}"
+  printf "    Skill bundle (catalog + contracts): %sdocs/integrations/SKILLS.md%s\n" "${C_DIM}" "${C_RESET}"
+  printf "    OpenClaw users: already stamped by %sscripts/configure-openclaw.sh%s\n" "${C_DIM}" "${C_RESET}"
+  printf "    Other clients:  per-integration doc above has a %sLoad the agent skills%s subsection\n" "${C_DIM}" "${C_RESET}"
   echo
   printf "  %sFirst session note:%s\n" "${C_BOLD}" "${C_RESET}"
   printf "    The browser sidecar image was just built. Your first session create call\n"

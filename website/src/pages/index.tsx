@@ -7,6 +7,21 @@ import Heading from '@theme/Heading';
 
 import styles from './index.module.css';
 
+const whyCards = [
+  {
+    title: 'Cheap models, real work',
+    blurb: 'Run agentic browser, code, slides, vision, and desktop workflows on gpt-oss-120b, Gemma 4, or Mistral — the same Phase 5.5 code-edit loop that needs Sonnet on Cursor.',
+  },
+  {
+    title: 'Deterministic primitives',
+    blurb: '36 typed capability packs do the work. The LLM only picks which pack to call. Move recurring deterministic work out of the expensive token-priced layer.',
+  },
+  {
+    title: 'Self-hosted, audited',
+    blurb: 'Your data, your keys, your hardware. Per-pack audit log, vault-backed credentials, egress-guarded network. Apache 2.0.',
+  },
+];
+
 const quadrants = [
   {
     title: 'Tutorials',
@@ -52,6 +67,35 @@ function HomepageHeader() {
   );
 }
 
+function WhyHelmdeck() {
+  return (
+    <section className={styles.why}>
+      <div className="container">
+        <Heading as="h2" className={styles.whyHeading}>Why helmdeck</Heading>
+        <p className={styles.whyLead}>
+          Frontier-model APIs price a single agentic workflow at $0.20–$0.50.
+          Helmdeck runs the same workflow on a cheap or local model for $0.05–$0.10,
+          with deterministic packs absorbing the ambiguity that the model would
+          otherwise burn tokens rediscovering.
+        </p>
+        <div className={styles.whyGrid}>
+          {whyCards.map((c) => (
+            <div key={c.title} className={styles.whyCard}>
+              <Heading as="h3">{c.title}</Heading>
+              <p>{c.blurb}</p>
+            </div>
+          ))}
+        </div>
+        <div className={styles.whyCta}>
+          <Link className="button button--primary button--lg" to="/explanation/why-helmdeck">
+            Read the full comparison →
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Quadrants() {
   return (
     <section className={styles.quadrants}>
@@ -75,9 +119,10 @@ export default function Home(): ReactNode {
   return (
     <Layout
       title={`${siteConfig.title} — ${siteConfig.tagline}`}
-      description="Self-hosted AI agent platform with 36 capability packs for browser automation, code edits, slides, vision, and desktop control. Optimized for small open-weight models. Apache 2.0.">
+      description="Self-hosted AI agent platform. 36 typed capability packs (browser, code, slides, vision, desktop) make agentic workflows reliable on cheap or local LLMs (gpt-oss-120b, Gemma, Mistral) — 10× lower per-task cost than Anthropic Computer Use, OpenAI Operator, or naive Sonnet function-calling. Apache 2.0.">
       <HomepageHeader />
       <main>
+        <WhyHelmdeck />
         <Quadrants />
       </main>
     </Layout>

@@ -1,0 +1,22 @@
+# Authors of helmdeck blog posts. Community contributors: add an entry
+# here as part of your blog-post PR. Pick a short kebab-case key (used
+# in post frontmatter as `authors: [your-key]`); fill in name, title,
+# url, image_url. socials is optional.
+#
+# Example community entry:
+#
+#   asha-rao:
+#     name: Asha Rao
+#     title: Independent reproducer
+#     url: https://github.com/asha-rao
+#     image_url: https://github.com/asha-rao.png
+#     socials:
+#       github: asha-rao
+
+tosin:
+  name: Tosin Akinosho
+  title: Helmdeck maintainer
+  url: https://github.com/tosin2013
+  image_url: https://github.com/tosin2013.png
+  socials:
+    github: tosin2013

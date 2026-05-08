@@ -4,7 +4,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'Helmdeck',
-  tagline: 'Self-hosted AI agent platform for small open-weight models',
+  tagline: 'Run agentic workflows on cheap or local LLMs at 10× lower cost than frontier-model APIs.',
   favicon: 'img/favicon.svg',
 
   future: {
@@ -44,7 +44,22 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/tosin2013/helmdeck/edit/main/',
         },
-        blog: false,
+        blog: {
+          showReadingTime: true,
+          blogTitle: 'Helmdeck blog',
+          blogDescription:
+            'Engineering notes, design rationale, and field reports from the helmdeck project.',
+          postsPerPage: 'ALL',
+          blogSidebarTitle: 'All posts',
+          blogSidebarCount: 'ALL',
+          feedOptions: {
+            type: ['rss', 'atom'],
+            copyright: `Copyright © ${new Date().getFullYear()} Tosin Akinosho.`,
+            title: 'Helmdeck blog',
+            description:
+              'Engineering notes, design rationale, and field reports from the helmdeck project.',
+          },
+        },
         pages: {},
         theme: {
           customCss: './src/css/custom.css',
@@ -70,11 +85,22 @@ const config: Config = {
             bump('/', 1.0, 'weekly');                                  // landing
             bump('/PACKS', 0.9, 'weekly');
             bump('/integrations/SKILLS', 0.9, 'weekly');
+            bump('/explanation/why-helmdeck', 0.85, 'monthly');        // long-form positioning page
             bump('/integrations', 0.8, 'weekly');                      // index
+            bump('/blog', 0.8, 'weekly');                              // blog index
             bump('/tutorials/install-cli', 0.8, 'monthly');
             bump('/tutorials/install-ui-walkthrough', 0.8, 'monthly');
             bump('/integrations/pack-demo-playbook', 0.8, 'monthly');
             bump('/howto/troubleshoot-install', 0.7, 'monthly');
+            // Bump every individual blog post — Docusaurus emits them
+            // under /blog/<slug>; default priority is 0.5 which buries
+            // them. Field reports / cost analyses warrant 0.7 monthly.
+            items
+              .filter((i) => i.url.includes('/blog/') && !i.url.endsWith('/blog'))
+              .forEach((i) => {
+                i.priority = 0.7;
+                i.changefreq = 'monthly';
+              });
             return items;
           },
         },
@@ -88,8 +114,9 @@ const config: Config = {
       {
         hashed: true,
         indexDocs: true,
-        indexBlog: false,
+        indexBlog: true,
         docsRouteBasePath: '/',
+        blogRouteBasePath: '/blog',
       },
     ],
   ],
@@ -108,7 +135,7 @@ const config: Config = {
         name: 'Helmdeck',
         url: 'https://helmdeck.dev',
         description:
-          'Self-hosted AI agent platform with 36 capability packs for browser automation, code edits, slides, vision, and desktop control. Optimized for small open-weight models.',
+          'Self-hosted AI agent platform. 36 typed capability packs make agentic workflows reliable on cheap or local LLMs (gpt-oss-120b, Gemma, Mistral) at 10× lower per-task cost than Anthropic Computer Use, OpenAI Operator, or naive Sonnet function-calling.',
         publisher: {
           '@type': 'Organization',
           name: 'Helmdeck contributors',
@@ -132,12 +159,12 @@ const config: Config = {
       {
         name: 'description',
         content:
-          'Self-hosted AI agent platform with 36 capability packs for browser automation, code edits, slides, vision, and desktop control. Optimized for small open-weight models. Apache 2.0.',
+          'Self-hosted AI agent platform. 36 typed capability packs (browser, code, slides, vision, desktop) make agentic workflows reliable on cheap or local LLMs (gpt-oss-120b, Gemma, Mistral) — 10× lower per-task cost than Anthropic Computer Use, OpenAI Operator, or naive Sonnet function-calling. Apache 2.0.',
       },
       {
         name: 'keywords',
         content:
-          'helmdeck, AI agents, MCP, capability packs, self-hosted, open-source, small models, OpenClaw, Claude Code, browser automation, agent platform',
+          'helmdeck, AI agents, MCP, capability packs, self-hosted, open-source, weak models, local LLMs, gpt-oss, Gemma, OpenClaw, Claude Code, browser automation, agent platform, cost optimization',
       },
       {name: 'twitter:card', content: 'summary_large_image'},
       {name: 'twitter:site', content: '@tosin2013'},
@@ -163,6 +190,7 @@ const config: Config = {
         {type: 'docSidebar', sidebarId: 'howto',       label: 'How-to',      position: 'left'},
         {type: 'docSidebar', sidebarId: 'reference',   label: 'Reference',   position: 'left'},
         {type: 'docSidebar', sidebarId: 'explanation', label: 'Explanation', position: 'left'},
+        {to: '/blog', label: 'Blog', position: 'left'},
         {to: '/changelog', label: 'Changelog', position: 'left'},
         {
           href: 'https://github.com/tosin2013/helmdeck',
@@ -186,6 +214,7 @@ const config: Config = {
         {
           title: 'Project',
           items: [
+            {label: 'Blog', to: '/blog'},
             {label: 'Changelog', to: '/changelog'},
             {label: 'Architecture Decisions', to: '/adrs'},
             {label: 'Tasks', to: '/TASKS'},

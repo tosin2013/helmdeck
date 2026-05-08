@@ -133,6 +133,38 @@ the project also welcomes:
 - **ADR drafts** for design decisions you think the project should
   formalize. ADRs live in `docs/adrs/` and follow the existing
   numbered template.
+- **Field reports / blog posts (community welcome)** — the helmdeck
+  blog at `helmdeck.dev/blog` is open to community submissions.
+  We especially want **independent reproductions** of cost / accuracy
+  / behavior claims made in maintainer posts: if you re-ran a
+  comparison from a maintainer's post on your hardware with your
+  models and got different numbers, please share — that's the most
+  valuable kind of contribution. To submit a post:
+
+  1. Copy `website/blog/_template.md` to
+     `website/blog/<YYYY-MM-DD>-<slug>.md`. The frontmatter starts
+     `draft: true` so you can iterate freely without publishing.
+  2. Add yourself to `website/blog/authors.yml` if you're not there
+     yet — pick a short key, fill in `name`, `title`, `url`,
+     `image_url`, optional socials.
+  3. Draft your post. Be concrete: lead with a number, show the
+     prompts / inputs / commands you used, link to your code or the
+     PR that produced the finding.
+  4. Open a PR. Maintainers review for accuracy and framing, not for
+     conclusion — independent posts that disagree with a maintainer
+     finding are welcome (and we'll cross-link them from the
+     original).
+  5. Once approved, flip to `draft: false` in a follow-up commit
+     and the post ships on the next deploy.
+
+  Drafts don't appear in production builds, so there's no risk in
+  landing one early while you iterate.
+
+  **What makes a good post**: a concrete finding the reader can act
+  on, a reproducible recipe, honest reporting of where it does AND
+  doesn't generalize. Posts that are pure marketing or that read like
+  a sales deck won't land — the bar is "would an engineer evaluating
+  this learn something true?"
 
 ## Development workflow
 

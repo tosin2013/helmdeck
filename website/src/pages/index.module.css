@@ -66,3 +66,50 @@
   font-weight: 600;
   color: var(--ifm-color-primary);
 }
+
+.why {
+  padding: 4rem 0;
+  background: var(--ifm-background-color);
+}
+
+.whyHeading {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.whyLead {
+  max-width: 760px;
+  margin: 0 auto 2.5rem auto;
+  text-align: center;
+  color: var(--ifm-color-emphasis-800);
+  font-size: 1.1rem;
+  line-height: 1.6;
+}
+
+.whyGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.whyCard {
+  padding: 1.5rem;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  background: var(--ifm-background-surface-color);
+}
+
+.whyCard h3 {
+  margin: 0 0 0.5rem 0;
+  color: var(--ifm-color-primary);
+}
+
+.whyCard p {
+  margin: 0;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.whyCta {
+  text-align: center;
+}

@@ -156,6 +156,7 @@ const sidebars: SidebarsConfig = {
 
   explanation: [
     'explanation/index',
+    'explanation/why-helmdeck',
     'SECURITY-HARDENING',
   ],
 };

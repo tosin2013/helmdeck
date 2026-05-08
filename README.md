@@ -1,12 +1,29 @@
 # helmdeck
 
+> Today's helmdeck install ran a full 6-step code-edit loop (clone, read, patch,
+> test, commit, push) on `gpt-oss-120b` for **$0.07**. The same loop on Cursor
+> or Claude Code direct via Sonnet would have cost **$0.30+**. Same outcome,
+> ~5× cheaper — and the "expensive" stack isn't even the most expensive option.
+
+| Workflow | Frontier-model approach | Helmdeck (gpt-oss-120b) |
+|---|---|---|
+| Browser scrape + GitHub comment | $0.25 (Anthropic Computer Use) | **$0.005** |
+| Code edit loop (6 steps) | $0.35 (Cursor / Aider) | **$0.07** |
+| Multi-step browser test | $0.20 (Browser-use NL) | **$0.03** |
+| PDF → structured Markdown | $1.00 (naive Sonnet vision) | **$0.003** |
+
 > Most browser agents require GPT-4o or Claude Sonnet to work reliably.
 > Helmdeck is built for the other 99% of deployments — **local 7B models,
 > air-gapped environments, and teams that can't send credentials to a
 > cloud API.** It wraps every browser, desktop, git, and code action
 > into a single typed JSON call that even a small model can fill in correctly.
+> The numbers above are the consequence: when packs absorb the work the
+> LLM would otherwise burn tokens rediscovering, cheap or local models do
+> agentic work that frontier-model APIs charge 10× more for.
 
 A self-hosted, containerized platform for AI agents, exposed as **Capability Packs** — schema-validated, one-shot JSON tools — and native MCP. The defining metric is **≥90% pack success on 7B–30B-class open-weight models**, something no frontier-targeting competitor is optimizing for.
+
+> 📊 **Full per-task comparison** with reproduction recipe at <https://helmdeck.dev/explanation/why-helmdeck>. These are one maintainer's findings; we welcome [community reproductions](https://helmdeck.dev/blog).
 
 ## Why this exists
 

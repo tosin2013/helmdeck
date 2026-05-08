@@ -10,6 +10,7 @@ Understanding-oriented background. These pages step back from the immediate task
 
 ## Available explanations
 
+- **[Why helmdeck](./why-helmdeck.md)** — the cost-and-correctness argument: helmdeck lets cheap or local LLMs do agentic work that otherwise needs frontier models. Per-task comparisons against Anthropic Computer Use, OpenAI Operator, Browser-use, Cursor, and Aider, with a "test it yourself" reproduction recipe.
 - **[Security hardening](../SECURITY-HARDENING.md)** — how helmdeck isolates browser sessions and credentials, what the threat model assumes, and which knobs you can tighten further in production.
 
 ## See also

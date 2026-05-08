@@ -257,26 +257,68 @@ When ANY tool call fails, you MUST:
 
 ---
 
-## Session chaining
+## Session chaining contract — READ BEFORE CHAINING `fs.*` / `cmd.run` / `git.*`
 
-Some packs share a session container for multi-step workflows. The key field is `_session_id`.
+> **The rule, in one sentence:** when chaining packs that operate on a shared
+> clone path (`fs.*`, `cmd.run`, `git.*`, `python.run`/`node.run` against a `cwd`,
+> `content.ground` with `clone_path`), pass the `_session_id` returned by
+> `repo.fetch` (or any prior session-creating pack) on **every** follow-up call.
+> Without it, helmdeck spins a fresh sidecar per pack and the file system is **not** shared.
 
-**Pattern:**
-1. Call `repo.fetch` → returns `{clone_path, session_id}`
-2. Pass `_session_id: "<session_id from step 1>"` to every follow-up call
-3. Follow-up packs: `fs.read`, `fs.write`, `fs.list`, `fs.patch`, `fs.delete`, `cmd.run`, `git.commit`, `git.diff`, `git.log`, `repo.push`, `content.ground`
+### The failure mode this prevents
 
-**Rules:**
-- Always use the SAME `_session_id` for all steps in a workflow
-- Sessions persist for 5 minutes after the last call (watchdog cleanup)
-- `repo.fetch` creates the session; other packs reuse it
-- If a session expires, call `repo.fetch` again to create a new one
+A new agent will call `repo.fetch` → `fs.write` → `fs.list` and get back this
+sequence (notice the `count: 0` on a list of a directory it just wrote into):
 
-**Example workflow:**
+```text
+helmdeck__repo-fetch  → {"clone_path":"/tmp/helmdeck-clone-Ab12","_session_id":"sess-9f"}
+helmdeck__fs-write    → {"sha256":"f24745…","size":14}                ✓ apparent success
+helmdeck__fs-list     → {"count":0,"files":[]}                         ✗ different sidecar; can't see the file
 ```
-repo.fetch → fs.list → fs.read → fs.patch → git.diff → git.commit → repo.push
+
+`fs.write` succeeded against sidecar A. `fs.list` ran against fresh sidecar B
+because `_session_id` wasn't propagated. The file is real on disk in A's
+session — it just isn't visible to B. The pack contract did not fail; the
+chaining contract did.
+
+### How to chain correctly
+
+1. Call `repo.fetch` → response carries `clone_path` and `_session_id`.
+2. **Capture both.** Store them locally for the rest of the conversation.
+3. Pass `_session_id` (verbatim) AND `clone_path` (verbatim) to every follow-up call.
+4. The follow-up packs that share the session: `fs.read`, `fs.write`, `fs.list`,
+   `fs.patch`, `fs.delete`, `cmd.run`, `git.commit`, `git.diff`, `git.log`,
+   `repo.push`, `repo.map`, `content.ground` (with `clone_path` mode).
+5. Sessions persist for 5 minutes after the last call (watchdog cleanup).
+   If a session expires, call `repo.fetch` again to create a new one.
+
+### Worked example — the Phase 5.5 code-edit loop
+
+```jsonc
+// 1. Clone and capture session
+{"name":"repo.fetch","arguments":{"url":"https://github.com/tosin2013/helmdeck.git"}}
+// → response: {"clone_path":"/tmp/helmdeck-clone-Ab12", "_session_id":"sess-9f"}
+
+// 2-N. EVERY follow-up call passes _session_id AND clone_path
+{"name":"fs.list",   "arguments":{"_session_id":"sess-9f","clone_path":"/tmp/helmdeck-clone-Ab12","glob":"*.md"}}
+{"name":"fs.read",   "arguments":{"_session_id":"sess-9f","clone_path":"/tmp/helmdeck-clone-Ab12","path":"README.md"}}
+{"name":"fs.patch",  "arguments":{"_session_id":"sess-9f","clone_path":"/tmp/helmdeck-clone-Ab12","path":"README.md","search":"old","replace":"new"}}
+{"name":"cmd.run",   "arguments":{"_session_id":"sess-9f","clone_path":"/tmp/helmdeck-clone-Ab12","command":["go","test","./..."]}}
+{"name":"git.commit","arguments":{"_session_id":"sess-9f","clone_path":"/tmp/helmdeck-clone-Ab12","message":"docs: typo"}}
+{"name":"repo.push", "arguments":{"_session_id":"sess-9f","clone_path":"/tmp/helmdeck-clone-Ab12"}}
 ```
-All calls after repo.fetch pass `_session_id` and `clone_path` from the first result.
+
+Drop `_session_id` from any one of these and the rest of the chain breaks
+silently — counts return zero, files appear missing, commits hit the wrong
+working tree. The error code is rarely `session_unavailable`; more often the
+follow-up pack returns a perfectly-valid empty result.
+
+### Self-check before responding to the user
+
+If you just ran `repo.fetch` and a follow-up `fs.*`/`git.*` returned an
+unexpectedly empty result, **re-read your own tool calls** and verify
+`_session_id` is identical across them. This is the single most common
+self-inflicted failure mode in chained workflows.
 
 ---
 

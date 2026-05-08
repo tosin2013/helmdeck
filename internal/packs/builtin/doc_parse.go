@@ -227,13 +227,25 @@ func docParseHandler(eg *security.EgressGuard) packs.HandlerFunc {
 		if len(formats) == 0 {
 			formats = []string{"md"}
 		}
+		// Normalize natural-language aliases. Models default to
+		// "markdown" / "plaintext" because those are the human-facing
+		// names; accept them and map onto Docling's terse internal
+		// enum so the LLM doesn't have to internalize a quirk. Issue #91.
+		for i, f := range formats {
+			switch f {
+			case "markdown":
+				formats[i] = "md"
+			case "plaintext", "plain":
+				formats[i] = "text"
+			}
+		}
 		for _, f := range formats {
 			switch f {
 			case "md", "text", "html":
 			default:
 				return nil, &packs.PackError{
 					Code:    packs.CodeInvalidInput,
-					Message: fmt.Sprintf("unsupported format %q; use md, text, or html", f),
+					Message: fmt.Sprintf("unsupported format %q; use md (or markdown), text (or plaintext), or html", f),
 				}
 			}
 		}

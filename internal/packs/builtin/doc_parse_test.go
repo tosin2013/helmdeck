@@ -268,6 +268,46 @@ func TestDocParse_CustomFormatsForwarded(t *testing.T) {
 	}
 }
 
+func TestDocParse_NaturalLanguageFormatAliases(t *testing.T) {
+	// Issue #91: models default to "markdown"/"plaintext" because that's
+	// the natural value. Accept those as aliases for "md"/"text".
+	var gotFormats []string
+	srv := stubDocling(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var in doclingRequest
+		_ = json.Unmarshal(body, &in)
+		gotFormats = in.Options.ToFormats
+		_, _ = w.Write([]byte(`{
+			"document": {"md_content": "md", "text_content": "txt"},
+			"status": "success"
+		}`))
+	})
+	defer srv.Close()
+	enableDocling(t, srv.URL)
+
+	eng := packs.New()
+	pack := DocParse(permissiveEgressGuard())
+	_, err := eng.Execute(context.Background(), pack, json.RawMessage(`{
+		"source_url":"https://example.com/x.pdf",
+		"formats":["markdown","plaintext"]
+	}`))
+	if err != nil {
+		t.Fatalf("alias formats should be accepted: %v", err)
+	}
+	// After normalization the request to Docling should use md+text.
+	if !containsString(gotFormats, "md") {
+		t.Errorf("'markdown' should normalize to 'md' on the wire: %v", gotFormats)
+	}
+	if !containsString(gotFormats, "text") {
+		t.Errorf("'plaintext' should normalize to 'text' on the wire: %v", gotFormats)
+	}
+	for _, f := range gotFormats {
+		if f == "markdown" || f == "plaintext" {
+			t.Errorf("aliases should be normalized before forwarding to Docling: %v", gotFormats)
+		}
+	}
+}
+
 func TestDocParse_RejectsExoticFormat(t *testing.T) {
 	enableDocling(t, "http://unused")
 	eng := packs.New()

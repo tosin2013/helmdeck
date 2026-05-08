@@ -32,7 +32,7 @@ When the toggle is off, the pack returns `invalid_input: doc.parse is disabled (
 | `source_url` | `string` | one of | — | Absolute http(s) URL. Egress-guarded. *(Currently broken; see Known Issue above.)* |
 | `source_b64` | `string` | one of | — | Base64-encoded document bytes. Skips egress (never hits public network). |
 | `filename` | `string` | when `source_b64` set | — | File extension picks the parser (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.png`, `.jpg`). |
-| `formats` | `array` | no | `["md"]` | Output formats to request. Closed-set: `md`, `text`, `html`. `md` is always force-included. |
+| `formats` | `array` | no | `["md"]` | Output formats. Accepts `md` (or `markdown`), `text` (or `plaintext`/`plain`), `html`. Aliases normalize on the way in (issue [#91](https://github.com/tosin2013/helmdeck/issues/91)). `md` is always force-included so the output schema's `markdown` field is non-empty. |
 | `do_ocr` | `boolean` | no | `true` | Run OCR over embedded images during parsing. |
 | `ocr_lang` | `array` | no | `["en"]` | Languages for embedded-image OCR (Docling's tesseract langs). |
 
@@ -54,6 +54,8 @@ Exactly one of `source_url` / `source_b64` must be set. Base64 payload capped at
 **None.** The Docling service runs on the private `baas-net` and accepts unauthenticated calls from the control plane.
 
 ## Use it from your agent (OpenClaw chat-UI worked example)
+
+> 📌 **The transcript below predates issue [#91](https://github.com/tosin2013/helmdeck/issues/91)'s fix.** The model emitted `formats: ["markdown"]` and got bounced. The pack now accepts `"markdown"` as an alias for `"md"` — fresh sessions converge on the first call. Captured here for historical evidence of the friction.
 
 **Prompt** (sent in OpenClaw chat UI / `openclaw-cli agent`):
 

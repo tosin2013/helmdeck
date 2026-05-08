@@ -12,14 +12,30 @@ Why literal not regex: weak open-weight models routinely produce broken regex (e
 
 ## Inputs
 
+Two shapes are accepted (issue [#90](https://github.com/tosin2013/helmdeck/issues/90)). Pick whichever matches the model you're running — gpt-oss / Claude default to the Anthropic batch shape, helmdeck-aware prompts can use the native shape.
+
+**Shape 1 — helmdeck native (single edit):**
+
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
 | `clone_path` | `string` | yes | — | Path-safety-guarded. |
 | `path` | `string` | yes | — | Relative file path. |
 | `search` | `string` | yes | — | The exact bytes to find. **Literal**, not regex. |
 | `replace` | `string` | yes | — | The replacement bytes. |
-| `max_occurrences` | `number` | no | unlimited | Cap the number of replacements (useful when the agent only wants to change the first N). |
+| `occurrences` | `number` | no | unlimited | Cap replacements (per edit when batched). |
 | `_session_id` | `string` | yes (chained) | — | From `repo.fetch`. |
+
+**Shape 2 — Anthropic CodingAgent batch (multi-edit):**
+
+| Field | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `clone_path` | `string` | yes | — | Same as above. |
+| `path` | `string` | yes | — | Same as above. |
+| `edits` | `array` | yes | — | Array of `{search, replace}` OR `{oldText, newText}` items. Edits apply in order to the same in-memory copy of the file before write-back. |
+| `occurrences` | `number` | no | unlimited | Applies as a cap to **each** edit independently. |
+| `_session_id` | `string` | yes (chained) | — | Same as above. |
+
+If both shapes appear in one call, `edits[]` wins. If any edit's search string isn't found, the entire batch fails before write-back — the file is left untouched.
 
 ## Outputs
 
@@ -33,6 +49,8 @@ Why literal not regex: weak open-weight models routinely produce broken regex (e
 **None.**
 
 ## Use it from your agent (OpenClaw chat-UI worked example)
+
+> 📌 **The transcript below predates issues [#90](https://github.com/tosin2013/helmdeck/issues/90) and [#92](https://github.com/tosin2013/helmdeck/issues/92)'s fixes.** It shows the model burning 4 retries against a strict schema (Anthropic `edits[].{oldText,newText}` was rejected) AND silently losing its working file because `_session_id` was dropped between `fs.write` and `fs.patch`. Both issues are fixed now: the pack accepts the Anthropic shape natively, and SKILLS.md teaches the session-chaining contract. Captured here for historical evidence — re-run on a current build and a fresh agent should converge in one call.
 
 **Prompt** (sent in OpenClaw chat UI / `openclaw-cli agent`):
 

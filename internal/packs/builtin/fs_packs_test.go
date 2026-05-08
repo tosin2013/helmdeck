@@ -186,6 +186,83 @@ func TestFSPatch_NoMatch(t *testing.T) {
 	}
 }
 
+func TestFSPatch_AnthropicEditsShape(t *testing.T) {
+	// Issue #90: gpt-oss / Claude default to the Anthropic CodingAgent
+	// schema {edits: [{oldText, newText}]} — accept it natively.
+	original := "package main\n\nconst Version = \"alpha\"\nconst Build = \"dev\"\n"
+	ex := &recordingExecutor{replies: []session.ExecResult{
+		{Stdout: []byte("48\n")},   // wc -c
+		{Stdout: []byte(original)}, // cat
+		{ExitCode: 0},              // write back
+	}}
+	eng := newFSEngine(t, ex)
+	body := `{
+	  "clone_path": "/tmp/helmdeck-clone-X1",
+	  "path":       "main.go",
+	  "edits": [
+	    {"oldText": "alpha", "newText": "beta"},
+	    {"oldText": "dev",   "newText": "prod"}
+	  ]
+	}`
+	res, err := eng.Execute(context.Background(), FSPatch(), json.RawMessage(body))
+	if err != nil {
+		t.Fatalf("Anthropic edits[] shape should be accepted: %v", err)
+	}
+	patched := string(ex.calls[2].Stdin)
+	if !strings.Contains(patched, "beta") || strings.Contains(patched, "alpha") {
+		t.Errorf("first edit not applied: %s", patched)
+	}
+	if !strings.Contains(patched, "prod") || strings.Contains(patched, "\"dev\"") {
+		t.Errorf("second edit not applied: %s", patched)
+	}
+	var out struct {
+		Applied int `json:"applied"`
+	}
+	_ = json.Unmarshal(res.Output, &out)
+	if out.Applied != 2 {
+		t.Errorf("applied = %d, want 2 (one per edit)", out.Applied)
+	}
+}
+
+func TestFSPatch_RejectsBothShapesEmpty(t *testing.T) {
+	eng := newFSEngine(t, &recordingExecutor{})
+	body := `{"clone_path": "/tmp/helmdeck-clone-X1", "path": "x"}`
+	_, err := eng.Execute(context.Background(), FSPatch(), json.RawMessage(body))
+	if err == nil {
+		t.Fatal("expected error when neither {search} nor {edits} provided")
+	}
+	pe, _ := err.(*packs.PackError)
+	if pe == nil || pe.Code != packs.CodeInvalidInput {
+		t.Errorf("expected invalid_input, got %v", err)
+	}
+}
+
+func TestFSPatch_EditsBatchAtomicNoMatch(t *testing.T) {
+	// If any edit in the batch has zero matches the whole call fails
+	// before writing back — agents see which edit was bad.
+	original := "alpha and gamma"
+	ex := &recordingExecutor{replies: []session.ExecResult{
+		{Stdout: []byte("16\n")},
+		{Stdout: []byte(original)},
+	}}
+	eng := newFSEngine(t, ex)
+	body := `{
+	  "clone_path": "/tmp/helmdeck-clone-X1",
+	  "path":       "x",
+	  "edits": [
+	    {"oldText": "alpha", "newText": "beta"},
+	    {"oldText": "delta", "newText": "epsilon"}
+	  ]
+	}`
+	_, err := eng.Execute(context.Background(), FSPatch(), json.RawMessage(body))
+	if err == nil {
+		t.Fatal("expected error when one of multiple edits has no match")
+	}
+	if !strings.Contains(err.Error(), "edits[1]") {
+		t.Errorf("error should identify which edit failed: %v", err)
+	}
+}
+
 func TestFSPatch_RespectsOccurrenceLimit(t *testing.T) {
 	original := "Foo Foo Foo Foo"
 	ex := &recordingExecutor{replies: []session.ExecResult{

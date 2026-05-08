@@ -242,20 +242,36 @@ func fsWriteHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMe
 // Not a regex — agents tend to write subtly wrong regexes and the
 // resulting silent miss is a worse failure mode than "your search
 // string didn't match".
+//
+// Two input shapes are accepted (issue #90). Both are equivalent on
+// the wire — the handler normalizes to a list of edits applied in
+// order:
+//
+//  1. helmdeck native, single edit:
+//     {"clone_path":..., "path":..., "search":"a", "replace":"b"}
+//
+//  2. Anthropic CodingAgent batch shape (what gpt-oss / Claude default
+//     to without explicit prompting):
+//     {"clone_path":..., "path":..., "edits":[{"oldText":"a","newText":"b"}, ...]}
+//
+// Accepting both means a fresh agent session converges on the right
+// call on its first try instead of burning 4 retries against a strict
+// schema. Backward compatible with existing single-edit callers.
 func FSPatch() *packs.Pack {
 	return &packs.Pack{
 		Name:        "fs.patch",
 		Version:     "v1",
-		Description: "Replace a literal string inside a file at a session-local clone path.",
+		Description: "Replace literal strings inside a file at a session-local clone path. Pass {search, replace} for a single edit, OR {edits: [{oldText, newText}, ...]} for a batch.",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
-			Required: []string{"clone_path", "path", "search", "replace"},
+			Required: []string{"clone_path", "path"},
 			Properties: map[string]string{
 				"clone_path":  "string",
 				"path":        "string",
 				"search":      "string",
 				"replace":     "string",
 				"occurrences": "number",
+				"edits":       "array",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -269,12 +285,23 @@ func FSPatch() *packs.Pack {
 	}
 }
 
+// fsPatchEdit is one search/replace pair. Accepts the helmdeck-native
+// {search, replace} OR the Anthropic-native {oldText, newText}; the
+// handler picks whichever is non-empty per item.
+type fsPatchEdit struct {
+	Search  string `json:"search"`
+	Replace string `json:"replace"`
+	OldText string `json:"oldText"`
+	NewText string `json:"newText"`
+}
+
 type fsPatchInput struct {
-	ClonePath   string `json:"clone_path"`
-	Path        string `json:"path"`
-	Search      string `json:"search"`
-	Replace     string `json:"replace"`
-	Occurrences int    `json:"occurrences"` // 0 = no cap
+	ClonePath   string        `json:"clone_path"`
+	Path        string        `json:"path"`
+	Search      string        `json:"search"`
+	Replace     string        `json:"replace"`
+	Occurrences int           `json:"occurrences"` // 0 = no cap; applies per edit
+	Edits       []fsPatchEdit `json:"edits"`
 }
 
 func fsPatchHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
@@ -285,9 +312,35 @@ func fsPatchHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMe
 	if ec.Exec == nil {
 		return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 	}
-	if in.Search == "" {
-		return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "search must not be empty"}
+
+	// Normalize input into a single ordered list of (search, replace)
+	// pairs. Per issue #90 we accept both the native single-edit shape
+	// and the Anthropic batch shape; pick whichever the caller used.
+	type editPair struct{ search, replace string }
+	var edits []editPair
+	switch {
+	case len(in.Edits) > 0:
+		for i, e := range in.Edits {
+			s, r := e.Search, e.Replace
+			if s == "" && e.OldText != "" {
+				s, r = e.OldText, e.NewText
+			}
+			if s == "" {
+				return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+					Message: fmt.Sprintf("edits[%d]: search/oldText must not be empty", i)}
+			}
+			edits = append(edits, editPair{s, r})
+		}
+		// If both shapes are sent in the same call, prefer edits[].
+		// Don't error — be forgiving — but ignore the top-level
+		// search/replace so we don't apply anything twice.
+	case in.Search != "":
+		edits = []editPair{{in.Search, in.Replace}}
+	default:
+		return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: "must provide either {search, replace} or {edits: [{oldText, newText}, ...]}"}
 	}
+
 	full, perr := safeJoin(in.ClonePath, in.Path)
 	if perr != nil {
 		return nil, perr
@@ -310,29 +363,34 @@ func fsPatchHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMe
 	if err != nil || readRes.ExitCode != 0 {
 		return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: "cat failed"}
 	}
-	original := string(readRes.Stdout)
-	count := strings.Count(original, in.Search)
-	if count == 0 {
-		return nil, &packs.PackError{Code: packs.CodeInvalidInput,
-			Message: "search string not found in file"}
+	content := string(readRes.Stdout)
+
+	// Apply each edit in order. occurrences caps EACH edit (matches
+	// single-edit semantics; for batch callers it's typically unset).
+	totalApplied := 0
+	for i, e := range edits {
+		matches := strings.Count(content, e.search)
+		if matches == 0 {
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+				Message: fmt.Sprintf("edits[%d]: search string not found in file", i)}
+		}
+		limit := matches
+		if in.Occurrences > 0 && in.Occurrences < limit {
+			limit = in.Occurrences
+		}
+		content = strings.Replace(content, e.search, e.replace, limit)
+		totalApplied += limit
 	}
-	limit := in.Occurrences
-	if limit <= 0 {
-		limit = count
-	}
-	if limit < count {
-		count = limit
-	}
-	patched := strings.Replace(original, in.Search, in.Replace, limit)
+
 	// Write it back via the same mkdir+cat trick.
-	writeRes, err := runShell(ctx, ec, "cat > "+shellQuote(full), []byte(patched))
+	writeRes, err := runShell(ctx, ec, "cat > "+shellQuote(full), []byte(content))
 	if err != nil || writeRes.ExitCode != 0 {
 		return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 			Message: fmt.Sprintf("write back failed: %s", strings.TrimSpace(string(writeRes.Stderr)))}
 	}
-	sum := sha256.Sum256([]byte(patched))
+	sum := sha256.Sum256([]byte(content))
 	return json.Marshal(map[string]any{
-		"applied": count,
+		"applied": totalApplied,
 		"sha256":  hex.EncodeToString(sum[:]),
 	})
 }

@@ -34,6 +34,14 @@ func registerMCPServerRoute(mux *http.ServeMux, deps Deps) {
 	if deps.Runtime != nil {
 		mcpOpts = append(mcpOpts, mcp.WithSessions(sessionListerAdapter{rt: deps.Runtime}))
 	}
+	if deps.Vault != nil {
+		// helmdeck://voices is gated on the vault — the adapter
+		// resolves the elevenlabs-key credential per call, so without
+		// a vault there's no key to look up. The resource still
+		// reports a useful "not wired" message at read time when no
+		// credential is configured (handled inside ResolveByName).
+		mcpOpts = append(mcpOpts, mcp.WithVoices(newVoiceListerCachingAdapter(deps.Vault, 0)))
+	}
 	server := mcp.NewPackServer(deps.PackRegistry, deps.PackEngine, mcpOpts...)
 	mux.HandleFunc("/api/v1/mcp/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, _, _, err := ws.UpgradeHTTP(r, w)

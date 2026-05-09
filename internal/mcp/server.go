@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -54,6 +55,12 @@ type PackServer struct {
 	// When nil, helmdeck://sessions is omitted from resources/list and
 	// resources/read returns -32602.
 	sessionLister SessionLister
+	// voiceLister, when set, backs the helmdeck://voices resource
+	// (issue #143). Same shape as sessionLister: optional, omitted
+	// from list/read when nil. The implementation typically caches
+	// the underlying ElevenLabs API call on a 1h TTL — the MCP
+	// package itself doesn't enforce caching.
+	voiceLister VoiceLister
 }
 
 // SessionLister is the minimum surface PackServer needs to expose live
@@ -73,6 +80,26 @@ type SessionView struct {
 	Status    string `json:"status"`
 	Image     string `json:"image,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
+}
+
+// VoiceLister is the minimum surface PackServer needs to expose the
+// per-engine voice catalog as the helmdeck://voices resource (#143).
+// Implemented in production by an internal/api adapter wrapping
+// internal/voices.ListVoices with caching; tests use a fake.
+type VoiceLister interface {
+	List(ctx context.Context) ([]VoiceView, error)
+}
+
+// VoiceView is the JSON shape surfaced via helmdeck://voices. Mirrors
+// internal/voices.Voice but lives here to avoid the MCP package
+// importing internal/voices (cyclic-import-safe + keeps the wire
+// shape under MCP's control).
+type VoiceView struct {
+	VoiceID    string            `json:"voice_id"`
+	Name       string            `json:"name"`
+	Labels     map[string]string `json:"labels,omitempty"`
+	PreviewURL string            `json:"preview_url,omitempty"`
+	Source     string            `json:"source"`
 }
 
 // PackServerOption configures a PackServer at construction time.
@@ -96,6 +123,13 @@ func WithInlineImageThreshold(n int64) PackServerOption {
 // without it, only helmdeck://packs is surfaced.
 func WithSessions(s SessionLister) PackServerOption {
 	return func(p *PackServer) { p.sessionLister = s }
+}
+
+// WithVoices registers a voice lister so the server can expose
+// helmdeck://voices as an MCP resource (issue #143). Optional —
+// without it, that resource is omitted from list/read.
+func WithVoices(v VoiceLister) PackServerOption {
+	return func(p *PackServer) { p.voiceLister = v }
 }
 
 // NewPackServer constructs a server bound to a pack registry and
@@ -255,6 +289,14 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 				MimeType:    "application/json",
 			})
 		}
+		if s.voiceLister != nil {
+			resources = append(resources, Resource{
+				URI:         "helmdeck://voices",
+				Name:        "TTS voice catalog",
+				Description: "Available TTS voices (currently ElevenLabs only) with name, labels (accent/gender/use_case), and preview URL. Used by podcast.generate's `speakers` map and slides.narrate's `voice_id`.",
+				MimeType:    "application/json",
+			})
+		}
 		return mk(map[string]any{"resources": resources}, nil)
 
 	case "resources/read":
@@ -303,6 +345,28 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			body, err := json.Marshal(views)
 			if err != nil {
 				return mk(nil, &rpcError{Code: -32603, Message: "encode session list: " + err.Error()})
+			}
+			return mk(map[string]any{
+				"contents": []ResourceContent{
+					{URI: params.URI, MimeType: "application/json", Text: string(body)},
+				},
+			}, nil)
+		case "helmdeck://voices":
+			if s.voiceLister == nil {
+				return mk(nil, &rpcError{Code: -32602, Message: "helmdeck://voices unavailable: voice catalog not wired (set HELMDECK_ELEVENLABS_API_KEY)"})
+			}
+			voices, err := s.voiceLister.List(ctx)
+			if err != nil {
+				return mk(nil, &rpcError{Code: -32603, Message: "list voices: " + err.Error()})
+			}
+			payload := map[string]any{
+				"voices":     voices,
+				"engine":     "elevenlabs",
+				"fetched_at": time.Now().UTC().Format(time.RFC3339),
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				return mk(nil, &rpcError{Code: -32603, Message: "encode voice list: " + err.Error()})
 			}
 			return mk(map[string]any{
 				"contents": []ResourceContent{

@@ -226,6 +226,119 @@ func TestResourcesRead_PropagatesListerError(t *testing.T) {
 	}
 }
 
+// fakeVoiceLister is the test double for the helmdeck://voices resource.
+type fakeVoiceLister struct {
+	out []VoiceView
+	err error
+}
+
+func (f fakeVoiceLister) List(ctx context.Context) ([]VoiceView, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.out, nil
+}
+
+func TestResourcesList_IncludesVoices_WhenListerWired(t *testing.T) {
+	vl := fakeVoiceLister{out: []VoiceView{{VoiceID: "v1", Name: "Rachel", Source: "elevenlabs"}}}
+	write, read, stop := startServerWithOpts(t, WithVoices(vl))
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`)
+	resp := read()
+
+	var got struct {
+		Result struct {
+			Resources []Resource `json:"resources"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	uris := make([]string, len(got.Result.Resources))
+	for i, r := range got.Result.Resources {
+		uris[i] = r.URI
+	}
+	found := false
+	for _, u := range uris {
+		if u == "helmdeck://voices" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("resources/list missing helmdeck://voices; got %v", uris)
+	}
+}
+
+func TestResourcesRead_Voices_HappyPath(t *testing.T) {
+	vl := fakeVoiceLister{out: []VoiceView{
+		{VoiceID: "v1", Name: "Rachel", Labels: map[string]string{"accent": "american", "gender": "female"}, PreviewURL: "https://example.com/r.mp3", Source: "elevenlabs"},
+		{VoiceID: "v2", Name: "Adam", Source: "elevenlabs"},
+	}}
+	write, read, stop := startServerWithOpts(t, WithVoices(vl))
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://voices"}}`)
+	resp := read()
+
+	var got struct {
+		Result struct {
+			Contents []ResourceContent `json:"contents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Result.Contents) != 1 {
+		t.Fatalf("want 1 content block, got %d", len(got.Result.Contents))
+	}
+	if got.Result.Contents[0].URI != "helmdeck://voices" {
+		t.Errorf("URI mismatch: %q", got.Result.Contents[0].URI)
+	}
+	if got.Result.Contents[0].MimeType != "application/json" {
+		t.Errorf("mime mismatch: %q", got.Result.Contents[0].MimeType)
+	}
+	var payload struct {
+		Voices    []VoiceView `json:"voices"`
+		Engine    string      `json:"engine"`
+		FetchedAt string      `json:"fetched_at"`
+	}
+	if err := json.Unmarshal([]byte(got.Result.Contents[0].Text), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(payload.Voices) != 2 {
+		t.Errorf("want 2 voices, got %d", len(payload.Voices))
+	}
+	if payload.Engine != "elevenlabs" {
+		t.Errorf("engine = %q, want elevenlabs", payload.Engine)
+	}
+	if payload.FetchedAt == "" {
+		t.Error("fetched_at should be populated")
+	}
+	if payload.Voices[0].Labels["accent"] != "american" {
+		t.Errorf("labels not round-tripped: %+v", payload.Voices[0])
+	}
+}
+
+func TestResourcesRead_Voices_UnavailableWhenNoLister(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://voices"}}`)
+	resp := read()
+
+	var got struct {
+		Error *rpcError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Error == nil || !strings.Contains(got.Error.Message, "voice catalog not wired") {
+		t.Errorf("expected voice-catalog-not-wired error, got %+v", got.Error)
+	}
+}
+
 func TestInitialize_DeclaresResourcesCapability(t *testing.T) {
 	write, read, stop := startServerWithOpts(t)
 	defer stop()

@@ -40,6 +40,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/session"
 	"github.com/tosin2013/helmdeck/internal/vault"
 	"github.com/tosin2013/helmdeck/internal/vision"
+	"github.com/tosin2013/helmdeck/internal/voices"
 )
 
 const (
@@ -429,47 +430,24 @@ func elevenLabsTTS(ctx context.Context, apiKey, voiceID, modelID, text string) (
 	return body, nil
 }
 
-// pickRandomVoice calls GET /v1/voices and picks from the first 5.
+// pickRandomVoice fetches the operator's voice catalog via
+// internal/voices and returns one VoiceID picked at random from the
+// first 5. The full ListVoices result is not cached here — slides.narrate
+// is the only caller and runs once per pack invocation; the
+// helmdeck://voices MCP resource (#143) does its own caching.
 func pickRandomVoice(ctx context.Context, apiKey string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, elevenLabsBaseURL+"/v1/voices", nil)
+	list, err := voices.ListVoices(ctx, apiKey)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("xi-api-key", apiKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("voices %d: %s", resp.StatusCode, truncStr(string(body), 256))
-	}
-
-	var parsed struct {
-		Voices []struct {
-			VoiceID string `json:"voice_id"`
-			Name    string `json:"name"`
-		} `json:"voices"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", err
-	}
-	if len(parsed.Voices) == 0 {
+	if len(list) == 0 {
 		return "", fmt.Errorf("no voices available")
 	}
-	n := len(parsed.Voices)
+	n := len(list)
 	if n > 5 {
 		n = 5
 	}
-	pick := rand.Intn(n)
-	return parsed.Voices[pick].VoiceID, nil
+	return list[rand.Intn(n)].VoiceID, nil
 }
 
 // --- ffmpeg helpers ------------------------------------------------------

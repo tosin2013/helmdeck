@@ -37,7 +37,7 @@ Three audiences specifically:
 
 ## Status
 
-**v0.8.0 shipped** — 36 capability packs, credential vault, repo packs,
+**v0.10.0 shipped** — 38 capability packs (incl. blog.publish + podcast.generate), credential vault, repo packs,
 code-edit loop, OpenTelemetry GenAI instrumentation, and the full
 Management UI are all live. Phase 6.5 (MCP Server Hosting & Pack
 Evolution) is complete; next milestone is **v1.0 — Kubernetes & GA**
@@ -172,7 +172,7 @@ roadmap.
 
 ## Built-in Capability Packs
 
-36 packs ship in the box. Each one hides a multi-step workflow
+38 packs ship in the box. Each one hides a multi-step workflow
 behind a single typed JSON-Schema call so weak open-weight models
 can drive it as reliably as frontier models. The full input/output
 contract for every pack lives in [`docs/PACKS.md`](docs/PACKS.md).

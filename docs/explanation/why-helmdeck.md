@@ -12,7 +12,7 @@ changefreq: monthly
 
 ## The headline argument
 
-**Helmdeck lets a $0.10/1M-token model do work that otherwise needs a $3/1M-token model.** The mechanism is straightforward: helmdeck's 36 capability packs absorb the ambiguity that would otherwise burn LLM tokens. Deterministic Go code handles the side-effects (browser navigation, git operations, document parsing, file edits, vault credential resolution). The LLM only contributes orchestration — picking which pack to call and what arguments to pass.
+**Helmdeck lets a $0.10/1M-token model do work that otherwise needs a $3/1M-token model.** The mechanism is straightforward: helmdeck's 38 capability packs absorb the ambiguity that would otherwise burn LLM tokens. Deterministic Go code handles the side-effects (browser navigation, git operations, document parsing, file edits, vault credential resolution). The LLM only contributes orchestration — picking which pack to call and what arguments to pass.
 
 For workflows that are repetitive enough to have a pack — browser scraping, code edits, GitHub triage, document parsing, slide narration, desktop automation — this is a 5–60× per-task cost reduction depending on the workflow, plus the outputs are correct on first try more often.
 
@@ -169,6 +169,6 @@ If a community reproduction surfaces a real discrepancy, this page gets updated 
 - [Get started — install helmdeck](/tutorials/install-cli)
 - [OpenClaw integration (validated end-to-end)](/integrations/openclaw)
 - [SKILLS.md — the agent skill bundle](/integrations/SKILLS)
-- [Pack catalog](/PACKS) — the 36 capability packs the comparisons use
+- [Pack catalog](/PACKS) — the 38 capability packs the comparisons use
 - [Helmdeck blog](/blog) — short-form posts including the headline cost-positioning piece
 - [Architecture decisions](/adrs) — the structural rationale ADRs (especially ADR 003 on weak-model-first design and ADR 035 on host-don't-rebuild)

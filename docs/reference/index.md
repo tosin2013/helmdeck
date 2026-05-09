@@ -15,7 +15,7 @@ Information-oriented lookup. These pages are precise, complete, and dry — opti
 ## Pack catalog
 
 - **[PACKS](../PACKS.md)** — input/output contract for every shipped capability pack.
-- **[SKILLS](../integrations/SKILLS.md)** — agent-facing reference. Load this into your MCP client's system prompt so the LLM knows how to use all 36 packs, retry transient errors, and chain sessions.
+- **[SKILLS](../integrations/SKILLS.md)** — agent-facing reference. Load this into your MCP client's system prompt so the LLM knows how to use all 38 packs, retry transient errors, and chain sessions.
 - **[Integrations index](../integrations/README.md)** — sidecar topology and per-client guide map.
 
 ## Architecture Decisions

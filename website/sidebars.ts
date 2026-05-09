@@ -19,6 +19,9 @@ const sidebars: SidebarsConfig = {
         'howto/upgrade-helmdeck',
         'howto/register-with-mcp-clients',
         'howto/watch-agent-via-vnc',
+        'howto/manage-vault-credentials',
+        'howto/configure-llm-providers',
+        'howto/inspect-audit-logs',
       ],
     },
     {

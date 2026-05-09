@@ -8,7 +8,7 @@ slug: /reference/packs/
 
 One page per shipped pack. Each page covers what the pack does, the input/output schema, vault credentials it depends on, how to invoke it from the CLI today and from the Management UI when that lands, the closed set of typed error codes it can return, and how it composes with other packs via session chaining.
 
-For a quick-lookup summary across all 36 packs (just the input/output contract), see **[`PACKS.md`](/PACKS)**. For agent-facing prompt guidance, see **[`SKILLS.md`](/integrations/SKILLS)**. This per-pack reference is the deep view.
+For a quick-lookup summary across all 38 packs (just the input/output contract), see **[`PACKS.md`](/PACKS)**. For agent-facing prompt guidance, see **[`SKILLS.md`](/integrations/SKILLS)**. This per-pack reference is the deep view.
 
 ## By family
 

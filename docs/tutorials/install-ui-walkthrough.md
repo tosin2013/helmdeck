@@ -54,7 +54,7 @@ Lists every MCP server helmdeck knows about — both auto-discovered (the built-
 
 ### 5. Capability Packs (`/admin/packs`)
 
-The **read-only catalog** of all 36 packs grouped by namespace (browser, web, repo, github, slides, doc, desktop, vision, fs, shell, http, research, language). Click any pack to see its schema. There is no in-UI execution today (Test Runner is [tracked as T606a](/TASKS#phase-6--management-ui-weeks-1720)) — for now, drive packs from your MCP client or a `curl`.
+The **read-only catalog** of all 38 packs grouped by namespace (browser, web, repo, github, slides, doc, desktop, vision, fs, shell, http, research, language, blog, podcast, content). Click any pack to see its schema. There is no in-UI execution today (Test Runner is [tracked as T606a](/TASKS#phase-6--management-ui-weeks-1720)) — for now, drive packs from your MCP client or a `curl`.
 
 ### 6. Credential Vault (`/admin/vault`)
 

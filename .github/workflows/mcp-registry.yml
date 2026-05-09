@@ -1,0 +1,133 @@
+name: Publish to MCP Registry
+
+# Auto-publishes .mcp/server.json to registry.modelcontextprotocol.io
+# whenever a v* tag is pushed. Authenticates via GitHub OIDC against
+# the io.github.tosin2013/* namespace (no PAT or stored secret needed —
+# the id-token: write permission is sufficient).
+#
+# Manual run is also supported via workflow_dispatch — useful when you
+# need to re-publish without cutting a tag (e.g. metadata-only fix).
+#
+# What this workflow does NOT do:
+#   - Submit to Smithery, mcp.so, Glama, PulseMCP. Those are separate
+#     registries with separate submission flows. mcp.so / Glama /
+#     PulseMCP auto-ingest from the official registry on a schedule, so
+#     publishing here is enough for those. Smithery requires a
+#     smithery.yaml + a hosted-runtime story we don't have today; see
+#     docs/howto/register-with-mcp-clients.md for the manual path.
+#   - Submit a PR to modelcontextprotocol/servers (the awesome-list).
+#     That repo prefers a single PR adding the row by hand; not worth
+#     automating for one entry.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: 'Version to publish (e.g. 0.10.0). If empty, uses the version field already in .mcp/server.json'
+        required: false
+        type: string
+
+jobs:
+  publish:
+    name: Publish server.json
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # Required for GitHub OIDC authentication
+      contents: read    # Required for actions/checkout
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install mcp-publisher
+        run: |
+          set -euo pipefail
+          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+          ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_${OS}_${ARCH}.tar.gz" \
+            | tar xz mcp-publisher
+          chmod +x mcp-publisher
+          ./mcp-publisher --help | head -5
+
+      - name: Sync version with the tag
+        run: |
+          set -euo pipefail
+          # On a tag push: derive version from the ref (strip leading 'v').
+          # On manual dispatch: use the input override if provided, else
+          # leave the version field alone.
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="${{ inputs.version_override }}"
+          fi
+
+          if [[ -n "$VERSION" ]]; then
+            echo "Setting .mcp/server.json version to $VERSION"
+            jq --arg v "$VERSION" \
+               '.version = $v
+                | .packages |= map(.version = $v)' \
+               .mcp/server.json > .mcp/server.tmp.json
+            mv .mcp/server.tmp.json .mcp/server.json
+          fi
+
+          # Show the final document for the workflow log — easy to audit
+          # what got submitted by reading the run output.
+          echo "--- final .mcp/server.json ---"
+          cat .mcp/server.json
+
+      - name: Validate server.json against the upstream schema
+        run: |
+          set -euo pipefail
+          npm init -y >/dev/null
+          npm install --silent ajv ajv-formats
+          curl -fsSL https://raw.githubusercontent.com/modelcontextprotocol/registry/main/docs/reference/server-json/draft/server.schema.json \
+            -o schema.json
+          node -e "
+            const Ajv = require('ajv');
+            const addFormats = require('ajv-formats');
+            const fs = require('fs');
+            const schema = JSON.parse(fs.readFileSync('schema.json'));
+            const data = JSON.parse(fs.readFileSync('.mcp/server.json'));
+            const ajv = new Ajv({ strict: false, allErrors: true });
+            addFormats(ajv);
+            const validate = ajv.compile(schema);
+            if (!validate(data)) {
+              console.error('Schema validation FAILED:');
+              console.error(JSON.stringify(validate.errors, null, 2));
+              process.exit(1);
+            }
+            console.log('Schema VALID ✓');
+          "
+
+      - name: Authenticate via GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: ./mcp-publisher publish .mcp/server.json
+
+      - name: Workflow summary
+        if: always()
+        run: |
+          NAME=$(jq -r .name .mcp/server.json)
+          VERSION=$(jq -r .version .mcp/server.json)
+          {
+            echo "### MCP Registry submission"
+            echo ""
+            echo "- **Server:** \`$NAME\`"
+            echo "- **Version:** \`$VERSION\`"
+            echo "- **Status:** ${{ job.status }}"
+            echo ""
+            if [[ "${{ job.status }}" == "success" ]]; then
+              echo "Verify the listing at:"
+              echo "- API: https://registry.modelcontextprotocol.io/v0/servers?search=$(echo $NAME | sed 's|/|%2F|g')"
+              echo "- Web: https://registry.modelcontextprotocol.io/servers/$NAME"
+              echo ""
+              echo "Downstream aggregators (mcp.so, Glama, PulseMCP) typically ingest within 24h."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -32,7 +32,11 @@ Helmdeck ships its agent instructions as a native **OpenClaw Skill** at `skills/
    - If a release introduces a destructive schema change, flag it under `### Breaking` in `CHANGELOG.md` AND link from the upgrade howto's §7 "Version-specific notes" table
    - Pack-input-schema changes that drop a previously-required field, or change a closed-set value, are also `### Breaking` — agents written against the old schema will error
    - Post-tag, smoke-test the upgrade against a snapshot of v<new-1>'s `helmdeck.db` (a manual cross-version run; the automated CI smoke is tracked at the Phase 7 audit issue list under "upgrade smoke-test in CI")
-8. **Re-publish to the official MCP Registry** — bump the `version` field in `.mcp/server.json` to match the new tag, then run [`scripts/publish-to-mcp-registry.sh`](../scripts/publish-to-mcp-registry.sh) from a maintainer shell with `gh` access. The script builds `mcp-publisher` from source, validates the JSON against the draft schema, runs interactive GitHub OAuth, and publishes. Verify the listing at `https://registry.modelcontextprotocol.io/servers/io.github.tosin2013/helmdeck` after. Downstream aggregators (mcp.so, Glama, PulseMCP) ingest within 24h. Until automated via GitHub Actions (deferred to a future release), this is a manual per-release step.
+8. **Re-publish to the official MCP Registry** — automated via [`.github/workflows/mcp-registry.yml`](../.github/workflows/mcp-registry.yml). The workflow fires on every `v*` tag push: it pulls the tag's version into `.mcp/server.json`, schema-validates the document, authenticates to `registry.modelcontextprotocol.io` via GitHub OIDC (no PAT needed — the workflow's `id-token: write` permission is enough), and publishes. Watch the run; the workflow summary prints the live listing URL. Downstream aggregators (mcp.so, Glama, PulseMCP) ingest within 24h.
+
+   If the workflow fails or you need to re-publish without cutting a new tag, two fallback paths:
+   - **`workflow_dispatch`** — go to the Actions tab → "Publish to MCP Registry" → "Run workflow" with an optional `version_override` input
+   - **Local script** — [`scripts/publish-to-mcp-registry.sh`](../scripts/publish-to-mcp-registry.sh) builds the publisher locally, runs interactive GitHub OAuth, and publishes from a maintainer shell. Useful if the GitHub Actions OIDC path breaks for any reason.
 
 **Related:**
 - [OpenClaw upgrade runbook](integrations/openclaw-upgrade-runbook.md) — the operator-facing sync procedure

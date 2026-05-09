@@ -38,8 +38,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/tosin2013/helmdeck-mcp",
-      "version": "0.10.1",
+      "identifier": "ghcr.io/tosin2013/helmdeck-mcp:0.10.1",
       "transport": {
         "type": "stdio"
       },

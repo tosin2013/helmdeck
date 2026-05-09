@@ -69,9 +69,20 @@ jobs:
 
           if [[ -n "$VERSION" ]]; then
             echo "Setting .mcp/server.json version to $VERSION"
-            jq --arg v "$VERSION" \
-               '.version = $v
-                | .packages |= map(.version = $v)' \
+            # Two conventions per ADR 030 + the registry validators:
+            #   - npm packages: identifier=name, version=$v as a separate field
+            #   - oci packages: version is embedded in identifier as :tag, no
+            #     separate version field allowed
+            jq --arg v "$VERSION" '
+              .version = $v
+              | .packages |= map(
+                  if .registryType == "oci" then
+                    .identifier = (.identifier | sub(":[^:/]+$"; "")) + ":" + $v
+                    | del(.version)
+                  else
+                    .version = $v
+                  end
+                )' \
                .mcp/server.json > .mcp/server.tmp.json
             mv .mcp/server.tmp.json .mcp/server.json
           fi

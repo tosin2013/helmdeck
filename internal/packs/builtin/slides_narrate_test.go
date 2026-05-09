@@ -311,6 +311,83 @@ func TestSlidesNarrate_FfmpegConcatFailure(t *testing.T) {
 	}
 }
 
+// TestSlidesNarrate_FfmpegSegmentFailure_FullStderrSurfaced (regression
+// for #140) asserts that a per-segment ffmpeg failure (a) returns the
+// full stderr in the error message up to the new 4096-byte cap, and
+// (b) persists the unredacted stderr to the artifact store with a
+// "ffmpeg-stderr-segment-NNN.txt" key referenced from the message.
+//
+// Pre-#140 the inline message was capped at 512 bytes and the rest was
+// gone — operators couldn't see the actual ffmpeg complaint (e.g. a
+// pixel-format mismatch from the Marp PNG renderer). This test pins
+// the new behavior so a future refactor doesn't quietly re-truncate.
+func TestSlidesNarrate_FfmpegSegmentFailure_FullStderrSurfaced(t *testing.T) {
+	// Build a long stderr that exceeds the OLD 512-byte cap so we
+	// can assert the new 4096-byte cap is in effect AND that the
+	// artifact persists the full payload.
+	longStderr := strings.Repeat("frame_too_big_blah_blah ", 200) // ~4800 bytes
+	pack := SlidesNarrate(nil, nil)
+	artifacts := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack:    pack,
+		Input:   json.RawMessage(`{"markdown":"---\nmarp: true\n---\n\n# Slide"}`),
+		Session: &session.Session{ID: "s"},
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec: func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+			script := ""
+			if len(req.Cmd) >= 3 {
+				script = req.Cmd[2]
+			}
+			switch {
+			case strings.Contains(script, "-loop"):
+				return session.ExecResult{ExitCode: 1, Stderr: []byte(longStderr)}, nil
+			case strings.Contains(script, "ffprobe"):
+				return session.ExecResult{Stdout: []byte("5.0\n")}, nil
+			default:
+				return session.ExecResult{}, nil
+			}
+		},
+		Artifacts: artifacts,
+	}
+	_, err := pack.Handler(context.Background(), ec)
+	pe := &packs.PackError{}
+	if !errors.As(err, &pe) || pe.Code != packs.CodeHandlerFailed {
+		t.Fatalf("want handler_failed, got %v", err)
+	}
+	// (a) Inline message contains > 512 bytes of stderr so the old cap
+	// would have lost diagnostic info we now keep.
+	if len(pe.Message) <= 512 {
+		t.Errorf("error message length = %d, want > 512 (stderr should no longer truncate at 512): %q",
+			len(pe.Message), pe.Message)
+	}
+	// (b) Message references a stored artifact key for the full stderr.
+	if !strings.Contains(pe.Message, "ffmpeg-stderr-segment-") {
+		t.Errorf("message should reference stderr artifact key: %q", pe.Message)
+	}
+	// And the artifact actually exists in the store with the full payload.
+	listed, _ := artifacts.ListForPack(context.Background(), "slides.narrate")
+	var stderrArt *packs.Artifact
+	for i := range listed {
+		if strings.Contains(listed[i].Key, "ffmpeg-stderr-segment-") {
+			stderrArt = &listed[i]
+			break
+		}
+	}
+	if stderrArt == nil {
+		t.Fatal("ffmpeg-stderr-segment-* artifact was not stored")
+	}
+	body, _, err := artifacts.Get(context.Background(), stderrArt.Key)
+	if err != nil {
+		t.Fatalf("get artifact: %v", err)
+	}
+	if !strings.Contains(string(body), longStderr) {
+		t.Error("stored artifact does not contain the full stderr payload")
+	}
+	if !strings.Contains(string(body), "# command:") {
+		t.Error("stored artifact should include the failing ffmpeg command line")
+	}
+}
+
 func TestFormatTimestamp(t *testing.T) {
 	cases := []struct {
 		secs float64

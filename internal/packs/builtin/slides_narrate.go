@@ -300,8 +300,11 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFun
 			res, err := ec.Exec(ctx, session.ExecRequest{Cmd: []string{"sh", "-c", cmd}})
 			if err != nil || res.ExitCode != 0 {
 				stderr := strings.TrimSpace(string(res.Stderr))
+				artKey := persistFfmpegStderr(ctx, ec, fmt.Sprintf("ffmpeg-stderr-segment-%03d.txt", i),
+					cmd, res.Stderr)
 				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-					Message: fmt.Sprintf("ffmpeg segment %d failed (exit %d): %s", i, res.ExitCode, truncStr(stderr, 512))}
+					Message: fmt.Sprintf("ffmpeg segment %d failed (exit %d): %s%s",
+						i, res.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))}
 			}
 		}
 
@@ -320,8 +323,11 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFun
 		})
 		if err != nil || concatRes.ExitCode != 0 {
 			stderr := strings.TrimSpace(string(concatRes.Stderr))
+			artKey := persistFfmpegStderr(ctx, ec, "ffmpeg-stderr-concat.txt",
+				"ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt -c copy /tmp/final.mp4", concatRes.Stderr)
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-				Message: fmt.Sprintf("ffmpeg concat failed (exit %d): %s", concatRes.ExitCode, truncStr(stderr, 512))}
+				Message: fmt.Sprintf("ffmpeg concat failed (exit %d): %s%s",
+					concatRes.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))}
 		}
 
 		// 8. Read back the final video.
@@ -583,4 +589,32 @@ func truncStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// persistFfmpegStderr writes the full ffmpeg stderr (and the command
+// line that produced it) to the artifact store so operators can grab
+// the unredacted output even when the inline error message gets
+// truncated. Returns the artifact key, or "" if the artifact store is
+// unavailable or the write fails — never errors the caller.
+func persistFfmpegStderr(ctx context.Context, ec *packs.ExecutionContext, name, cmd string, stderr []byte) string {
+	if ec == nil || ec.Artifacts == nil {
+		return ""
+	}
+	body := []byte("# command:\n" + cmd + "\n\n# stderr:\n")
+	body = append(body, stderr...)
+	art, err := ec.Artifacts.Put(ctx, "slides.narrate", name, body, "text/plain")
+	if err != nil {
+		return ""
+	}
+	return art.Key
+}
+
+// artifactSuffix renders the " (full stderr: <key>)" tail used in
+// ffmpeg failure messages. Empty string when no artifact was stored,
+// so the message stays clean in unit tests that don't wire artifacts.
+func artifactSuffix(key string) string {
+	if key == "" {
+		return ""
+	}
+	return " (full stderr: " + key + ")"
 }

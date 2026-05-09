@@ -62,23 +62,20 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 
 ## Use it from your agent (OpenClaw chat-UI worked example)
 
-> 📌 **The transcript below captures the silent-fallback path** (`has_narration: false`) because the `elevenlabs-key` wasn't in the vault when this capture ran. The pack still produced a valid 47 KB MP4 — slides got 5 seconds of silence each per the `default_slide_duration` knob. With the key in place, the same prompt produces a narrated MP4 instead. The transcript is also a clean demonstration of the **async polling pattern** (`pack.start → pack.status × N → pack.result`) — useful reference for clients without SEP-1686 support.
+> 📌 **The transcript below shows the narrated path** (`has_narration: true`) — the `elevenlabs-key` is in the vault, ElevenLabs synthesized 2 slides of speech, and ffmpeg encoded them into a 199 KB MP4. The same prompt without the key in the vault produces a silent 47 KB MP4 (`has_narration: false`); the silent-fallback transcript was the original capture for this page. The transcript is also a clean reference for the **async polling pattern** (`pack.start → pack.status × N → pack.result`).
 
 **Prompt** (sent in OpenClaw chat UI / `openclaw-cli agent`):
 
 > Use helmdeck__slides-narrate with this 2-slide deck: "---\nmarp: true\n---\n# Helmdeck\n<!-- speaker:notes Welcome to a quick demo of the slides.narrate pack. -->\n\n---\n\n# Thanks\n<!-- speaker:notes See you next time. -->" and model_id=eleven_turbo_v2_5. Tell me the video_artifact_key, slide_count, total_duration_s, and whether has_narration is true.
 
-**Tool call** (16 calls, no failures):
+**Tool call** (26 calls, no failures):
 
 ```json
 {
-  "name": "helmdeck__pack-start",
+  "name": "helmdeck__slides-narrate",
   "arguments": {
-    "pack": "slides.narrate",
-    "input": {
-      "markdown": "---\nmarp: true\n---\n# Helmdeck\n<!-- speaker:notes Welcome to a quick demo of the slides.narrate pack. -->\n\n---\n\n# Thanks\n<!-- speaker:notes See you next time. -->",
-      "voice_id": "eleven_turbo_v2_5"
-    }
+    "markdown": "---\nmarp: true\n---\n# Helmdeck\n<!-- speaker:notes Welcome to a quick demo of the slides.narrate pack. -->\n\n---\n\n# Thanks\n<!-- speaker:notes See you next time. -->",
+    "model_id": "eleven_turbo_v2_5"
   }
 }
 ```
@@ -86,14 +83,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":0,"started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":0,"started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -101,14 +98,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":0,"started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf55..."
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -116,14 +113,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"error":"unknown_job","message":"pack.status: job_id not found"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -131,14 +128,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -146,14 +143,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -161,14 +158,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -176,14 +173,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":50,"message":"encoding segment 1/2","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -191,14 +188,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":50,"message":"encoding segment 1/2","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -206,14 +203,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":50,"message":"encoding segment 1/2","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -221,14 +218,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":50,"message":"encoding segment 1/2","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -236,14 +233,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":70,"message":"encoding segment 2/2","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":5,"message":"parsed 2 slides","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -251,14 +248,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":70,"message":"encoding segment 2/2","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":10,"message":"audio 1/2","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -266,14 +263,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":70,"message":"encoding segment 2/2","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":10,"message":"audio 1/2","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -281,14 +278,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"working","progress":70,"message":"encoding segment 2/2","started_at":"2026-05-08T15:21:57Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":50,"message":"encoding segment 1/2","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-status",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -296,14 +293,14 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"job_id":"c0e39a9431ad5bf95535f8f01ab15cd8","pack":"slides.narrate","state":"completed","progress":100,"message":"uploading video artifact","started_at":"2026-05-08T15:21:57Z","ended_at":"2026-05-08T15:22:40Z"}
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":50,"message":"encoding segment 1/2","started_at":"2026-05-09T00:58:38Z"}
 ```
 
 ```json
 {
   "name": "helmdeck__pack-result",
   "arguments": {
-    "job_id": "c0e39a9431ad5bf95535f8f01ab15cd8"
+    "job_id": "834267c19314e628263ab04b93313506"
   }
 }
 ```
@@ -311,19 +308,168 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 **Pack response** (truncated):
 
 ```json
-{"pack":"slides.narrate","version":"v1","output":{"has_narration":false,"metadata_artifact_key":"","slide_count":2,"total_duration_s":10,"video_artifact_key":"slides.narrate/1c3ad06cfbfc9419-video.mp4","video_size":47083,"voice_used":"eleven_turbo_v2_5"},"artifacts":[{"key":"slides.narrate/1c3ad06cfbfc9419-video.mp4","url":"http://garage:3900/helmdeck-artifacts/slides.narrate/1c3ad06cfbfc9419-video.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256\u0026X-Amz-Credential=GKaef177ebe9fd814dc103b84b%2F20260508%2Fgarage%2Fs3%2Faws4_request\u0026X-Amz-Date=20260508T152240Z\u0026X-Amz-Expires=900\u0026X-Amz-SignedHeaders=host\u0026X-Amz-Signature=44cabb40b2aec4cbf71d388c2d9fa36c55541057d16300c6ac59f50a7b190d82","size":47083,"content_type":"video/mp4","created_at":"2026-05-08T15:22:40.204854317Z","pack":"slide
+{"error":"not_ready","message":"pack.result: job 834267c19314e628263ab04b93313506 still working — keep polling pack.status"}
+```
+
+```json
+{
+  "name": "helmdeck__pack-status",
+  "arguments": {
+    "job_id": "834267c19314e628263ab04b93313506"
+  }
+}
+```
+
+**Pack response** (truncated):
+
+```json
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":50,"message":"encoding segment 1/2","started_at":"2026-05-09T00:58:38Z"}
+```
+
+```json
+{
+  "name": "helmdeck__pack-status",
+  "arguments": {
+    "job_id": "834267c19314e628263ab04b93313506"
+  }
+}
+```
+
+**Pack response** (truncated):
+
+```json
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":50,"message":"encoding segment 1/2","started_at":"2026-05-09T00:58:38Z"}
+```
+
+```json
+{
+  "name": "helmdeck__pack-status",
+  "arguments": {
+    "job_id": "834267c19314e628263ab04b93313506"
+  }
+}
+```
+
+**Pack response** (truncated):
+
+```json
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":50,"message":"encoding segment 1/2","started_at":"2026-05-09T00:58:38Z"}
+```
+
+```json
+{
+  "name": "helmdeck__pack-status",
+  "arguments": {
+    "job_id": "834267c19314e628263ab04b93313506"
+  }
+}
+```
+
+**Pack response** (truncated):
+
+```json
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":50,"message":"encoding segment 1/2","started_at":"2026-05-09T00:58:38Z"}
+```
+
+```json
+{
+  "name": "helmdeck__pack-status",
+  "arguments": {
+    "job_id": "834267c19314e628263ab04b93313506"
+  }
+}
+```
+
+**Pack response** (truncated):
+
+```json
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":50,"message":"encoding segment 1/2","started_at":"2026-05-09T00:58:38Z"}
+```
+
+```json
+{
+  "name": "helmdeck__pack-status",
+  "arguments": {
+    "job_id": "834267c19314e628263ab04b93313506"
+  }
+}
+```
+
+**Pack response** (truncated):
+
+```json
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":70,"message":"encoding segment 2/2","started_at":"2026-05-09T00:58:38Z"}
+```
+
+```json
+{
+  "name": "helmdeck__pack-status",
+  "arguments": {
+    "job_id": "834267c19314e628263ab04b93313506"
+  }
+}
+```
+
+**Pack response** (truncated):
+
+```json
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":70,"message":"encoding segment 2/2","started_at":"2026-05-09T00:58:38Z"}
+```
+
+```json
+{
+  "name": "helmdeck__pack-status",
+  "arguments": {
+    "job_id": "834267c19314e628263ab04b93313506"
+  }
+}
+```
+
+**Pack response** (truncated):
+
+```json
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"working","progress":90,"message":"concatenating final video","started_at":"2026-05-09T00:58:38Z"}
+```
+
+```json
+{
+  "name": "helmdeck__pack-status",
+  "arguments": {
+    "job_id": "834267c19314e628263ab04b93313506"
+  }
+}
+```
+
+**Pack response** (truncated):
+
+```json
+{"job_id":"834267c19314e628263ab04b93313506","pack":"slides.narrate","state":"completed","progress":100,"message":"uploading video artifact","started_at":"2026-05-09T00:58:38Z","ended_at":"2026-05-09T00:59:19Z"}
+```
+
+```json
+{
+  "name": "helmdeck__pack-result",
+  "arguments": {
+    "job_id": "834267c19314e628263ab04b93313506"
+  }
+}
+```
+
+**Pack response** (truncated):
+
+```json
+{"pack":"slides.narrate","version":"v1","output":{"has_narration":true,"metadata_artifact_key":"","slide_count":2,"total_duration_s":7.810612,"video_artifact_key":"slides.narrate/487371c8459e24ad-video.mp4","video_size":198916,"voice_used":"21m00Tcm4TlvDq8ikWAM"},"artifacts":[{"key":"slides.narrate/487371c8459e24ad-video.mp4","url":"http://garage:3900/helmdeck-artifacts/slides.narrate/487371c8459e24ad-video.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256\u0026X-Amz-Credential=GKaef177ebe9fd814dc103b84b%2F20260509%2Fgarage%2Fs3%2Faws4_request\u0026X-Amz-Date=20260509T005919Z\u0026X-Amz-Expires=900\u0026X-Amz-SignedHeaders=host\u0026X-Amz-Signature=dfc433b8c42e9bc554b9709da1182d58578335b4a93a89301e010446bf431cad","size":198916,"content_type":"video/mp4","created_at":"2026-05-09T00:59:19.304111422Z","pa
   ...[truncated]
 ```
 
 **Agent's final reply**:
 
-> video_artifact_key: slides.narrate/1c3ad06cfbfc9419-video.mp4  
+> video_artifact_key: `slides.narrate/487371c8459e24ad-video.mp4`  
 > slide_count: 2  
-> total_duration_s: 10  
-> has_narration: false
+> total_duration_s: 7.81 seconds  
+> has_narration: true
 
-*Verified via OpenClaw 2026.5.6 + helmdeck v0.9.0-dev + `openrouter/openai/gpt-oss-120b` on 2026-05-07 (cost: $0.0122).*
-
+*Verified via OpenClaw 2026.5.6 + helmdeck v0.9.0-dev + `openrouter/openai/gpt-oss-120b` on 2026-05-07 (cost: $0.0187).*
 ## Developer reference (`curl`)
 
 ```bash

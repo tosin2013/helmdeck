@@ -283,6 +283,45 @@ func TestSlidesNarrate_MarpFailure(t *testing.T) {
 	}
 }
 
+// TestSlidesNarrate_DryRun_ShortCircuits asserts dry_run:true returns
+// the cost preview without calling the executor (no Marp render, no
+// TTS, no ffmpeg). Per #145 — operators preview cost before paying.
+func TestSlidesNarrate_DryRun_ShortCircuits(t *testing.T) {
+	exec := &narrateExecScript{}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# Slide 1\n\n<!-- this is a fairly long speaker note that adds chars to the cost estimate -->\n\n---\n\n# Slide 2\n\n<!-- another note -->",
+		"dry_run": true
+	}`
+	raw, err := runNarrate(t, nil, nil, exec, input)
+	if err != nil {
+		t.Fatalf("dry_run handler: %v", err)
+	}
+	if len(exec.calls) != 0 {
+		t.Errorf("dry_run should not invoke the executor, got %d calls", len(exec.calls))
+	}
+	var out struct {
+		DryRun           bool           `json:"dry_run"`
+		SlideCount       int            `json:"slide_count"`
+		TTSChars         map[string]int `json:"tts_chars"`
+		EstimatedCostUSD float64        `json:"estimated_cost_usd"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !out.DryRun {
+		t.Error("dry_run flag should round-trip true")
+	}
+	if out.SlideCount != 2 {
+		t.Errorf("slide_count = %d, want 2", out.SlideCount)
+	}
+	if out.TTSChars["_total"] == 0 {
+		t.Errorf("tts_chars._total = 0, want > 0: %+v", out.TTSChars)
+	}
+	if out.EstimatedCostUSD <= 0 {
+		t.Errorf("estimated_cost_usd should be > 0: %v", out.EstimatedCostUSD)
+	}
+}
+
 func TestSlidesNarrate_FfmpegConcatFailure(t *testing.T) {
 	pack := SlidesNarrate(nil, nil)
 	artifacts := packs.NewMemoryArtifactStore()

@@ -37,6 +37,7 @@ import (
 
 	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/packs"
+	"github.com/tosin2013/helmdeck/internal/podcast"
 	"github.com/tosin2013/helmdeck/internal/session"
 	"github.com/tosin2013/helmdeck/internal/vault"
 	"github.com/tosin2013/helmdeck/internal/vision"
@@ -91,6 +92,8 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store) *packs.Pack {
 				"credential":             "string",
 				"allow_silent_output":    "boolean",
 				"min_turn_duration_s":    "number",
+				"dry_run":                "boolean",
+				"plan":                   "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -155,6 +158,8 @@ type slidesNarrateInput struct {
 	Credential           string  `json:"credential"`
 	AllowSilentOutput    bool    `json:"allow_silent_output"`
 	MinTurnDurationS     float64 `json:"min_turn_duration_s"`
+	DryRun               bool    `json:"dry_run"`
+	Plan                 string  `json:"plan"`
 }
 
 func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFunc {
@@ -191,6 +196,29 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFun
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "no slides found in markdown"}
 		}
 		ec.Report(5, fmt.Sprintf("parsed %d slides", len(slides)))
+
+		// 1b. Cost accounting (#145). Per-slide char counts feed both
+		// the dry_run short-circuit AND the regular response — same
+		// shape as podcast.generate.
+		slideTTSChars, slideTTSCharsTotal := computeSlideTTSChars(slides)
+		slideEstimateUSD, slideEstimateBreakdown := podcast.EstimateElevenLabs(slideTTSCharsTotal, in.Plan)
+
+		if in.DryRun {
+			// dry_run runs BEFORE credential resolve so cost preview
+			// works on Free-tier accounts without a paid key.
+			out := map[string]any{
+				"dry_run":                  true,
+				"slide_count":              len(slides),
+				"tts_chars":                slideTTSChars,
+				"estimated_cost_usd":       slideEstimateUSD,
+				"estimated_cost_breakdown": slideEstimateBreakdown,
+			}
+			raw, mErr := json.Marshal(out)
+			if mErr != nil {
+				return nil, &packs.PackError{Code: packs.CodeInternal, Message: mErr.Error(), Cause: mErr}
+			}
+			return raw, nil
+		}
 
 		// 2. Resolve ElevenLabs API key through the shared #138 ladder
 		// (explicit → vault:elevenlabs-key → vault:elevenlabs-api-key
@@ -421,12 +449,34 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFun
 			"has_narration":         hasNarration && voiceID != "",
 			"voice_used":            voiceID,
 			"metadata_artifact_key": metadataKey,
+			// #145: cost transparency on real runs too. Mirrors the
+			// dry_run shape so callers can rely on the same fields
+			// regardless of mode.
+			"tts_chars":                slideTTSChars,
+			"estimated_cost_usd":       slideEstimateUSD,
+			"estimated_cost_breakdown": slideEstimateBreakdown,
 		}
 		if metadata != nil {
 			out["metadata"] = metadata
 		}
 		return json.Marshal(out)
 	}
+}
+
+// computeSlideTTSChars sums the speaker-notes length per slide and
+// returns the per-slide map (keyed by slide-NNN, with "_total") plus
+// the total. Mirrors computeTTSChars in podcast_generate.go but
+// keyed by slide index instead of speaker.
+func computeSlideTTSChars(slides []slideContent) (map[string]int, int) {
+	per := map[string]int{}
+	total := 0
+	for _, s := range slides {
+		n := len(s.Notes)
+		per[fmt.Sprintf("slide-%03d", s.Index+1)] = n
+		total += n
+	}
+	per["_total"] = total
+	return per, total
 }
 
 // --- ElevenLabs helpers --------------------------------------------------

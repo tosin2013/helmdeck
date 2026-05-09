@@ -395,3 +395,101 @@ func TestPodcastGenerate_KeyResolvedFromAlias(t *testing.T) {
 		t.Fatal("expected a response when alias resolves")
 	}
 }
+
+// TestPodcastGenerate_DryRun_ShortCircuits asserts that dry_run:true
+// returns the cost block without invoking the executor (no ffmpeg
+// or TTS calls fire). Per #145 the response should include script,
+// per-speaker char counts with a _total, and the cost estimate.
+func TestPodcastGenerate_DryRun_ShortCircuits(t *testing.T) {
+	v := vaultWithElevenKey(t, "")
+	// Wire an executor that records every call — we assert it stays
+	// empty so dry_run truly skips the synthesis pipeline.
+	ex := &podcastTestExecutor{mp3Bytes: []byte("should-not-be-read")}
+	raw, err := runPodcastGenerate(t, v, ex, `{
+		"speakers": {"Alex": "v1", "Jordan": "v2"},
+		"script": [
+			{"speaker":"Alex","text":"Hello, this is a 30-character line."},
+			{"speaker":"Jordan","text":"And this is the second one too!"}
+		],
+		"dry_run": true
+	}`)
+	if err != nil {
+		t.Fatalf("dry_run handler: %v", err)
+	}
+	if len(ex.calls) != 0 {
+		t.Errorf("dry_run should not invoke the executor, got %d calls: %+v", len(ex.calls), ex.calls)
+	}
+	var out struct {
+		DryRun           bool             `json:"dry_run"`
+		Engine           string           `json:"engine"`
+		SpeakerCount     int              `json:"speaker_count"`
+		TurnCount        int              `json:"turn_count"`
+		TTSChars         map[string]int   `json:"tts_chars"`
+		EstimatedCostUSD float64          `json:"estimated_cost_usd"`
+		Breakdown        map[string]any   `json:"estimated_cost_breakdown"`
+		Script           []map[string]any `json:"script"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !out.DryRun {
+		t.Error("dry_run flag should round-trip true")
+	}
+	if out.Engine != "elevenlabs" {
+		t.Errorf("engine = %q", out.Engine)
+	}
+	if out.SpeakerCount != 2 || out.TurnCount != 2 {
+		t.Errorf("counts wrong: speakers=%d turns=%d", out.SpeakerCount, out.TurnCount)
+	}
+	totalChars := out.TTSChars["_total"]
+	if totalChars == 0 {
+		t.Errorf("tts_chars._total = 0, want > 0")
+	}
+	if out.TTSChars["Alex"] == 0 || out.TTSChars["Jordan"] == 0 {
+		t.Errorf("per-speaker chars should be populated: %+v", out.TTSChars)
+	}
+	if out.EstimatedCostUSD <= 0 {
+		t.Errorf("estimated_cost_usd should be > 0 for nonzero chars: %v", out.EstimatedCostUSD)
+	}
+	if out.Breakdown["plan"] != "creator" {
+		t.Errorf("breakdown plan = %v, want creator (default)", out.Breakdown["plan"])
+	}
+	if len(out.Script) != 2 {
+		t.Errorf("script should round-trip in dry_run output: %+v", out.Script)
+	}
+}
+
+// TestPodcastGenerate_RealRun_IncludesCostBlock asserts that a
+// non-dry-run response also carries the cost block — operators logging
+// real-run costs to accounting workflows shouldn't have to recompute.
+//
+// Uses allow_silent_output:true to keep the test running without a real
+// ElevenLabs server (per #138). The cost block is always populated
+// regardless of whether narration succeeded.
+func TestPodcastGenerate_RealRun_IncludesCostBlock(t *testing.T) {
+	v := vaultWithElevenKey(t, "")
+	ex := &podcastTestExecutor{mp3Bytes: []byte("\xff\xfb\x90real")}
+	raw, err := runPodcastGenerate(t, v, ex, `{
+		"speakers": {"A": "v1"},
+		"script":   [{"speaker":"A","text":"normal run with cost reporting"}],
+		"allow_silent_output": true
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		AudioArtifactKey string         `json:"audio_artifact_key"`
+		TTSChars         map[string]int `json:"tts_chars"`
+		EstimatedCostUSD float64        `json:"estimated_cost_usd"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.AudioArtifactKey == "" {
+		t.Error("real run should still produce an audio artifact")
+	}
+	if out.TTSChars["_total"] == 0 {
+		t.Error("real run should include tts_chars._total in response")
+	}
+	if out.EstimatedCostUSD <= 0 {
+		t.Error("real run should include estimated_cost_usd in response")
+	}
+}

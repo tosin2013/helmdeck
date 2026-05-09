@@ -92,6 +92,8 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 				"generate_cover_prompt":     "boolean",
 				"credential":                "string",
 				"allow_silent_output":       "boolean",
+				"dry_run":                   "boolean",
+				"plan":                      "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -132,6 +134,8 @@ type podcastGenerateInput struct {
 	GenerateCoverPrompt    bool              `json:"generate_cover_prompt"`
 	Credential             string            `json:"credential"`
 	AllowSilentOutput      bool              `json:"allow_silent_output"`
+	DryRun                 bool              `json:"dry_run"`
+	Plan                   string            `json:"plan"`
 }
 
 func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) packs.HandlerFunc {
@@ -267,6 +271,38 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 				Message: verr.Error(), Cause: verr}
 		}
 
+		// 3b. Cost accounting (#145). Char counts feed both the
+		// dry_run short-circuit AND the regular response — operators
+		// always see what their last call cost without having to
+		// re-do the math against ElevenLabs' billing dashboard.
+		ttsChars, ttsCharsTotal := computeTTSChars(script)
+		estimateUSD, estimateBreakdown := podcast.EstimateElevenLabs(ttsCharsTotal, in.Plan)
+
+		if in.DryRun {
+			// dry_run intentionally runs BEFORE credential resolve so
+			// operators on a Free tier can preview cost even without
+			// a paid ElevenLabs key configured.
+			out := map[string]any{
+				"engine":                   engineName,
+				"dry_run":                  true,
+				"script":                   script,
+				"speaker_count":            len(in.Speakers),
+				"turn_count":               len(script),
+				"script_source":            scriptSource,
+				"model_used":               modelUsed,
+				"voices_used":              voicesUsedMap(voicesUsed, in.Speakers),
+				"theme":                    theme,
+				"tts_chars":                ttsChars,
+				"estimated_cost_usd":       estimateUSD,
+				"estimated_cost_breakdown": estimateBreakdown,
+			}
+			raw, mErr := json.Marshal(out)
+			if mErr != nil {
+				return nil, &packs.PackError{Code: packs.CodeInternal, Message: mErr.Error(), Cause: mErr}
+			}
+			return raw, nil
+		}
+
 		// 4. Resolve credential through the shared #138 ladder:
 		// explicit input → vault:elevenlabs-key → vault:elevenlabs-api-key
 		// → env:HELMDECK_ELEVENLABS_API_KEY. Per #138 we now hard-fail
@@ -368,10 +404,7 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 		}
 
 		// 9. Build output.
-		voicesMap := make(map[string]string, len(voicesUsed))
-		for _, name := range voicesUsed {
-			voicesMap[name] = in.Speakers[name]
-		}
+		voicesMap := voicesUsedMap(voicesUsed, in.Speakers)
 		out := map[string]any{
 			"engine":             eng.Name(),
 			"audio_artifact_key": art.Key,
@@ -383,6 +416,12 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 			"voices_used":        voicesMap,
 			"has_narration":      hasNarration,
 			"theme":              theme,
+			// #145: cost transparency on real runs too — operators
+			// log this to their accounting workflow without re-doing
+			// the math against ElevenLabs' billing dashboard.
+			"tts_chars":                ttsChars,
+			"estimated_cost_usd":       estimateUSD,
+			"estimated_cost_breakdown": estimateBreakdown,
 		}
 		if modelUsed != "" {
 			out["model_used"] = modelUsed
@@ -392,6 +431,32 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 		}
 		return json.Marshal(out)
 	}
+}
+
+// computeTTSChars sums the per-turn text length per speaker and
+// returns the per-speaker map (with a "_total" key) plus the total.
+// Used by both the dry_run short-circuit and the regular response.
+func computeTTSChars(script []podcast.Turn) (map[string]int, int) {
+	per := map[string]int{}
+	total := 0
+	for _, t := range script {
+		n := len(t.Text)
+		per[t.Speaker] += n
+		total += n
+	}
+	per["_total"] = total
+	return per, total
+}
+
+// voicesUsedMap renders the script's distinct-speakers list as a
+// {speaker: voice_id} map. Pulled into a helper so the dry_run path
+// and the regular response build it identically.
+func voicesUsedMap(voicesUsed []string, speakers map[string]string) map[string]string {
+	out := make(map[string]string, len(voicesUsed))
+	for _, name := range voicesUsed {
+		out[name] = speakers[name]
+	}
+	return out
 }
 
 // podcastExecutorAdapter wraps ExecutionContext.Exec into a

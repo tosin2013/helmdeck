@@ -49,6 +49,7 @@ const sidebars: SidebarsConfig = {
 
   reference: [
     'reference/index',
+    'reference/architecture',
     'PACKS',
     'integrations/SKILLS',
     'integrations/README',

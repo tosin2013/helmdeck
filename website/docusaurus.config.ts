@@ -24,10 +24,13 @@ const config: Config = {
   // existing docs. .mdx (none today) would still parse as MDX.
   markdown: {
     format: 'detect',
+    mermaid: true,
     hooks: {
       onBrokenMarkdownLinks: 'warn',
     },
   },
+
+  themes: ['@docusaurus/theme-mermaid'],
 
   i18n: {
     defaultLocale: 'en',

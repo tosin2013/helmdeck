@@ -8,6 +8,10 @@ description: Information-oriented lookup material — pack contracts, ADRs, proj
 
 Information-oriented lookup. These pages are precise, complete, and dry — optimized for the reader who already knows what they're looking for.
 
+## Architecture
+
+- **[Architecture overview](./architecture.md)** — canonical reference for decision makers and architects. Five views: components, request flow, deployment topology, trust boundaries, scaling. Mermaid diagrams + source-of-truth pointers into the codebase.
+
 ## Pack catalog
 
 - **[PACKS](../PACKS.md)** — input/output contract for every shipped capability pack.

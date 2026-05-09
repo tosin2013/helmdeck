@@ -161,6 +161,12 @@ The 5-minute URL TTL (`expires_at` in the response) is informational, not enforc
 
 This how-to documents the **v0.x baseline** per [ADR 028 (WebRTC live session streaming)](../adrs/028-webrtc-live-session-streaming.md). The endpoint is intentionally thin — most of the operator-experience improvements live in tracked issues that haven't shipped yet. Be aware of these gaps before you build a workflow on top of the noVNC path:
 
+### Vision packs converge visually but rarely emit `done` (the most likely reason you're here)
+
+If you opened this page to debug `vision.click_anywhere` or `vision.fill_form_by_label` — what you're seeing on the VNC viewer is real and consistent with what the model sees. The loop fix from [#105](https://github.com/tosin2013/helmdeck/pull/105) made screenshots progress between iterations (no more identical bytes) — that part works. The remaining gap is **model-side**: even when the click lands sensibly, vision models like `claude-haiku-4.5` rarely emit `done` on real GUI tasks.
+
+This isn't a sidecar bug, a noVNC config issue, or anything you can fix by tuning the session spec. It's tracked at [#112](https://github.com/tosin2013/helmdeck/issues/112) as an open-research thread, with five spin-out projects ([#115–#119](https://github.com/tosin2013/helmdeck/issues/115)) covering the directions any one of which would close the gap. Both vision packs are flagged as **experimental for production** in v0.10.0; for deterministic browser automation today, prefer [`web.test`](../reference/packs/web/test.md) (Playwright MCP). VNC is still the right tool for *watching* what's happening — just don't expect tuning the noVNC layer to fix vision-pack convergence.
+
 ### No in-control-plane proxy (yet)
 
 The `/api/v1/desktop/vnc-url` endpoint hands you a URL pointing at a sidecar IP on baas-net. It doesn't proxy the WebSocket through the control plane, so reachability is operator-managed (the three paths above). The Management UI's "View Desktop" tile (T603, in progress) and the WebRTC replacement (#23) both fix this — until either lands, plan on either Path 2 (port-forward) or Path 3 (reverse proxy) for any sustained operator use.

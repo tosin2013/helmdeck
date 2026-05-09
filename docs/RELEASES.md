@@ -331,6 +331,10 @@ Operators looking for "an existing pack for X" before writing one. Designed to l
 
 **Theme:** "Helm install works; production hardening pending."
 
+### Hard prerequisite (must land before any rc1 work)
+
+- **[#134](https://github.com/tosin2013/helmdeck/issues/134)** — unified install paths so `compose.yaml` and the Helm chart reference the same versioned GHCR tags (`ghcr.io/tosin2013/helmdeck:0.X.Y`) instead of the build-time-only `:dev` tag. The Helm chart cannot ship referencing `:dev` (operators have no source tree), so this gates rc1.
+
 ### Ships (planned)
 
 - **T701** `client-go` `SessionRuntime` backend.

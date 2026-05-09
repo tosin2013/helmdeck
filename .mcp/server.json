@@ -38,7 +38,6 @@
     },
     {
       "registryType": "oci",
-      "registryBaseUrl": "https://ghcr.io",
       "identifier": "ghcr.io/tosin2013/helmdeck-mcp",
       "version": "0.10.1",
       "transport": {

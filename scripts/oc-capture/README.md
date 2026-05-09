@@ -25,10 +25,12 @@ schema mismatches stay invisible, and the docs over-promise.
 | File | Role |
 |---|---|
 | `capture-oc.sh` | Driver. Runs one prompt through OpenClaw, fetches the resulting session JSONL, hands it to the extractor. |
+| `capture-batch.sh` | Generic batch driver — runs every prompt in a `prompts/*.txt` file (with optional `--start`/`--end` for subsetting). Wraps `capture-oc.sh`. |
 | `extract-oc-transcript.py` | Renders a session JSONL as markdown — prompt + tool calls + responses + agent's final reply + cost footer. |
 | `inject-transcripts.py` | Replaces the `<!-- TODO(maintainer): … --> > *OpenClaw chat capture pending.*` placeholder in each per-pack page with its captured transcript. |
-| `prompts/easy-cluster.txt` | The 16 prompts used in PR #83. |
-| `prompts/medium-cluster.txt` | The 12 prompts used in PR #95. |
+| `prompts/easy-cluster.txt` | The 16 prompts used in PR #83 (PR-A — browser, http, doc, fs, cmd, git, language). |
+| `prompts/medium-cluster.txt` | The 12 prompts used in PR #95 (PR-B — web, vision, github). |
+| `prompts/hard-cluster.txt` | The 8 prompts used in PR #101 (PR-C — repo, slides, desktop, research, content). |
 
 ## End-to-end run
 
@@ -36,15 +38,33 @@ schema mismatches stay invisible, and the docs over-promise.
 # Pre-req: helmdeck + OpenClaw stack up + scripts/configure-openclaw.sh
 # already wired (see docs/integrations/openclaw.md).
 
-mkdir -p /tmp/captures/oc-transcripts
-while IFS='::' read -r LHS REST; do
-  PAGE=$(echo "$LHS" | tr '/' '_')
-  PROMPT="${REST#:}"
-  echo "=== $PAGE ===" >&2
-  bash scripts/oc-capture/capture-oc.sh "$PROMPT" \
-    > "/tmp/captures/oc-transcripts/$PAGE.md"
-done < scripts/oc-capture/prompts/medium-cluster.txt
+# 1. Capture every prompt in a cluster file (one transcript per line).
+bash scripts/oc-capture/capture-batch.sh \
+  --prompts scripts/oc-capture/prompts/medium-cluster.txt \
+  --out /tmp/captures/oc-transcripts
 
+# 2. Inject the captured transcripts into the matching per-pack pages.
+python3 scripts/oc-capture/inject-transcripts.py /tmp/captures/oc-transcripts
+```
+
+### Single-prompt run (for one-off captures)
+
+```bash
+bash scripts/oc-capture/capture-oc.sh \
+  "Use helmdeck__http-fetch to GET https://httpbin.org/headers and report the User-Agent." \
+  > /tmp/captures/single.md
+```
+
+### Subset re-run (after fixing one bad transcript)
+
+```bash
+# Re-run just the 5th prompt in the medium cluster:
+bash scripts/oc-capture/capture-batch.sh \
+  --prompts scripts/oc-capture/prompts/medium-cluster.txt \
+  --out /tmp/captures/oc-transcripts \
+  --start 5 --end 5
+
+# Then re-run the inject pass to update only the matching page:
 python3 scripts/oc-capture/inject-transcripts.py /tmp/captures/oc-transcripts
 ```
 
@@ -89,15 +109,24 @@ training.
 | `OPENCLAW_COMPOSE` | `/root/openclaw/docker-compose.yml` | Path to the OpenClaw stack's compose file. |
 | `OPENCLAW_GATEWAY` | `openclaw-openclaw-gateway-1` | Container name of the gateway. The session JSONL lives inside it; `docker exec cat` extracts it. |
 
-## Cost ballpark
+## Cost ballpark per pack family
 
-With a fresh `--session-id` per capture and `gpt-oss-120b` as the chat
-model, simple GitHub / fs / http packs run **\~\$0.001–\$0.01 per
-capture**. Vision packs (`vision.click_anywhere`,
-`vision.fill_form_by_label`) are higher — the per-step Haiku 4.5
-vision call adds ~\$0.05–\$0.20 per capture depending on step count.
-PR #95 (12 captures, mixed) ran for **\~\$2.00 total** before the
-session-fix; the same batch reproduced post-fix runs for under \$0.50.
+Observed during PR-A (#83), PR-B (#95), and PR-C (#101) runs against the
+`gpt-oss-120b` chat model with `claude-haiku-4.5` as the vision model.
+Numbers are per capture, not per batch — multiply by your batch size.
+
+| Family | Cost per capture | Notes |
+|---|---|---|
+| `http.*`, `fs.*`, `cmd.*`, `git.*`, `language.*` | **~\$0.001–\$0.005** | Simple tool calls, short LLM round trip |
+| `github.*`, `web.scrape`, `web.scrape_spa`, `doc.*`, `repo.*` | **~\$0.005–\$0.015** | Larger response payloads or one extra network round trip |
+| `web.test`, `vision.click_anywhere`, `vision.fill_form_by_label` | **~\$0.05–\$0.15** | Per-step screenshot + vision-model call (max_steps × ~\$0.02) |
+| `slides.narrate` | **~\$0.05** | TTS-bound — ElevenLabs cost dominates the LLM-side cost |
+| `research.deep`, `content.ground` | **~\$0.01–\$0.03** | Firecrawl + synthesis LLM call |
+| `slides.render`, `vision.extract_visible_text`, `desktop.run_app_and_screenshot` | **~\$0.001–\$0.005** | Single tool call, minimal model work |
+
+PR-A (16 captures) ≈ \$0.05 total. PR-B (12 captures) ≈ \$0.50. PR-C (8 captures, includes slides.narrate + research.deep + content.ground) ≈ \$0.30.
+
+**Before the fresh-session fix landed in PR #97**, PR-B ran for ~\$2.00 for the same 12 captures — the difference (~140×) came from shipping a 280-event session history to the model on every turn.
 
 ## Limits
 

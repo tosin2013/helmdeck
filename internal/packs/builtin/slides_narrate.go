@@ -90,6 +90,7 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store) *packs.Pack {
 				"metadata_model":         "string",
 				"credential":             "string",
 				"allow_silent_output":    "boolean",
+				"min_turn_duration_s":    "number",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -153,6 +154,7 @@ type slidesNarrateInput struct {
 	MetadataModel        string  `json:"metadata_model"`
 	Credential           string  `json:"credential"`
 	AllowSilentOutput    bool    `json:"allow_silent_output"`
+	MinTurnDurationS     float64 `json:"min_turn_duration_s"`
 }
 
 func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFunc {
@@ -246,6 +248,14 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFun
 		// reporting per-slide is what keeps low-timeout MCP clients
 		// (OpenClaw 60s default) from giving up.
 		ec.Report(10, "generating narration audio")
+		// #141: per-slide duration floor. When unset, default to the
+		// slides.narrate house style (5s — same as defaultSlideDuration
+		// for note-less slides). Pass min_turn_duration_s:0 explicitly
+		// to opt out and use raw TTS pacing.
+		minTurnSec := in.MinTurnDurationS
+		if minTurnSec == 0 && !zeroFloorOptedIn(ec.Input) {
+			minTurnSec = defaultMinTurnDurationS
+		}
 		durations := make([]float64, len(slides))
 		for i, s := range slides {
 			ec.Report(10+float64(i)*40/float64(len(slides)),
@@ -272,6 +282,18 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFun
 				if err != nil {
 					ec.Logger.Warn("ffprobe failed, using default duration", "slide", i, "err", err)
 					dur = slideDur
+				}
+				// #141: enforce per-segment floor. If TTS came back
+				// shorter than the floor, append silence to the audio
+				// file so the encoded video segment plays for at least
+				// minTurnSec — keeps downstream pipelines (YouTube
+				// cuts, slide-sync) from feeling rushed.
+				if minTurnSec > 0 && dur < minTurnSec {
+					if perr := padSlideAudioToMin(ctx, ec, i, dur, minTurnSec); perr != nil {
+						ec.Logger.Warn("pad audio failed, using raw duration", "slide", i, "err", perr)
+					} else {
+						dur = minTurnSec
+					}
 				}
 				durations[i] = dur
 			} else {
@@ -504,6 +526,41 @@ func probeAudioDuration(ctx context.Context, ec *packs.ExecutionContext, slideId
 		return 0, fmt.Errorf("parse duration %q: %w", string(res.Stdout), err)
 	}
 	return dur, nil
+}
+
+// padSlideAudioToMin (#141) appends silence to /tmp/audio-NNN.mp3 so its
+// total duration is at least minSec. Same padding strategy as the
+// podcast.generate concat path: generate a silence segment of the
+// deficit, concat-demuxer the original + silence, replace the
+// original. Re-encoding (libmp3lame) handles frame-size differences
+// between ElevenLabs MP3s and our anullsrc-generated ones.
+func padSlideAudioToMin(ctx context.Context, ec *packs.ExecutionContext, slideIdx int, currentDur, minSec float64) error {
+	deficit := minSec - currentDur
+	if deficit <= 0.001 {
+		return nil
+	}
+	turnPath := fmt.Sprintf("/tmp/audio-%03d.mp3", slideIdx)
+	padPath := fmt.Sprintf("/tmp/audio-%03d-pad.mp3", slideIdx)
+	mergedPath := fmt.Sprintf("/tmp/audio-%03d-padded.mp3", slideIdx)
+	listPath := fmt.Sprintf("/tmp/audio-%03d-pad.txt", slideIdx)
+	cmds := []string{
+		fmt.Sprintf("ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=mono -t %.3f -acodec libmp3lame %s",
+			deficit, padPath),
+		fmt.Sprintf("printf \"file '%s'\\nfile '%s'\\n\" > %s", turnPath, padPath, listPath),
+		fmt.Sprintf("ffmpeg -y -f concat -safe 0 -i %s -acodec libmp3lame -b:a 128k %s",
+			listPath, mergedPath),
+		fmt.Sprintf("mv %s %s", mergedPath, turnPath),
+	}
+	for _, cmd := range cmds {
+		res, err := ec.Exec(ctx, session.ExecRequest{Cmd: []string{"sh", "-c", cmd}})
+		if err != nil {
+			return err
+		}
+		if res.ExitCode != 0 {
+			return fmt.Errorf("pad exit %d: %s", res.ExitCode, strings.TrimSpace(string(res.Stderr)))
+		}
+	}
+	return nil
 }
 
 // execWithStdin writes content to a file in the sidecar via stdin.

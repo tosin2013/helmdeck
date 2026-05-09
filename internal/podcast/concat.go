@@ -19,9 +19,23 @@ const (
 
 // ConcatOptions controls how Concat stitches per-turn MP3 segments.
 type ConcatOptions struct {
-	// SilenceBetweenTurnsMs is the gap inserted between turns to
-	// give the listener a beat. Default is defaultSilenceMs (600ms).
+	// SilenceBetweenTurnsMs is the gap inserted between every adjacent
+	// pair of turns (NOT before the first or after the last) so the
+	// listener gets a beat between speakers. Default is defaultSilenceMs
+	// (600ms). Pass 0 to use the default.
 	SilenceBetweenTurnsMs int
+
+	// MinTurnDurationS is the per-turn floor (#141). Each turn shorter
+	// than this is padded with trailing anullsrc silence so its total
+	// duration is at least MinTurnDurationS seconds. Use 0 (default)
+	// to opt out and preserve raw TTS pacing for callers that want
+	// natural pauses between speakers without enforced minimums.
+	//
+	// The floor exists because real TTS sometimes returns very short
+	// audio (a 1-2s "agreed" turn cuts to the next speaker abruptly);
+	// downstream video pipelines (slides.narrate, YouTube cuts) want
+	// a stable per-segment minimum to avoid feeling rushed.
+	MinTurnDurationS float64
 }
 
 // Concat takes a slice of per-turn MP3 byte buffers and produces a
@@ -58,6 +72,18 @@ func Concat(ctx context.Context, ex session.Executor, sessionID string, turns []
 	for i, mp3 := range turns {
 		if err := writeTurnFile(ctx, ex, sessionID, i, mp3); err != nil {
 			return nil, 0, fmt.Errorf("write turn %d: %w", i, err)
+		}
+	}
+
+	// 2b. Apply the per-turn duration floor (#141) when requested.
+	// Done after-write rather than inline so the silent-turn engine
+	// path (Synthesize falls back to SilenceTurn) is also covered:
+	// any turn — TTS or silent — gets the same floor.
+	if opts.MinTurnDurationS > 0 {
+		for i := range turns {
+			if err := padTurnToMin(ctx, ex, sessionID, i, opts.MinTurnDurationS); err != nil {
+				return nil, 0, fmt.Errorf("pad turn %d to %.1fs: %w", i, opts.MinTurnDurationS, err)
+			}
 		}
 	}
 
@@ -153,6 +179,62 @@ func writeTurnFile(ctx context.Context, ex session.Executor, sessionID string, i
 	}
 	if res.ExitCode != 0 {
 		return fmt.Errorf("write turn %d exit %d: %s", idx, res.ExitCode, strings.TrimSpace(string(res.Stderr)))
+	}
+	return nil
+}
+
+// padTurnToMin ffprobes the per-turn MP3 written by writeTurnFile,
+// and if its duration is less than minSec, appends silence to bring
+// it up to the floor. Best-effort: if ffprobe fails (e.g. corrupt
+// MP3) we skip the pad step rather than abort the whole concat —
+// the listener still gets the unpadded turn. The padding strategy is
+// "concat with anullsrc" rather than "extend with apad" because
+// concat-demuxer is more reliable across ffmpeg versions when the
+// source MP3s were emitted by different encoders (ElevenLabs vs
+// libmp3lame).
+func padTurnToMin(ctx context.Context, ex session.Executor, sessionID string, idx int, minSec float64) error {
+	turnPath := fmt.Sprintf("%s/turn-%03d.mp3", concatTempDir, idx)
+	probe, err := ex.Exec(ctx, sessionID, session.ExecRequest{
+		Cmd: []string{"sh", "-c",
+			"ffprobe -v error -show_entries format=duration -of csv=p=0 " + turnPath},
+	})
+	if err != nil || probe.ExitCode != 0 {
+		return nil // best-effort
+	}
+	var dur float64
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(probe.Stdout)), "%f", &dur); err != nil {
+		return nil
+	}
+	deficit := minSec - dur
+	if deficit <= 0.001 {
+		return nil // already meets the floor (1ms tolerance)
+	}
+	padPath := fmt.Sprintf("%s/turn-%03d-pad.mp3", concatTempDir, idx)
+	mergedPath := fmt.Sprintf("%s/turn-%03d-padded.mp3", concatTempDir, idx)
+	listPath := fmt.Sprintf("%s/turn-%03d-pad.txt", concatTempDir, idx)
+	cmds := []string{
+		// 1. Generate the silence segment of exactly `deficit` seconds.
+		fmt.Sprintf("ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=mono -t %.3f -acodec libmp3lame %s",
+			deficit, padPath),
+		// 2. Build a concat list (turn, then silence).
+		fmt.Sprintf("printf \"file '%s'\\nfile '%s'\\n\" > %s", turnPath, padPath, listPath),
+		// 3. Concat into the merged file (re-encode for frame-size safety).
+		fmt.Sprintf("ffmpeg -y -f concat -safe 0 -i %s -acodec libmp3lame -b:a 128k %s",
+			listPath, mergedPath),
+		// 4. Replace the original turn with the padded version.
+		fmt.Sprintf("mv %s %s", mergedPath, turnPath),
+	}
+	for _, cmd := range cmds {
+		res, err := ex.Exec(ctx, sessionID, session.ExecRequest{
+			Cmd: []string{"sh", "-c", cmd},
+		})
+		if err != nil {
+			return err
+		}
+		if res.ExitCode != 0 {
+			return fmt.Errorf("pad command exit %d: %s", res.ExitCode,
+				strings.TrimSpace(string(res.Stderr)))
+		}
 	}
 	return nil
 }

@@ -336,8 +336,10 @@ func TestSlidesNarrate_FfmpegSegmentFailure_FullStderrSurfaced(t *testing.T) {
 	pack := SlidesNarrate(nil, nil)
 	artifacts := packs.NewMemoryArtifactStore()
 	ec := &packs.ExecutionContext{
-		Pack:    pack,
-		Input:   json.RawMessage(`{"markdown":"---\nmarp: true\n---\n\n# Slide"}`),
+		Pack: pack,
+		// allow_silent_output:true so #138 credential-resolve passes
+		// and we actually reach the per-segment ffmpeg step under test.
+		Input:   json.RawMessage(`{"markdown":"---\nmarp: true\n---\n\n# Slide","allow_silent_output":true}`),
 		Session: &session.Session{ID: "s"},
 		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Exec: func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {

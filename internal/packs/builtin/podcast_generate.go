@@ -34,7 +34,27 @@ const (
 	defaultPodcastTheme       = "deep-dive"
 	defaultPodcastDurationMin = 8
 	defaultPodcastSilenceMs   = 600
+	// defaultMinTurnDurationS (#141) is the per-turn duration floor
+	// applied when min_turn_duration_s isn't specified. Matches the
+	// 5s slides.narrate house style. Pass min_turn_duration_s:0
+	// explicitly to opt out and preserve raw TTS pacing.
+	defaultMinTurnDurationS = 5.0
 )
+
+// zeroFloorOptedIn checks whether the caller passed
+// "min_turn_duration_s": 0 explicitly (in which case they want the
+// no-floor behavior) versus omitting the field (in which case JSON
+// gives us 0 too but they meant "default please"). Distinguishing
+// the two is the difference between a back-compat preserving default
+// and a confusing breaking change.
+func zeroFloorOptedIn(raw json.RawMessage) bool {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	_, present := probe["min_turn_duration_s"]
+	return present
+}
 
 // PodcastGenerate constructs the podcast.generate pack. v supplies
 // the ElevenLabs API key; eg is the egress guard used to validate
@@ -68,6 +88,7 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 				"theme":                     "string",
 				"duration_target_min":       "number",
 				"silence_between_turns_ms":  "number",
+				"min_turn_duration_s":       "number",
 				"generate_cover_prompt":     "boolean",
 				"credential":                "string",
 				"allow_silent_output":       "boolean",
@@ -107,6 +128,7 @@ type podcastGenerateInput struct {
 	Theme                  string            `json:"theme"`
 	DurationTargetMin      int               `json:"duration_target_min"`
 	SilenceBetweenTurnsMs  int               `json:"silence_between_turns_ms"`
+	MinTurnDurationS       float64           `json:"min_turn_duration_s"`
 	GenerateCoverPrompt    bool              `json:"generate_cover_prompt"`
 	Credential             string            `json:"credential"`
 	AllowSilentOutput      bool              `json:"allow_silent_output"`
@@ -316,8 +338,18 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 		if silenceMs <= 0 {
 			silenceMs = defaultPodcastSilenceMs
 		}
+		// #141: per-turn floor. nil/zero means "use the default 5s
+		// floor"; setting to <0 (encoded as in.MinTurnDurationS == 0
+		// after json default) preserves today's no-floor behavior.
+		// Operators who want raw TTS pacing pass min_turn_duration_s:
+		// 0 explicitly via the dedicated opt-out — see schema doc.
+		minTurnSec := in.MinTurnDurationS
+		if minTurnSec == 0 && !zeroFloorOptedIn(ec.Input) {
+			minTurnSec = defaultMinTurnDurationS
+		}
 		finalMP3, durationS, err := podcast.Concat(ctx, ex, ec.Session.ID, mp3Turns, podcast.ConcatOptions{
 			SilenceBetweenTurnsMs: silenceMs,
+			MinTurnDurationS:      minTurnSec,
 		})
 		if err != nil {
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,

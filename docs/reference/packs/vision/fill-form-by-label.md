@@ -10,6 +10,8 @@ The "fill in this form" pack. Caller supplies a `fields` map of `{label: value}`
 
 This is the messiest of the three vision packs because the action loop must track per-field progress. Pairs naturally with [`vision.click_anywhere`](./click-anywhere.md) (to submit afterward) and [`vision.extract_visible_text`](./extract-visible-text.md) (to verify the post-submit state).
 
+> ⚠️ **Same known limitation as `vision.click_anywhere`** — see [issue #102](https://github.com/tosin2013/helmdeck/issues/102). The loop doesn't visually verify the typed text actually landed in the right field before moving on. For high-stakes forms, follow with `vision.extract_visible_text` to confirm the field values.
+
 ## Setup prerequisite
 
 Vision packs run on a **desktop-mode** session. The Chromium window must already be at the form URL — typically achieved by `vision.click_anywhere` to focus the URL bar, then `desktop.type` + `desktop.key` Enter to navigate.

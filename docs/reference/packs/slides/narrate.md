@@ -33,7 +33,7 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `markdown` | `string` | yes | — | Marp deck. **Must preserve `---` slide delimiters and `<!-- speaker:notes -->` HTML comments exactly** — agent prompts that escape or reformat the markdown will produce broken output. The frontmatter must start `---\nmarp: true\n---`. |
+| `markdown` | `string` | yes | — | Marp deck. **Must preserve `---` slide delimiters and `<!-- speaker:notes -->` HTML comments exactly** — agent prompts that escape or reformat the markdown will produce broken output. The frontmatter must start `---\nmarp: true\n---`. **Custom design** (themes, CSS) goes in the markdown's frontmatter — see [`slides.render` §"Custom design"](./render.md#custom-design-themes--css) for the syntax; the same Marp render is used internally here. |
 | `voice_id` | `string` | no | random from top 5 popular voices | ElevenLabs voice ID. The pack queries `/v1/voices` and picks if unset; falls back to `EXAVITQu4vr4xnSDxMaL` (Rachel) on listing failure. |
 | `model_id` | `string` | no | `"eleven_multilingual_v2"` | ElevenLabs model. `eleven_turbo_v2_5` is faster/cheaper; `eleven_multilingual_v2` handles non-English. |
 | `resolution` | `string` | no | `"1920x1080"` | Video resolution. Smaller = lower memory (try `1280x720` if you OOM at 4K). |

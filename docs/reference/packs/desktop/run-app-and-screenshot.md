@@ -119,6 +119,14 @@ Always pass `_session_id` to follow-on calls — see [SKILLS.md §"Session chain
 
 Synchronous. Wall-clock = sidecar boot (cold session ~10–20s for desktop mode) + `wait_ms` + screenshot (~1s).
 
+## What the screenshot looks like
+
+The session's Xvfb display (`DISPLAY=:99`) starts with a **blank gray desktop** — XFCE4 with no wallpaper, a minimal panel at the bottom, and Chromium pre-launched somewhere on the canvas. A capture taken immediately after launching xterm shows that mostly-empty desktop with the new xterm window in the corner. **This is the expected baseline**, not a rendering bug.
+
+If you see a screenshot that looks "blank" — flat gray, with maybe a thin window border — that's likely Xvfb's default background plus the launched app's window in a position you didn't expect. The PNG itself is fine; the desktop just doesn't have a richer baseline.
+
+If you want a visually richer baseline (wallpaper, larger panel, themed window decorations), an operator can install one into the sidecar entrypoint at [`deploy/docker/sidecar-entrypoint.sh`](https://github.com/tosin2013/helmdeck/blob/main/deploy/docker/sidecar-entrypoint.sh) — drop a `feh --bg-scale /path/to/wallpaper.png &` line right after `startxfce4` and rebuild the sidecar image. Helmdeck does not ship a wallpaper to keep the sidecar lean.
+
 ## See also
 
 - Catalog row: [`PACKS.md`](/PACKS) — `desktop.run_app_and_screenshot`.

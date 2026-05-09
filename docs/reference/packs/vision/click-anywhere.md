@@ -6,9 +6,11 @@ keywords: [helmdeck, vision, click, xdotool, computer use, MCP]
 
 # `vision.click_anywhere`
 
-The natural-language click pack. Caller supplies a `goal` — *"click the URL bar at the top of the Chromium window"* — plus a vision-capable `model`; the pack screenshots the visible desktop, asks the model for click coordinates, fires `xdotool click` at those coordinates, screenshots again, and loops until the model emits `done` (goal reached) or `max_steps` is hit. Every step's screenshot is recorded as an artifact so the operator can replay the trail in the *Artifacts* UI panel.
+The natural-language click pack. Caller supplies a `goal` — *"click the URL bar at the top of the Chromium window"* — plus a vision-capable `model`; the pack screenshots the visible desktop, asks the model for click coordinates, fires `xdotool click` at those coordinates, and loops until the model emits `done` (goal reached) or `max_steps` is hit. Every step's screenshot is recorded as an artifact so the operator can replay the trail in the *Artifacts* UI panel.
 
-This is the agent-loop counterpart to the [`desktop.*` REST primitives](/PACKS) (documented in PR-C) — use `vision.click_anywhere` when the agent doesn't already know the pixel coordinates; use `desktop.click` when it does.
+This is the agent-loop counterpart to the [`desktop.* REST primitives`](../desktop-rest-primitives.md) — use `vision.click_anywhere` when the agent doesn't already know the pixel coordinates; use `desktop.click` when it does.
+
+> ⚠️ **Known limitation — see [issue #102](https://github.com/tosin2013/helmdeck/issues/102)**: the loop currently does **not** capture a fresh screenshot after each click before the next model turn. The model decides whether to emit `done` based on its prior pre-click screenshot plus its own confidence in the action, not on visually verified post-click state. For unambiguous targets (focusing a URL bar, clicking a clearly-labeled standalone button) this works fine. For dense UIs, modal dialogs, or pages mid-load, the pack may report `completed: true` when the click silently missed. Until the fix lands, callers should verify success with [`vision.extract_visible_text`](./extract-visible-text.md) or [`desktop.screenshot`](../desktop-rest-primitives.md#post-apiv1desktopscreenshot) after each click sequence.
 
 ## Setup prerequisite
 

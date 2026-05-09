@@ -112,6 +112,73 @@ curl -fsS -H "Authorization: Bearer $JWT" \
 
 Synchronous. PDF rendering of a 10-slide deck is ~3–6s. PPTX ~5–10s. HTML ~1–2s.
 
+## Custom design (themes + CSS)
+
+The pack passes the deck verbatim to `marp --stdin`, so **all Marp frontmatter directives apply** — there's no schema knob for themes because the theme lives in the markdown itself.
+
+### Built-in themes
+
+Marp ships three themes out of the box. Pick one in the frontmatter:
+
+```markdown
+---
+marp: true
+theme: gaia      # or: default | uncover
+---
+
+# Slide 1
+```
+
+| Theme | Looks like |
+|---|---|
+| `default` | Clean white background, dark text. Marp's reference look. |
+| `gaia` | Warm cream background, brown accents. Good for narrative decks. |
+| `uncover` | High-contrast minimalist (black/white). Good for keynote-style decks. |
+
+### Custom CSS (per-deck overrides)
+
+Two ways to inject custom CSS — both work because Marp processes them inline:
+
+**Frontmatter `style` block** (preferred — keeps everything in one place):
+
+```markdown
+---
+marp: true
+theme: gaia
+style: |
+  section {
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    color: #f5f5f5;
+  }
+  h1 { color: #00d4ff; }
+  code { background: #222; color: #f0a500; padding: 2px 6px; border-radius: 3px; }
+---
+
+# Custom-styled deck
+```
+
+**Embedded `<style>` tag** (works inside the markdown body, useful for per-slide variations):
+
+```markdown
+---
+marp: true
+---
+
+<style scoped>
+  section { background: #fff; color: #111; }
+</style>
+
+# This slide uses scoped CSS
+```
+
+`<style scoped>` applies only to the slide it appears on; a plain `<style>` block applies deck-wide.
+
+### When the agent needs custom design
+
+For an agent driving `slides.render` (or `slides.narrate`) on the user's behalf, the pattern is: **write the design into the markdown frontmatter the agent generates**. The pack itself doesn't accept theme arguments — design lives in the deck. Agents handling "make this deck look like X" prompts should emit the corresponding frontmatter directives, not pass them as separate pack inputs.
+
+Reference: <https://marpit.marp.app/theme-css> for the full Marp directive list.
+
 ## See also
 
 - Catalog row: [`PACKS.md`](/PACKS) — `slides.render`.

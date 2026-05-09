@@ -157,16 +157,37 @@ The noVNC stack inside the sidecar is **deliberately unauthenticated**. `x11vnc 
 
 The 5-minute URL TTL (`expires_at` in the response) is informational, not enforced. The URL itself doesn't carry a signed token — it's the URL of a network-reachable noVNC server. If you forward port 6080, the URL is valid as long as the sidecar lives. Tear down the sidecar (`DELETE /api/v1/sessions/<id>`) when you're done.
 
-## What's coming — WebRTC live viewer (Phase 8)
+## Known limitations and open work
 
-The thin `/api/v1/desktop/vnc-url` endpoint is the **v0.x baseline** per [ADR 028 (WebRTC live session streaming)](../adrs/028-webrtc-live-session-streaming.md). The eventual replacement:
+This how-to documents the **v0.x baseline** per [ADR 028 (WebRTC live session streaming)](../adrs/028-webrtc-live-session-streaming.md). The endpoint is intentionally thin — most of the operator-experience improvements live in tracked issues that haven't shipped yet. Be aware of these gaps before you build a workflow on top of the noVNC path:
+
+### No in-control-plane proxy (yet)
+
+The `/api/v1/desktop/vnc-url` endpoint hands you a URL pointing at a sidecar IP on baas-net. It doesn't proxy the WebSocket through the control plane, so reachability is operator-managed (the three paths above). The Management UI's "View Desktop" tile (T603, in progress) and the WebRTC replacement (#23) both fix this — until either lands, plan on either Path 2 (port-forward) or Path 3 (reverse proxy) for any sustained operator use.
+
+### No built-in authentication on the noVNC server itself
+
+x11vnc runs with `-nopw` and websockify passes traffic verbatim — by design. Helmdeck assumes the noVNC port is reachable only from inside baas-net, or that you've put authentication at the reverse-proxy layer (Path 3). There's no `HELMDECK_VNC_PASSWORD` env var, and we don't plan to add one — proxy-layer auth is the right shape, and the WebRTC replacement (#23) will use signed per-session tokens instead.
+
+### No audio capture on the noVNC path
+
+Today's noVNC streams the video display only. If a pack plays audio (e.g. `podcast.generate` previews), you won't hear it. Audio capture is part of [#24 (PulseAudio → WebRTC)](https://github.com/tosin2013/helmdeck/issues/24) in Phase 8, alongside the WebRTC replacement.
+
+### Sidecar version drift can break the noVNC layer
+
+If you upgraded the control plane but didn't run `make sidecars` (or if a future upgrade changes the noVNC stack), the desktop layer can break in confusing ways — websockify present, x11vnc missing, that kind of thing. [#109 (sidecar image version pinning)](https://github.com/tosin2013/helmdeck/issues/109) tracks the long-term fix; until then, run `make sidecars` after every helmdeck upgrade as covered in [Upgrade helmdeck](./upgrade-helmdeck.md).
+
+### What's coming — WebRTC live viewer (Phase 8)
+
+The eventual replacement for the entire noVNC path:
 
 - **Proxied through the control plane** — no operator-managed port forwarding required
-- **Per-session signed token** — short-lived JWT-bound to a single session, no broadcast risk
+- **Per-session signed token** — short-lived, JWT-bound to a single session, no broadcast risk
 - **WebRTC instead of VNC** — lower latency, hardware acceleration, multi-viewer support
 - **Recording built-in** — write the WebRTC stream to S3 alongside the session artifacts
+- **Audio included** — see [#24](https://github.com/tosin2013/helmdeck/issues/24)
 
-Tracked at [#23](https://github.com/tosin2013/helmdeck/issues/23) (Phase 8). Until that ships, this how-to is the canonical operator path.
+Tracked at [#23](https://github.com/tosin2013/helmdeck/issues/23). Until that ships, this how-to is the canonical operator path.
 
 ## Troubleshooting
 

@@ -57,7 +57,17 @@ func main() {
 	mintTokenClient := flag.String("mint-token-client", "", "client label for -mint-token (claude-code, claude-desktop, openclaw, gemini-cli, ...)")
 	mintTokenScopes := flag.String("mint-token-scopes", "admin", "comma-separated scopes for -mint-token")
 	mintTokenTTL := flag.Duration("mint-token-ttl", auth.DefaultTTL, "lifetime for -mint-token")
+	// -version doubles as the compose.yaml healthcheck command. Exits
+	// 0 with "version commit" on stdout so the docker daemon can use
+	// the exit code as the health signal without HTTP probing inside
+	// the distroless container (no shell, no curl, no wget).
+	showVersion := flag.Bool("version", false, "print version and exit (also used by the compose healthcheck)")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version, commit)
+		return
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)

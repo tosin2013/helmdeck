@@ -105,10 +105,15 @@ echo "--- booting compose stack ---"
 docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d --wait
 
 URL="http://localhost:${PORT}"
-TOKEN="$(go run "${REPO_ROOT}/scripts/mint-token" --secret "${SECRET}" --subject clients-smoke 2>/dev/null \
-  || curl -fsS -X POST "${URL}/api/v1/dev/token" -d "{\"subject\":\"clients-smoke\"}" | jq -r .token)"
+# Mint a JWT via the control-plane binary's -mint-token flag, exec'd
+# inside the running container so it uses the same HELMDECK_JWT_SECRET
+# the server was started with. The previous "go run scripts/mint-token"
+# path referenced a script that doesn't exist; the curl fallback hit
+# /api/v1/dev/token which also doesn't exist (would 401 from auth).
+TOKEN="$(docker exec helmdeck-control-plane /usr/local/bin/control-plane \
+  -mint-token clients-smoke -mint-token-scopes admin 2>/dev/null | tail -1)"
 if [[ -z "${TOKEN}" ]]; then
-  echo "clients-smoke: could not mint a JWT" >&2
+  echo "clients-smoke: could not mint a JWT via docker exec" >&2
   exit 1
 fi
 
@@ -117,13 +122,21 @@ call_bridge() {
   # responses from stdout. The bridge proxies them verbatim to the
   # platform's WebSocket MCP endpoint. We rely on line-delimited JSON
   # in both directions (the bridge wire format).
+  #
+  # We keep stdin open for an extra ~30s after the last frame because
+  # the bridge closes the WebSocket when stdin EOFs — and tools/call
+  # for browser.screenshot_url takes ~5s server-side (sidecar spawn +
+  # navigation + screenshot). EOF'ing immediately races the response
+  # back to us; the in-flight request gets aborted server-side and we
+  # see zero responses on stdout. The outer `timeout 60` caps total
+  # wall time so a hung server doesn't stall CI.
   local payload
   payload="$(jq -nc \
     '{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2024-11-05",capabilities:{},clientInfo:{name:"clients-smoke",version:"0.0.0"}}},
      {jsonrpc:"2.0",id:2,method:"tools/list"},
      {jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"browser.screenshot_url",arguments:{url:"https://example.com"}}}')"
   HELMDECK_URL="${URL}" HELMDECK_TOKEN="${TOKEN}" \
-    timeout 60 "${BRIDGE_BIN}" <<<"${payload}"
+    timeout 60 bash -c '{ printf "%s\n" "$1"; sleep 30; } | "$2"' _ "${payload}" "${BRIDGE_BIN}"
 }
 
 for client in "${CLIENTS[@]}"; do

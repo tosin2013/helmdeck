@@ -6,7 +6,7 @@ tags: [vision, agent-architecture, mcp, open-research, computer-use]
 description: The screenshot loop in helmdeck's vision packs converges. The vision model rarely emits "done". Here are five concrete open-source projects — verifiers, MCP servers, observability standards, prompt harnesses, fine-tuning datasets — that any one of which would solve the gap. None of them need to live in helmdeck. All of them are waiting for the right contributor.
 image: /img/social-card.png
 date: 2026-05-09
-draft: true
+draft: false
 ---
 
 > [Issue #112](https://github.com/tosin2013/helmdeck/issues/112) is the canonical research thread. This post pulls the same thinking into a project-shaped frame: five separable projects, any one of which would close the gap. If you're an OSS maintainer or researcher looking for a 3–6 month project that lots of people would benefit from — pick one.

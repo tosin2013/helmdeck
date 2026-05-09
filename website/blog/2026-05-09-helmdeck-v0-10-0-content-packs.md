@@ -6,7 +6,7 @@ tags: [release-notes, mcp, content-packs, registry]
 description: v0.10.0 ships two new content packs (blog.publish, podcast.generate), publishes helmdeck to the official MCP Registry, documents the operator upgrade procedure for the first time, and acknowledges the experimental status of the vision packs. Pack count 36 → 38.
 image: /img/social-card.png
 date: 2026-05-09
-draft: true
+draft: false
 ---
 
 > Tag: [`v0.10.0`](https://github.com/tosin2013/helmdeck/releases/tag/v0.10.0). Upgrade in 5 min: `git checkout v0.10.0 && make install`.

@@ -139,6 +139,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Env-hydrate well-known credentials (#142). Operators set
+	// HELMDECK_<SVC>_API_KEY in .env.local per the README; this
+	// auto-imports each present env var into the vault under its
+	// canonical name (elevenlabs-key, etc.) so vault-backed packs
+	// (podcast.generate, slides.narrate) work without a separate
+	// `POST /vault/credentials` step. User-managed entries are never
+	// clobbered — only rows that this routine itself created get
+	// re-upserted on subsequent restarts.
+	created, updated, skipped := vaultStore.HydrateFromEnv(context.Background(), logger, envOrFile)
+	if created+updated+skipped > 0 {
+		logger.Info("vault env hydrate done",
+			"created", created, "updated", updated, "skipped", skipped)
+	}
+
 	// Egress guard (T508). Application-layer SSRF defense — blocks
 	// every pack-handler call out to cloud metadata, RFC 1918, and
 	// loopback by default. Operators with internal CI hosts that

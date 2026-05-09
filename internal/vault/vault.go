@@ -394,6 +394,78 @@ func (s *Store) Rotate(ctx context.Context, id string, newPlaintext []byte) (Rec
 	return rec, nil
 }
 
+// UpsertByName creates the credential if no row with that name exists,
+// or updates the ciphertext + host/path patterns + metadata in place if
+// one does. Returns the post-write record and a `created` flag so
+// callers can tell which path ran.
+//
+// UpsertByName does NOT touch ACLs — callers are responsible for
+// granting access via Grant() the same way Create() requires. The
+// env-hydrate path adds a wildcard grant on first create so packs can
+// resolve the credential immediately.
+func (s *Store) UpsertByName(ctx context.Context, in CreateInput) (Record, bool, error) {
+	if in.Name == "" {
+		return Record{}, false, errors.New("vault: name is required")
+	}
+	existing, err := s.GetByName(ctx, in.Name)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return Record{}, false, err
+	}
+	if errors.Is(err, ErrNotFound) {
+		rec, cerr := s.Create(ctx, in)
+		if cerr != nil {
+			return Record{}, false, cerr
+		}
+		return rec, true, nil
+	}
+
+	// Update path: rotate ciphertext + refresh host/path/metadata.
+	if !in.Type.Validate() {
+		return Record{}, false, fmt.Errorf("vault: unknown credential type %q", in.Type)
+	}
+	if in.HostPattern == "" {
+		return Record{}, false, errors.New("vault: host_pattern is required")
+	}
+	if len(in.Plaintext) == 0 {
+		return Record{}, false, errors.New("vault: plaintext is required")
+	}
+	ct, nonce, err := s.encrypt(in.Plaintext)
+	if err != nil {
+		return Record{}, false, err
+	}
+	metadataJSON := []byte("{}")
+	if in.Metadata != nil {
+		metadataJSON, err = json.Marshal(in.Metadata)
+		if err != nil {
+			return Record{}, false, fmt.Errorf("vault: metadata marshal: %w", err)
+		}
+	}
+	now := s.now()
+	updated := Record{
+		ID:          existing.ID,
+		Name:        existing.Name,
+		Type:        in.Type,
+		HostPattern: in.HostPattern,
+		PathPattern: in.PathPattern,
+		Fingerprint: fingerprint(in.Plaintext),
+		Metadata:    in.Metadata,
+		CreatedAt:   existing.CreatedAt,
+		UpdatedAt:   now,
+		LastUsedAt:  existing.LastUsedAt,
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE credentials
+		   SET type = ?, host_pattern = ?, path_pattern = ?, ciphertext = ?, nonce = ?, fingerprint = ?, metadata_json = ?, updated_at = ?
+		 WHERE id = ?`,
+		string(updated.Type), updated.HostPattern, updated.PathPattern,
+		ct, nonce, updated.Fingerprint, string(metadataJSON),
+		updated.UpdatedAt.Format(time.RFC3339Nano), updated.ID,
+	); err != nil {
+		return Record{}, false, fmt.Errorf("vault: upsert update: %w", err)
+	}
+	return updated, false, nil
+}
+
 // Grant adds an ACL entry. Idempotent — re-granting an existing
 // (subject, client) tuple is a no-op.
 func (s *Store) Grant(ctx context.Context, credentialID string, g Grant) error {

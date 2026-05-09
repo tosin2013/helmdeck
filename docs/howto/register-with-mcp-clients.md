@@ -118,13 +118,13 @@ Or pin the version explicitly in your client config: `"args": ["-y", "@helmdeck/
 
 ## How registry publication works (for the curious)
 
-The metadata at [`.mcp/server.json`](https://github.com/tosin2013/helmdeck/blob/main/.mcp/server.json) is the single source of truth. On every helmdeck release we run:
+The metadata at [`.mcp/server.json`](https://github.com/tosin2013/helmdeck/blob/main/.mcp/server.json) is the single source of truth. On every helmdeck release a maintainer runs:
 
 ```bash
-mcp-publisher publish .mcp/server.json
+./scripts/publish-to-mcp-registry.sh
 ```
 
-That re-publishes the entry to `registry.modelcontextprotocol.io`, which downstream aggregators (mcp.so, Glama, PulseMCP) pull from on a schedule. Namespace ownership is verified via GitHub OIDC — only the `tosin2013` GitHub owner can publish under `io.github.tosin2013/...`.
+That script: validates the JSON against the upstream schema, builds the `mcp-publisher` CLI from source, runs an interactive GitHub OAuth login, and publishes to `registry.modelcontextprotocol.io`. Downstream aggregators (mcp.so, Glama, PulseMCP) pull from there on a schedule. Namespace ownership is verified via GitHub — only the `tosin2013` GitHub owner can publish under `io.github.tosin2013/...`.
 
 If you fork or repackage helmdeck, you'll need your own namespace (`io.github.<your-username>/...` for a GitHub fork, or `com.<yourdomain>/...` if you own a domain). See the [official publishing guide](https://modelcontextprotocol.io/registry/about) for the full flow.
 

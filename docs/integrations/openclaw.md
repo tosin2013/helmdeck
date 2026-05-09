@@ -37,6 +37,8 @@ OpenClaw is **Topology A** — both OpenClaw and helmdeck run as docker compose 
 - Helmdeck cloned at `/root/helmdeck` (or wherever)
 - ≥ 4 GB RAM, ≥ 2 CPUs (the install script preflight enforces this)
 
+> **Tip:** Helmdeck is on the [official MCP Registry](https://registry.modelcontextprotocol.io/) as `io.github.tosin2013/helmdeck`. The cross-client registry walkthrough at [Register helmdeck with your MCP client](../howto/register-with-mcp-clients.md) covers stdio install for any MCP-aware agent. The OpenClaw integration below is custom because OpenClaw runs as a separate container and uses a SKILL.md file in addition to the MCP bridge — the `configure-openclaw.sh` script handles both.
+
 ## Setup at a glance
 
 The full first-time wiring is six steps. Sections 1–6 below walk through them; this is the "are we sure we got everything?" cheat-sheet.

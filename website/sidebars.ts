@@ -17,6 +17,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'howto/troubleshoot-install',
         'howto/upgrade-helmdeck',
+        'howto/register-with-mcp-clients',
       ],
     },
     {

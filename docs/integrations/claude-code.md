@@ -39,6 +39,8 @@ Source: <https://code.claude.com/docs/en/setup>
 
 ## 2. Add helmdeck as an MCP server
 
+> **Tip:** Helmdeck is published on the [official MCP Registry](https://registry.modelcontextprotocol.io/) as `io.github.tosin2013/helmdeck`. If you'd rather use the registry-aware install path that's identical across every MCP client, see [Register helmdeck with your MCP client](../howto/register-with-mcp-clients.md). The Claude-Code-specific steps below remain valid and produce the same end state.
+
 ### 2a. Direct streamable-http path (T302a — recommended)
 
 ```bash

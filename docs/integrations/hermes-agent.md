@@ -40,6 +40,8 @@ Source: <https://hermes-agent.nousresearch.com/docs/getting-started/installation
 
 ## 2. Install the helmdeck-mcp bridge
 
+> **Tip:** Helmdeck is on the [official MCP Registry](https://registry.modelcontextprotocol.io/) as `io.github.tosin2013/helmdeck`. The cross-client registry walkthrough is at [Register helmdeck with your MCP client](../howto/register-with-mcp-clients.md). Steps below are the Hermes-Agent-specific path.
+
 ```bash
 brew install tosin2013/helmdeck/helmdeck-mcp
 # or

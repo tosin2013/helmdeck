@@ -46,6 +46,8 @@ export GEMINI_API_KEY="<your-key>"
 
 ## 2. Configure helmdeck as an MCP server
 
+> **Tip:** Helmdeck is on the [official MCP Registry](https://registry.modelcontextprotocol.io/) as `io.github.tosin2013/helmdeck`. The cross-client registry walkthrough is at [Register helmdeck with your MCP client](../howto/register-with-mcp-clients.md). Steps below are the Gemini-CLI-specific path.
+
 Edit `~/.gemini/settings.json` and add an entry under `mcpServers`. Pick one of the two transports.
 
 ### 2a. Streamable HTTP (recommended)

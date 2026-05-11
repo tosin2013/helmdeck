@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
+	"github.com/tosin2013/helmdeck/internal/security"
 	"github.com/tosin2013/helmdeck/internal/session"
+	"github.com/tosin2013/helmdeck/internal/vault"
 )
 
 // SlidesRender is the third reference pack referenced by ADR 014. It
@@ -37,29 +39,32 @@ import (
 //	  "artifact_key": "slides.render/<rand>-deck.pdf",
 //	  "size":         123456
 //	}
-func SlidesRender() *packs.Pack {
+func SlidesRender(v *vault.Store, eg *security.EgressGuard) *packs.Pack {
 	return &packs.Pack{
 		Name:        "slides.render",
 		Version:     "v1",
-		Description: "Render a Marp markdown deck to PDF, PPTX, or HTML. Supports ```mermaid``` fenced blocks — pre-rendered to inline SVG via mmdc in the sidecar so diagrams appear in every output format.",
+		Description: "Render a Marp markdown deck to PDF, PPTX, or HTML. Supports ```mermaid``` fenced blocks (rendered via mmdc) and optional hero image (generated via fal.ai when `hero_image_prompt` is set).",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"markdown"},
 			Properties: map[string]string{
-				"markdown": "string",
-				"format":   "string",
-				"mermaid":  "boolean",
+				"markdown":          "string",
+				"format":            "string",
+				"mermaid":           "boolean",
+				"hero_image_prompt": "string",
+				"hero_image_model":  "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
 			Required: []string{"format", "artifact_key", "size"},
 			Properties: map[string]string{
-				"format":       "string",
-				"artifact_key": "string",
-				"size":         "number",
+				"format":                "string",
+				"artifact_key":          "string",
+				"size":                  "number",
+				"hero_image_model_used": "string",
 			},
 		},
-		Handler: slidesRenderHandler,
+		Handler: slidesRenderHandler(v, eg),
 	}
 }
 
@@ -72,6 +77,15 @@ type slidesInput struct {
 	// false opts out for decks that don't need mermaid (saves a few
 	// hundred ms of mmdc startup).
 	Mermaid *bool `json:"mermaid,omitempty"`
+	// HeroImagePrompt, when non-empty, triggers image.generate via the
+	// shared RunImageGen helper (#146). The generated PNG is base64-
+	// inlined as an <img data:image/png;base64,...> before slide 1 so
+	// every output format (PDF/PPTX/HTML) renders the hero without
+	// Marp needing to fetch URLs at render time.
+	HeroImagePrompt string `json:"hero_image_prompt"`
+	// HeroImageModel overrides the default fal.ai model used for
+	// hero generation. Empty → fal-ai/flux/schnell (fastest/cheapest).
+	HeroImageModel string `json:"hero_image_model"`
 }
 
 // mermaidFenceRe matches ```mermaid…``` fenced blocks (single-line or
@@ -95,87 +109,155 @@ func formatSpec(format string) (marpFlag, ext, mime string, err error) {
 	}
 }
 
-func slidesRenderHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
-	var in slidesInput
-	if err := json.Unmarshal(ec.Input, &in); err != nil {
-		return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
-	}
-	if in.Markdown == "" {
-		return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "markdown must not be empty"}
-	}
-	flag, ext, mime, err := formatSpec(in.Format)
-	if err != nil {
-		return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
-	}
-	if ec.Exec == nil {
-		// The engine guarantees Exec is non-nil only when a session
-		// executor was wired. Surfacing this as session_unavailable
-		// is the honest answer — the runtime is up but the bridge
-		// to in-container tooling is missing.
-		return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
-	}
-
-	// Mermaid pre-processing — substitute ```mermaid fences with
-	// inline-SVG <img> data-URIs so PDF/PPTX/HTML outputs all show
-	// the diagrams. Caller can opt out with mermaid:false.
-	mermaidOn := in.Mermaid == nil || *in.Mermaid
-	markdown := in.Markdown
-	if mermaidOn {
-		rewritten, perr := preprocessMermaidFences(ctx, ec.Exec, markdown)
-		if perr != nil {
-			return nil, perr
+func slidesRenderHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFunc {
+	return func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+		var in slidesInput
+		if err := json.Unmarshal(ec.Input, &in); err != nil {
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
 		}
-		markdown = rewritten
-	}
-
-	// Marp reads markdown from stdin when given `-` as the input
-	// path. We use `--stdin -o -` so the binary output streams back
-	// over our captured stdout — no temp files inside the container,
-	// no path management. The format flag (pdf/pptx/html) selects
-	// the output codec.
-	//
-	// `--allow-local-files` is required for any deck that references
-	// local images; harmless when the markdown has none. We do NOT
-	// pass `--input-dir` so Marp can't escape the stdin sandbox.
-	res, err := ec.Exec(ctx, session.ExecRequest{
-		Cmd: []string{
-			"marp",
-			"--stdin",
-			"--allow-local-files",
-			flag,
-			"-o", "-",
-		},
-		Stdin: []byte(markdown),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("exec marp: %w", err)
-	}
-	if res.ExitCode != 0 {
-		// Surface marp's stderr verbatim — its messages are useful to
-		// pack authors and don't carry secrets. Truncate hard-coded
-		// to keep error envelopes small.
-		stderr := string(res.Stderr)
-		if len(stderr) > 1024 {
-			stderr = stderr[:1024] + "...(truncated)"
+		if in.Markdown == "" {
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "markdown must not be empty"}
 		}
-		return nil, &packs.PackError{
-			Code:    packs.CodeHandlerFailed,
-			Message: fmt.Sprintf("marp exit %d: %s", res.ExitCode, stderr),
+		flag, ext, mime, err := formatSpec(in.Format)
+		if err != nil {
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
 		}
-	}
-	if len(res.Stdout) == 0 {
-		return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: "marp produced empty output"}
-	}
+		if ec.Exec == nil {
+			// The engine guarantees Exec is non-nil only when a session
+			// executor was wired. Surfacing this as session_unavailable
+			// is the honest answer — the runtime is up but the bridge
+			// to in-container tooling is missing.
+			return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
+		}
 
-	art, err := ec.Artifacts.Put(ctx, ec.Pack.Name, "deck."+ext, res.Stdout, mime)
-	if err != nil {
-		return nil, &packs.PackError{Code: packs.CodeArtifactFailed, Message: err.Error(), Cause: err}
+		markdown := in.Markdown
+
+		// Hero image — when prompt is set, call RunImageGen via the
+		// shared #146 helper, fetch the artifact bytes, base64-inline
+		// before slide 1 so PDF/PPTX/HTML all render the hero without
+		// Marp needing to resolve URLs at render time. Failures bubble
+		// up; an unreachable fal.ai shouldn't silently produce a
+		// header-less deck.
+		heroModelUsed := ""
+		if strings.TrimSpace(in.HeroImagePrompt) != "" {
+			heroModel := in.HeroImageModel
+			if heroModel == "" {
+				heroModel = imageGenDefaultModel
+			}
+			heroRes, perr := RunImageGen(ctx, ec, v, eg, ImageGenRequest{
+				Prompt: in.HeroImagePrompt,
+				Model:  heroModel,
+			})
+			if perr != nil {
+				return nil, perr
+			}
+			heroModelUsed = heroRes.ModelUsed
+			// Fetch the artifact bytes and base64-inline. We could
+			// alternately reference a URL, but inline keeps Marp from
+			// needing network access inside the sidecar to render the
+			// hero — important for the PDF path where Chromium fetches
+			// images during rasterisation.
+			imgBytes, _, gerr := ec.Artifacts.Get(ctx, heroRes.ArtifactKeys[0])
+			if gerr != nil {
+				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+					Message: fmt.Sprintf("read hero image artifact: %v", gerr), Cause: gerr}
+			}
+			dataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgBytes)
+			heroBlock := fmt.Sprintf("<img src=\"%s\" alt=\"hero\" class=\"hero-image\" />\n\n---\n\n", dataURI)
+			// Prepend BEFORE any frontmatter check: Marp swallows the
+			// first --- as the slide separator only if frontmatter is
+			// absent. The safest insertion is right after the closing
+			// `---` of the frontmatter block (if present) — match
+			// against the second `---\n` from start. If no frontmatter,
+			// prepend the hero block as a new first slide.
+			if idx := frontmatterEndIndex(markdown); idx > 0 {
+				markdown = markdown[:idx] + "\n" + heroBlock + markdown[idx:]
+			} else {
+				markdown = heroBlock + markdown
+			}
+		}
+
+		// Mermaid pre-processing — substitute ```mermaid fences with
+		// inline-SVG <img> data-URIs so PDF/PPTX/HTML outputs all show
+		// the diagrams. Caller can opt out with mermaid:false.
+		mermaidOn := in.Mermaid == nil || *in.Mermaid
+		if mermaidOn {
+			rewritten, perr := preprocessMermaidFences(ctx, ec.Exec, markdown)
+			if perr != nil {
+				return nil, perr
+			}
+			markdown = rewritten
+		}
+
+		// Marp reads markdown from stdin when given `-` as the input
+		// path. We use `--stdin -o -` so the binary output streams back
+		// over our captured stdout — no temp files inside the container,
+		// no path management. The format flag (pdf/pptx/html) selects
+		// the output codec.
+		//
+		// `--allow-local-files` is required for any deck that references
+		// local images; harmless when the markdown has none. We do NOT
+		// pass `--input-dir` so Marp can't escape the stdin sandbox.
+		res, err := ec.Exec(ctx, session.ExecRequest{
+			Cmd: []string{
+				"marp",
+				"--stdin",
+				"--allow-local-files",
+				flag,
+				"-o", "-",
+			},
+			Stdin: []byte(markdown),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("exec marp: %w", err)
+		}
+		if res.ExitCode != 0 {
+			// Surface marp's stderr verbatim — its messages are useful to
+			// pack authors and don't carry secrets. Truncate hard-coded
+			// to keep error envelopes small.
+			stderr := string(res.Stderr)
+			if len(stderr) > 1024 {
+				stderr = stderr[:1024] + "...(truncated)"
+			}
+			return nil, &packs.PackError{
+				Code:    packs.CodeHandlerFailed,
+				Message: fmt.Sprintf("marp exit %d: %s", res.ExitCode, stderr),
+			}
+		}
+		if len(res.Stdout) == 0 {
+			return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: "marp produced empty output"}
+		}
+
+		art, err := ec.Artifacts.Put(ctx, ec.Pack.Name, "deck."+ext, res.Stdout, mime)
+		if err != nil {
+			return nil, &packs.PackError{Code: packs.CodeArtifactFailed, Message: err.Error(), Cause: err}
+		}
+		out := map[string]any{
+			"format":       ext,
+			"artifact_key": art.Key,
+			"size":         art.Size,
+		}
+		if heroModelUsed != "" {
+			out["hero_image_model_used"] = heroModelUsed
+		}
+		return json.Marshal(out)
 	}
-	return json.Marshal(map[string]any{
-		"format":       ext,
-		"artifact_key": art.Key,
-		"size":         art.Size,
-	})
+}
+
+// frontmatterEndIndex returns the byte index of the start of the line
+// AFTER the closing `---\n` of a Marp frontmatter block. Returns 0 if
+// the markdown does not begin with `---\n` (i.e., no frontmatter).
+// Used by the hero-image inserter to land the hero block AFTER the
+// frontmatter directives, not before them.
+func frontmatterEndIndex(md string) int {
+	if !strings.HasPrefix(md, "---\n") {
+		return 0
+	}
+	rest := md[4:]
+	if i := strings.Index(rest, "\n---\n"); i >= 0 {
+		return 4 + i + len("\n---\n")
+	}
+	return 0
 }
 
 // preprocessMermaidFences finds every ```mermaid…``` block in the

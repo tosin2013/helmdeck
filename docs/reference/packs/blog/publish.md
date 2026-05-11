@@ -207,6 +207,33 @@ The pack calls the gateway LLM with a frozen system prompt that instructs it to 
 | `handler_failed` | Prompt expansion model returned no choices | `blog.publish prompt expansion: model returned no choices` |
 | `artifact_failed` | Object store write failed | `artifact upload failed: …` |
 
+## Mermaid diagrams in technical posts
+
+`blog.publish` understands ```` ```mermaid ```` fenced blocks in markdown bodies and renders them per output cell:
+
+| destination | format | Behaviour |
+|---|---|---|
+| `artifact` | `markdown` | Fence passes through verbatim. Use this when the artifact lands in a renderer that knows mermaid (Docusaurus, GitHub, MkDocs). |
+| `artifact` | `html`     | Fence → `<pre class="mermaid">…</pre>` via [goldmark-mermaid](https://pkg.go.dev/go.abhg.dev/goldmark/mermaid). One `<script src="…mermaid…">` is injected at end of document; open the artifact in any browser and the diagram renders. |
+| `ghost`    | `markdown` | Same as artifact-html — markdown is rendered to HTML via goldmark before POST. |
+| `ghost`    | `html`     | If the body is HTML, it passes through unchanged. If you provide markdown content in an `html`-format request, the cross-mode path renders it the same way as the row above. |
+
+**Ghost themes and `<script>` tags.** Ghost's HTML sanitiser may strip the injected `<script>` tag depending on the post-rendering pipeline and theme. The most reliable path is to add MermaidJS to your Ghost theme's `default.hbs` (or equivalent) so it loads on every post:
+
+```hbs
+<!-- inside <head> of default.hbs -->
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true });
+</script>
+```
+
+After that the `<pre class="mermaid">` blocks `blog.publish` writes will render as diagrams.
+
+**Prompt-mode nudging.** In prompt mode, the pack's system prompt instructs the model to emit ```` ```mermaid ```` fences when content is genuinely visual (architecture, request flow, sequence interactions, state transitions, decision trees) and to prefer prose otherwise. The model decides per post — there's no flag to force or forbid diagrams.
+
+**Supported diagram kinds.** Anything mermaid supports: `flowchart`/`graph`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `erDiagram`, `gantt`, `pie`, `mindmap`, etc. The pack does not validate the diagram body — invalid mermaid syntax surfaces at render time in the reader's browser.
+
 ## Session chaining
 
 **No session.** Stateless. Composes naturally:

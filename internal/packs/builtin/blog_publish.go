@@ -52,6 +52,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/vault"
 	"github.com/tosin2013/helmdeck/internal/vision"
 	"github.com/yuin/goldmark"
+	"go.abhg.dev/goldmark/mermaid"
 )
 
 const (
@@ -69,7 +70,7 @@ func BlogPublish(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) 
 	return &packs.Pack{
 		Name:        "blog.publish",
 		Version:     "v1",
-		Description: "Publish a post to a Ghost blog or render markdown/HTML to the artifact store. Body or prompt+model.",
+		Description: "Publish a post to a Ghost blog or render markdown/HTML to the artifact store. Body or prompt+model. Markdown bodies may include ```mermaid``` fenced blocks — diagrams render client-side in HTML/Ghost outputs (Ghost theme must include MermaidJS).",
 		InputSchema: packs.BasicSchema{
 			Required: []string{"destination", "format", "title"},
 			Properties: map[string]string{
@@ -221,7 +222,8 @@ func blogExpandPrompt(ctx context.Context, d vision.Dispatcher, title, prompt, m
 		maxToks = defaultBlogPromptMaxToks
 	}
 	sys := fmt.Sprintf(
-		"You are a blog post author. Emit ONLY the post body in %s format — no preamble, no explanation, no surrounding code fences. The post title is %q; do NOT repeat it as a heading at the top.",
+		"You are a blog post author. Emit ONLY the post body in %s format — no preamble, no explanation, no surrounding code fences. The post title is %q; do NOT repeat it as a heading at the top. "+
+			"When a concept is genuinely visual — system architecture, request/data flow, sequence interactions, state transitions, decision trees — author it as a fenced ```mermaid``` block (graph/flowchart, sequenceDiagram, stateDiagram, classDiagram, erDiagram, gantt). Prefer prose for everything else. Do not invent diagrams to fill space; one diagram that earns its place beats three that don't.",
 		format, title)
 	resp, err := d.Dispatch(ctx, gateway.ChatRequest{
 		Model:     model,
@@ -519,12 +521,25 @@ func callGhostAPI(ctx context.Context, method, url, token string, body any) (jso
 	return json.RawMessage(respBody), nil
 }
 
-// mdToHTML renders markdown to HTML via goldmark with default extensions.
+// mdToHTML renders markdown to HTML via goldmark.
 // Used by Ghost destination (always — Ghost wants html) and by artifact
 // destination when the agent gave us markdown but asked for an html artifact.
+//
+// Registers the goldmark-mermaid extender in client-render mode so
+// ```mermaid fences become <pre class="mermaid">…</pre> blocks and a
+// single MermaidJS <script> is injected per document when any mermaid
+// block is present. Standalone .html artifacts render in the browser
+// directly; Ghost users whose theme sanitises <script> tags need to add
+// the MermaidJS loader to their default.hbs (documented in the pack
+// reference).
 func mdToHTML(md string) (string, error) {
+	engine := goldmark.New(
+		goldmark.WithExtensions(&mermaid.Extender{
+			RenderMode: mermaid.RenderModeClient,
+		}),
+	)
 	var buf bytes.Buffer
-	if err := goldmark.New().Convert([]byte(md), &buf); err != nil {
+	if err := engine.Convert([]byte(md), &buf); err != nil {
 		return "", err
 	}
 	return buf.String(), nil

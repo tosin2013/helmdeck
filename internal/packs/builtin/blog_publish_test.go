@@ -193,6 +193,85 @@ func TestBlogPublish_Artifact_MarkdownBodyToHTMLArtifact(t *testing.T) {
 	}
 }
 
+func TestBlogPublish_Artifact_MermaidFenceRendersInHTML(t *testing.T) {
+	// Markdown body with a ```mermaid block, html artifact output. The
+	// goldmark mermaid extender should convert the fence into a
+	// <pre class="mermaid">…</pre> block (NOT a plain code block) and
+	// inject a single MermaidJS <script> tag at end of document.
+	pack := BlogPublish(nil, nil, nil)
+	ec := &packs.ExecutionContext{
+		Pack: pack,
+		Input: json.RawMessage(`{
+			"destination": "artifact",
+			"format":      "html",
+			"title":       "Architecture overview",
+			"body":        "# Diagram\n\n` + "```mermaid" + `\ngraph TD; A-->B; B-->C;\n` + "```" + `\n\nSome prose after."
+		}`),
+		Artifacts: packs.NewMemoryArtifactStore(),
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		ArtifactKey string `json:"artifact_key"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	bytes, _, err := ec.Artifacts.Get(context.Background(), out.ArtifactKey)
+	if err != nil {
+		t.Fatalf("artifact get: %v", err)
+	}
+	html := string(bytes)
+	if !strings.Contains(html, `<pre class="mermaid">`) {
+		t.Errorf("expected <pre class=\"mermaid\"> in rendered html; got:\n%s", html)
+	}
+	if strings.Contains(html, `<code class="language-mermaid">`) {
+		t.Errorf("mermaid fence should NOT render as <code class=\"language-mermaid\">; got:\n%s", html)
+	}
+	if !strings.Contains(html, "graph TD; A--&gt;B") && !strings.Contains(html, "graph TD; A-->B") {
+		t.Errorf("mermaid source content missing from rendered html:\n%s", html)
+	}
+	if !strings.Contains(html, "mermaid") || !strings.Contains(html, "<script") {
+		t.Errorf("expected a <script> tag (MermaidJS loader) when mermaid blocks present; got:\n%s", html)
+	}
+}
+
+func TestBlogPublish_Artifact_MarkdownFormatPreservesMermaidFence(t *testing.T) {
+	// Markdown body with a ```mermaid block, markdown artifact output.
+	// Fence MUST pass through verbatim so downstream Markdown renderers
+	// (Docusaurus, GitHub) can render it themselves.
+	pack := BlogPublish(nil, nil, nil)
+	ec := &packs.ExecutionContext{
+		Pack: pack,
+		Input: json.RawMessage(`{
+			"destination": "artifact",
+			"format":      "markdown",
+			"title":       "Architecture overview",
+			"body":        "# Diagram\n\n` + "```mermaid" + `\ngraph TD; A-->B;\n` + "```" + `"
+		}`),
+		Artifacts: packs.NewMemoryArtifactStore(),
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		ArtifactKey string `json:"artifact_key"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	bytes, _, err := ec.Artifacts.Get(context.Background(), out.ArtifactKey)
+	if err != nil {
+		t.Fatalf("artifact get: %v", err)
+	}
+	md := string(bytes)
+	if !strings.Contains(md, "```mermaid") {
+		t.Errorf("mermaid fence should pass through verbatim in markdown artifact; got:\n%s", md)
+	}
+	if !strings.Contains(md, "graph TD; A-->B;") {
+		t.Errorf("mermaid source should pass through verbatim; got:\n%s", md)
+	}
+}
+
 func TestBlogPublish_Ghost_HappyPath_MarkdownBody(t *testing.T) {
 	srv, captured := stubGhost(t, 201, `{
 		"posts": [{

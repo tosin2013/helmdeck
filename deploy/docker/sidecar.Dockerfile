@@ -107,7 +107,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       universal-ctags \
  && rm -rf /var/lib/apt/lists/*
 
-# Layer 4b — Node.js 20 + @playwright/mcp (T807a / ADR 035)
+# Layer 4b — Node.js 20 + @playwright/mcp (T807a / ADR 035) + @mermaid-js/mermaid-cli (#161)
 #
 # Playwright MCP is the "don't rebuild the browser automation layer" half
 # of ADR 035: it exposes Chromium via the accessibility tree so weak LLMs
@@ -121,11 +121,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # postinstall would pull ~200 MB of bundled Chromium that we would never
 # use. The image already has the system chromium from Layer 2.
 #
+# @mermaid-js/mermaid-cli ships mmdc, used by slides.render's mermaid
+# pre-processor (#161). mmdc launches Puppeteer-controlled Chromium under
+# the hood to render diagrams to SVG; PUPPETEER_SKIP_DOWNLOAD=1 keeps it
+# from pulling its bundled Chromium, and the runtime points it at the
+# system chromium via /etc/mmdc/puppeteer-config.json. In a container we
+# must pass --no-sandbox to Chromium; the puppeteer config carries that.
+#
 # The SSE/HTTP surface is bound to 0.0.0.0:8931 at runtime by the
 # entrypoint, so exposing it here is just a hint for `docker inspect`.
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get update && apt-get install -y --no-install-recommends nodejs \
  && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g @playwright/mcp@latest \
+ && PUPPETEER_SKIP_DOWNLOAD=1 npm install -g @mermaid-js/mermaid-cli@latest \
+ && mkdir -p /etc/mmdc \
+ && printf '{\n  "executablePath": "/usr/bin/chromium",\n  "args": ["--no-sandbox", "--disable-dev-shm-usage"]\n}\n' > /etc/mmdc/puppeteer-config.json \
  && npm cache clean --force \
  && rm -rf /var/lib/apt/lists/* /root/.npm
 

@@ -2,8 +2,11 @@ package builtin
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/session"
@@ -38,13 +41,14 @@ func SlidesRender() *packs.Pack {
 	return &packs.Pack{
 		Name:        "slides.render",
 		Version:     "v1",
-		Description: "Render a Marp markdown deck to PDF, PPTX, or HTML.",
+		Description: "Render a Marp markdown deck to PDF, PPTX, or HTML. Supports ```mermaid``` fenced blocks — pre-rendered to inline SVG via mmdc in the sidecar so diagrams appear in every output format.",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"markdown"},
 			Properties: map[string]string{
 				"markdown": "string",
 				"format":   "string",
+				"mermaid":  "boolean",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -62,7 +66,18 @@ func SlidesRender() *packs.Pack {
 type slidesInput struct {
 	Markdown string `json:"markdown"`
 	Format   string `json:"format"`
+	// Mermaid controls whether ```mermaid fences are pre-rendered to
+	// inline SVG via mmdc before Marp sees the deck. Default true.
+	// Use a *bool so an absent field is "default on" and an explicit
+	// false opts out for decks that don't need mermaid (saves a few
+	// hundred ms of mmdc startup).
+	Mermaid *bool `json:"mermaid,omitempty"`
 }
+
+// mermaidFenceRe matches ```mermaid…``` fenced blocks (single-line or
+// multi-line). The (?s) flag lets `.` match newlines. The body is
+// captured non-greedily so adjacent fences don't merge.
+var mermaidFenceRe = regexp.MustCompile("(?s)```mermaid\\s*\\n(.*?)\\n```")
 
 // formatExtension returns the marp output flag, file extension, and
 // MIME type for a requested format. Centralised so the validation
@@ -100,6 +115,19 @@ func slidesRenderHandler(ctx context.Context, ec *packs.ExecutionContext) (json.
 		return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 	}
 
+	// Mermaid pre-processing — substitute ```mermaid fences with
+	// inline-SVG <img> data-URIs so PDF/PPTX/HTML outputs all show
+	// the diagrams. Caller can opt out with mermaid:false.
+	mermaidOn := in.Mermaid == nil || *in.Mermaid
+	markdown := in.Markdown
+	if mermaidOn {
+		rewritten, perr := preprocessMermaidFences(ctx, ec.Exec, markdown)
+		if perr != nil {
+			return nil, perr
+		}
+		markdown = rewritten
+	}
+
 	// Marp reads markdown from stdin when given `-` as the input
 	// path. We use `--stdin -o -` so the binary output streams back
 	// over our captured stdout — no temp files inside the container,
@@ -117,7 +145,7 @@ func slidesRenderHandler(ctx context.Context, ec *packs.ExecutionContext) (json.
 			flag,
 			"-o", "-",
 		},
-		Stdin: []byte(in.Markdown),
+		Stdin: []byte(markdown),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("exec marp: %w", err)
@@ -148,4 +176,95 @@ func slidesRenderHandler(ctx context.Context, ec *packs.ExecutionContext) (json.
 		"artifact_key": art.Key,
 		"size":         art.Size,
 	})
+}
+
+// preprocessMermaidFences finds every ```mermaid…``` block in the
+// markdown, renders each to SVG via mmdc inside the session container,
+// and substitutes the fence with an inline-SVG <img> data-URI. The
+// result is plain Marp markdown that PDF/PPTX/HTML all render with
+// diagrams in place.
+//
+// mmdc is single-shot per diagram; we use a small sh -c wrapper to
+// write stdin to a temp .mmd, run mmdc, and cat the resulting .svg.
+// One session exec per diagram. mmdc bootstrap is ~500ms so a deck with
+// many diagrams accumulates; future work could batch via a single
+// stdin-multi-doc wrapper script. For most technical decks (1–4
+// diagrams) the cost is acceptable.
+//
+// On mmdc failure the function returns the diagram's source verbatim
+// in the error (truncated) so authors can spot syntax problems without
+// having to re-run with mmdc locally.
+func preprocessMermaidFences(ctx context.Context, exec func(context.Context, session.ExecRequest) (session.ExecResult, error), md string) (string, *packs.PackError) {
+	matches := mermaidFenceRe.FindAllStringSubmatchIndex(md, -1)
+	if len(matches) == 0 {
+		return md, nil
+	}
+	// Walk matches in order, building the rewritten string. Indices
+	// from FindAllStringSubmatchIndex are pairs: [start, end, g1Start, g1End].
+	var b strings.Builder
+	cursor := 0
+	for i, m := range matches {
+		fenceStart, fenceEnd := m[0], m[1]
+		diagStart, diagEnd := m[2], m[3]
+		b.WriteString(md[cursor:fenceStart])
+		diagram := md[diagStart:diagEnd]
+		svg, perr := mmdcRender(ctx, exec, diagram, i)
+		if perr != nil {
+			return "", perr
+		}
+		// Inline-SVG <img> via data URI. We base64 the SVG rather than
+		// URL-encoding it — Marp's HTML renderer chokes on % signs in
+		// raw-data URLs more often than on base64.
+		dataURI := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(svg))
+		b.WriteString(`<img src="`)
+		b.WriteString(dataURI)
+		b.WriteString(`" alt="mermaid diagram" class="mermaid-svg" />`)
+		cursor = fenceEnd
+	}
+	b.WriteString(md[cursor:])
+	return b.String(), nil
+}
+
+// mmdcRender executes mmdc inside the session container with the given
+// mermaid source on stdin and returns the SVG bytes from stdout.
+func mmdcRender(ctx context.Context, exec func(context.Context, session.ExecRequest) (session.ExecResult, error), diagram string, idx int) (string, *packs.PackError) {
+	// One-shot shell pipeline: read stdin to tmpdir, run mmdc, cat svg,
+	// clean up. mmdc's puppeteer needs --no-sandbox in a container; the
+	// sidecar ships /etc/mmdc/puppeteer-config.json (see
+	// deploy/docker/sidecar.Dockerfile) that sets it. -q silences progress
+	// chatter on stdout so we get clean SVG.
+	script := `set -e
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+cat > "$T/in.mmd"
+mmdc -i "$T/in.mmd" -o "$T/out.svg" -p /etc/mmdc/puppeteer-config.json -q >&2
+cat "$T/out.svg"`
+	res, err := exec(ctx, session.ExecRequest{
+		Cmd:   []string{"sh", "-c", script},
+		Stdin: []byte(diagram),
+	})
+	if err != nil {
+		return "", &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("exec mmdc (diagram %d): %v", idx, err), Cause: err}
+	}
+	if res.ExitCode != 0 {
+		stderr := string(res.Stderr)
+		if len(stderr) > 512 {
+			stderr = stderr[:512] + "...(truncated)"
+		}
+		preview := diagram
+		if len(preview) > 256 {
+			preview = preview[:256] + "...(truncated)"
+		}
+		return "", &packs.PackError{
+			Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("mmdc exit %d on diagram %d: %s\n--- diagram source ---\n%s",
+				res.ExitCode, idx, stderr, preview),
+		}
+	}
+	if len(res.Stdout) == 0 {
+		return "", &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("mmdc produced empty SVG on diagram %d", idx)}
+	}
+	return string(res.Stdout), nil
 }

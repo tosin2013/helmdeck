@@ -14,8 +14,9 @@ For narrated video output (MP4 with TTS over each slide), see [`slides.narrate`]
 
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `markdown` | `string` | yes | — | Marp deck. Must start with `---\nmarp: true\n---` frontmatter for the directives to apply. Slides separated by `---`. |
+| `markdown` | `string` | yes | — | Marp deck. Must start with `---\nmarp: true\n---` frontmatter for the directives to apply. Slides separated by `---`. May contain ```` ```mermaid ```` fenced blocks — see [Mermaid diagrams](#mermaid-diagrams) below. |
 | `format` | `string` | no | `"pdf"` | Closed-set: `pdf`, `pptx`, `html`. Picks the Marp output codec. |
+| `mermaid` | `boolean` | no | `true` | Pre-render ```` ```mermaid ```` fenced blocks to inline-SVG `<img>` data-URIs via `mmdc` before Marp sees the deck. Set `false` to skip the pre-pass (saves a few hundred ms of mmdc startup if the deck has no diagrams or you've embedded SVGs by hand). |
 
 ## Outputs
 
@@ -111,6 +112,57 @@ curl -fsS -H "Authorization: Bearer $JWT" \
 ## Async behavior
 
 Synchronous. PDF rendering of a 10-slide deck is ~3–6s. PPTX ~5–10s. HTML ~1–2s.
+
+## Mermaid diagrams
+
+Markdown bodies may include ```` ```mermaid ```` fenced blocks anywhere a fenced code block is legal. The pack pre-processes the deck before piping it to Marp: each fence is sent through `mmdc` (the [Mermaid CLI](https://github.com/mermaid-js/mermaid-cli)) running in the sidecar, the SVG is base64-encoded and inlined as an `<img src="data:image/svg+xml;base64,…">` tag, and Marp then renders the deck with the diagrams in place. The same path produces correct output for **PDF, PPTX, and HTML** — no client-side script is involved.
+
+~~~markdown
+---
+marp: true
+theme: gaia
+---
+
+# Architecture overview
+
+```mermaid
+flowchart LR
+  agent[Agent] --> mcp[MCP bridge]
+  mcp --> cp[Control plane]
+  cp --> sidecar[Browser sidecar]
+```
+
+---
+
+# Request flow
+
+```mermaid
+sequenceDiagram
+  participant Agent
+  participant CP as Control plane
+  participant SC as Sidecar
+  Agent->>CP: POST /api/v1/packs/slides.render
+  CP->>SC: exec marp
+  SC-->>CP: PDF bytes
+  CP-->>Agent: artifact_key
+```
+~~~
+
+**Supported diagram kinds.** Anything Mermaid understands: `flowchart`/`graph`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `erDiagram`, `gantt`, `pie`, `mindmap`, `timeline`, etc. The pack does no syntax validation — `mmdc` is the source of truth, and a malformed diagram surfaces as `handler_failed` with the diagram source included in the message so authors can debug without re-running locally.
+
+**Cost.** Each diagram is a separate `mmdc` invocation, each ~300–700ms (Chromium warm-up dominates). Three diagrams ≈ +2s on top of the Marp render. For decks with no diagrams, the pre-pass is a no-op (no `mmdc` exec).
+
+**Opt out.** Pass `"mermaid": false` to skip the pre-pass entirely. Use this when you've embedded SVG manually or know your deck contains no Mermaid.
+
+**Failure behaviour.** A bad Mermaid syntax error surfaces as:
+
+```
+handler_failed: mmdc exit 1 on diagram 0: <truncated stderr>
+--- diagram source ---
+graphh TD; A-->B;
+```
+
+The diagram source is included (truncated to 256 chars) so the author can spot the typo without re-running `mmdc` themselves.
 
 ## Custom design (themes + CSS)
 

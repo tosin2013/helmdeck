@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
@@ -14,16 +15,27 @@ import (
 // We deliberately implement session.Executor (not Runtime) because the
 // engine takes the executor through a separate option, and slides
 // tests don't need any session.Runtime methods.
+//
+// dispatch lets a test return different results per binary (cmd[0]).
+// When set, it takes precedence over the static result/err fields.
+// Used by the mermaid pre-processing tests which need to script
+// distinct outputs for mmdc and marp.
 type fakeExecutor struct {
-	last   session.ExecRequest
-	calls  int
-	result session.ExecResult
-	err    error
+	last     session.ExecRequest
+	allCmds  [][]string
+	calls    int
+	result   session.ExecResult
+	err      error
+	dispatch func(req session.ExecRequest) (session.ExecResult, error)
 }
 
 func (f *fakeExecutor) Exec(ctx context.Context, id string, req session.ExecRequest) (session.ExecResult, error) {
 	f.calls++
 	f.last = req
+	f.allCmds = append(f.allCmds, append([]string(nil), req.Cmd...))
+	if f.dispatch != nil {
+		return f.dispatch(req)
+	}
 	if f.err != nil {
 		return session.ExecResult{}, f.err
 	}
@@ -171,6 +183,137 @@ func TestSlidesRenderEmptyOutput(t *testing.T) {
 	_, err := eng.Execute(context.Background(), SlidesRender(), json.RawMessage(`{"markdown":"# x"}`))
 	if err == nil {
 		t.Fatal("expected error on empty stdout")
+	}
+}
+
+func TestSlidesRender_MermaidFencePreprocessed(t *testing.T) {
+	// A deck with a ```mermaid block should trigger an mmdc exec before
+	// the marp exec, and the markdown piped to marp should carry an
+	// inline-SVG <img data:image/svg+xml;base64,...> in place of the
+	// fence.
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><g/></svg>`)
+	ex := &fakeExecutor{
+		dispatch: func(req session.ExecRequest) (session.ExecResult, error) {
+			if len(req.Cmd) > 0 && req.Cmd[0] == "marp" {
+				return session.ExecResult{Stdout: []byte("%PDF-1.7 fake")}, nil
+			}
+			// mmdc path (sh -c '... mmdc ...')
+			return session.ExecResult{Stdout: svg}, nil
+		},
+	}
+	eng := newSlidesEngine(t, ex)
+	body := "# Slide 1\n\n```mermaid\ngraph TD; A-->B;\n```\n\n---\n\n# Slide 2"
+	input, _ := json.Marshal(map[string]any{"markdown": body, "format": "pdf"})
+	_, err := eng.Execute(context.Background(), SlidesRender(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if ex.calls != 2 {
+		t.Errorf("expected 2 execs (1 mmdc + 1 marp), got %d", ex.calls)
+	}
+	if len(ex.allCmds) < 2 || ex.allCmds[0][0] != "sh" {
+		t.Errorf("first exec should be the mmdc sh wrapper, got %v", ex.allCmds)
+	}
+	if ex.last.Cmd[0] != "marp" {
+		t.Errorf("last exec should be marp, got %v", ex.last.Cmd)
+	}
+	piped := string(ex.last.Stdin)
+	if strings.Contains(piped, "```mermaid") {
+		t.Errorf("markdown piped to marp should no longer contain ```mermaid fence:\n%s", piped)
+	}
+	if !strings.Contains(piped, `<img src="data:image/svg+xml;base64,`) {
+		t.Errorf("markdown piped to marp should contain inline-SVG <img> data-URI:\n%s", piped)
+	}
+}
+
+func TestSlidesRender_MermaidOptOut(t *testing.T) {
+	// mermaid:false skips pre-processing — only marp exec happens, and
+	// the original fence flows through unchanged.
+	ex := &fakeExecutor{result: session.ExecResult{Stdout: []byte("%PDF-1.7 fake")}}
+	eng := newSlidesEngine(t, ex)
+	body := "# Slide\n\n```mermaid\ngraph TD; A-->B;\n```"
+	input, _ := json.Marshal(map[string]any{
+		"markdown": body, "format": "pdf", "mermaid": false,
+	})
+	_, err := eng.Execute(context.Background(), SlidesRender(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if ex.calls != 1 {
+		t.Errorf("expected 1 exec (marp only), got %d", ex.calls)
+	}
+	if !strings.Contains(string(ex.last.Stdin), "```mermaid") {
+		t.Errorf("with mermaid:false the fence should pass through verbatim:\n%s", ex.last.Stdin)
+	}
+}
+
+func TestSlidesRender_NoMermaidFenceSkipsMmdc(t *testing.T) {
+	// Deck without any mermaid blocks should not invoke mmdc even with
+	// default-on mermaid pre-processing.
+	ex := &fakeExecutor{result: session.ExecResult{Stdout: []byte("%PDF-1.7 fake")}}
+	eng := newSlidesEngine(t, ex)
+	_, err := eng.Execute(context.Background(), SlidesRender(), json.RawMessage(`{"markdown":"# Slide\n\nNo diagrams here.","format":"pdf"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if ex.calls != 1 {
+		t.Errorf("expected 1 exec (marp only — no mermaid pre-pass), got %d", ex.calls)
+	}
+	if ex.last.Cmd[0] != "marp" {
+		t.Errorf("expected marp, got %v", ex.last.Cmd)
+	}
+}
+
+func TestSlidesRender_MermaidFailureSurfacesSource(t *testing.T) {
+	// When mmdc fails (bad mermaid syntax), the error should carry the
+	// diagram source so authors can see what they wrote.
+	ex := &fakeExecutor{
+		dispatch: func(req session.ExecRequest) (session.ExecResult, error) {
+			return session.ExecResult{
+				ExitCode: 1,
+				Stderr:   []byte("Parse error on line 1: graphh TD; A-->B;"),
+			}, nil
+		},
+	}
+	eng := newSlidesEngine(t, ex)
+	body := "# Slide\n\n```mermaid\ngraphh TD; A-->B;\n```"
+	input, _ := json.Marshal(map[string]any{"markdown": body, "format": "pdf"})
+	_, err := eng.Execute(context.Background(), SlidesRender(), input)
+	var perr *packs.PackError
+	if !errors.As(err, &perr) || perr.Code != packs.CodeHandlerFailed {
+		t.Fatalf("err = %v, want CodeHandlerFailed", err)
+	}
+	if !strings.Contains(perr.Message, "graphh TD; A-->B;") {
+		t.Errorf("error should include diagram source for debugging; got: %s", perr.Message)
+	}
+	if !strings.Contains(perr.Message, "Parse error") {
+		t.Errorf("error should include mmdc stderr; got: %s", perr.Message)
+	}
+}
+
+func TestSlidesRender_MultipleMermaidFences(t *testing.T) {
+	// Two ```mermaid blocks → two mmdc execs (in order) → one marp.
+	ex := &fakeExecutor{
+		dispatch: func(req session.ExecRequest) (session.ExecResult, error) {
+			if len(req.Cmd) > 0 && req.Cmd[0] == "marp" {
+				return session.ExecResult{Stdout: []byte("%PDF-1.7 fake")}, nil
+			}
+			return session.ExecResult{Stdout: []byte(`<svg/>`)}, nil
+		},
+	}
+	eng := newSlidesEngine(t, ex)
+	body := "# A\n\n```mermaid\ngraph TD; A-->B;\n```\n\n# C\n\n```mermaid\nsequenceDiagram; A->>B: msg\n```"
+	input, _ := json.Marshal(map[string]any{"markdown": body, "format": "pdf"})
+	_, err := eng.Execute(context.Background(), SlidesRender(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if ex.calls != 3 {
+		t.Errorf("expected 3 execs (2 mmdc + 1 marp), got %d", ex.calls)
+	}
+	piped := string(ex.last.Stdin)
+	if strings.Count(piped, `<img src="data:image/svg+xml;base64,`) != 2 {
+		t.Errorf("expected 2 inline-SVG <img> tags in marp input:\n%s", piped)
 	}
 }
 

@@ -57,6 +57,18 @@ var WellKnownEnvCredentials = []EnvCredential{
 		Type:        TypeAPIKey,
 		HostPattern: "api.elevenlabs.io",
 	},
+	{
+		// fal.ai key — used by image.generate (#71) and chained by
+		// podcast.generate cover_image, slides.{render,narrate}
+		// hero_image, blog.publish feature_image (#146 cluster).
+		// image_generate.go:74 has advertised this auto-hydration
+		// since v0.11.0; this entry fulfills that promise.
+		EnvVar:      "HELMDECK_FAL_KEY",
+		EnvVarFile:  "HELMDECK_FAL_KEY_FILE",
+		Name:        "fal-key",
+		Type:        TypeAPIKey,
+		HostPattern: "fal.run",
+	},
 }
 
 // EnvLookup is the function shape HydrateFromEnv calls to resolve an

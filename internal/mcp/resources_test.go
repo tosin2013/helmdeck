@@ -339,6 +339,122 @@ func TestResourcesRead_Voices_UnavailableWhenNoLister(t *testing.T) {
 	}
 }
 
+// fakeImageModelLister is the test double for helmdeck://image-models.
+type fakeImageModelLister struct {
+	out []ImageModelView
+	err error
+}
+
+func (f fakeImageModelLister) List(ctx context.Context) ([]ImageModelView, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.out, nil
+}
+
+func TestResourcesList_IncludesImageModels_WhenListerWired(t *testing.T) {
+	ml := fakeImageModelLister{out: []ImageModelView{
+		{ID: "fal-ai/flux/schnell", DisplayName: "FLUX schnell", Provider: "fal-ai", Engine: "fal"},
+	}}
+	write, read, stop := startServerWithOpts(t, WithImageModels(ml))
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`)
+	resp := read()
+
+	var got struct {
+		Result struct {
+			Resources []Resource `json:"resources"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	found := false
+	for _, r := range got.Result.Resources {
+		if r.URI == "helmdeck://image-models" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("resources/list missing helmdeck://image-models; got %+v", got.Result.Resources)
+	}
+}
+
+func TestResourcesRead_ImageModels_HappyPath(t *testing.T) {
+	ml := fakeImageModelLister{out: []ImageModelView{
+		{
+			ID: "fal-ai/flux/schnell", DisplayName: "FLUX schnell", Provider: "fal-ai", Engine: "fal",
+			ApproxCostPerImageUSD: 0.003, P50LatencyS: 2,
+			SupportsSeed: true, SupportsImageSize: true, MaxResolution: "1024x1024",
+			Capabilities: []string{"photorealistic", "fast"},
+		},
+		{
+			ID: "fal-ai/flux-pro/v1.1", DisplayName: "FLUX Pro", Provider: "fal-ai", Engine: "fal",
+			ApproxCostPerImageUSD: 0.04, P50LatencyS: 8,
+		},
+	}}
+	write, read, stop := startServerWithOpts(t, WithImageModels(ml))
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://image-models"}}`)
+	resp := read()
+
+	var got struct {
+		Result struct {
+			Contents []ResourceContent `json:"contents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Result.Contents) != 1 {
+		t.Fatalf("want 1 content, got %d", len(got.Result.Contents))
+	}
+	var payload struct {
+		Models    []ImageModelView `json:"models"`
+		Engine    string           `json:"engine"`
+		FetchedAt string           `json:"fetched_at"`
+	}
+	if err := json.Unmarshal([]byte(got.Result.Contents[0].Text), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(payload.Models) != 2 {
+		t.Errorf("want 2 models, got %d", len(payload.Models))
+	}
+	if payload.Engine != "fal" {
+		t.Errorf("engine = %q, want fal", payload.Engine)
+	}
+	if payload.FetchedAt == "" {
+		t.Error("fetched_at should be populated")
+	}
+	if payload.Models[0].ApproxCostPerImageUSD != 0.003 {
+		t.Errorf("cost not round-tripped: %+v", payload.Models[0])
+	}
+	if len(payload.Models[0].Capabilities) != 2 {
+		t.Errorf("capabilities not round-tripped: %+v", payload.Models[0].Capabilities)
+	}
+}
+
+func TestResourcesRead_ImageModels_UnavailableWhenNoLister(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://image-models"}}`)
+	resp := read()
+
+	var got struct {
+		Error *rpcError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Error == nil || !strings.Contains(got.Error.Message, "image-model catalog not wired") {
+		t.Errorf("expected catalog-not-wired error, got %+v", got.Error)
+	}
+}
+
 func TestInitialize_DeclaresResourcesCapability(t *testing.T) {
 	write, read, stop := startServerWithOpts(t)
 	defer stop()

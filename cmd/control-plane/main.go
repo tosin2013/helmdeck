@@ -489,7 +489,7 @@ func main() {
 			// MP4 video via ElevenLabs TTS + ffmpeg + YouTube metadata
 			// via gateway LLM. Vault-stored ElevenLabs API key; degrades
 			// to silent video when key is missing.
-			builtin.SlidesNarrate(visionDispatcher, vaultStore),
+			builtin.SlidesNarrate(visionDispatcher, vaultStore, egressGuard),
 		} {
 			if err := packReg.Register(p); err != nil {
 				logger.Warn("register vision pack failed", "pack", p.Name, "err", err)

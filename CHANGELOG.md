@@ -11,6 +11,16 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+> v0.12.0 in progress. See [`docs/RELEASES.md` §v0.12.0](https://github.com/tosin2013/helmdeck/blob/main/docs/RELEASES.md#v0120) for the planned scope. Per-PR entries land here as they merge; this block gets promoted to `## [0.12.0] - YYYY-MM-DD` at tag-cut time.
+
+### Added
+
+- *(reserved — content-pack image chaining (#146), `helmdeck://image-models` MCP resource (#158), subprocess pack type MVP (T811), pack test-runner UI MVP (T606a))*
+
+### Changed
+
+- *(reserved — compose split into base + build overlay; `install.sh --image-mode` (#134 step 1))*
+
 ## [0.11.0] - 2026-05-10
 
 **Theme:** podcast/slides UX hardening + onboarding fixes + image generation.

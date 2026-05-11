@@ -26,6 +26,7 @@ package builtin
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,6 +39,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/podcast"
+	"github.com/tosin2013/helmdeck/internal/security"
 	"github.com/tosin2013/helmdeck/internal/session"
 	"github.com/tosin2013/helmdeck/internal/vault"
 	"github.com/tosin2013/helmdeck/internal/vision"
@@ -73,11 +75,11 @@ Rules:
 // SlidesNarrate constructs the pack. The dispatcher is used for
 // YouTube metadata generation (optional). The vault resolves the
 // ElevenLabs API key. Both degrade gracefully.
-func SlidesNarrate(d vision.Dispatcher, vs *vault.Store) *packs.Pack {
+func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuard) *packs.Pack {
 	return &packs.Pack{
 		Name:         "slides.narrate",
 		Version:      "v1",
-		Description:  "Convert a Marp slide deck to a narrated MP4 video with ElevenLabs TTS and YouTube metadata. Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to render slides over silence when no key is configured (CI smoke / demo placeholder).",
+		Description:  "Convert a Marp slide deck to a narrated MP4 video with ElevenLabs TTS and YouTube metadata. Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to render slides over silence when no key is configured (CI smoke / demo placeholder). Optional hero_image_prompt generates a hero artwork via fal.ai and inlines it into slide 1.",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"markdown"},
@@ -94,6 +96,8 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store) *packs.Pack {
 				"min_turn_duration_s":    "number",
 				"dry_run":                "boolean",
 				"plan":                   "string",
+				"hero_image_prompt":      "string",
+				"hero_image_model":       "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -107,9 +111,10 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store) *packs.Pack {
 				"voice_used":            "string",
 				"metadata_artifact_key": "string",
 				"metadata":              "object",
+				"hero_image_model_used": "string",
 			},
 		},
-		Handler: slidesNarrateHandler(d, vs),
+		Handler: slidesNarrateHandler(d, vs, eg),
 		// Heavy: 60-180s wall-clock typical (Marp render + per-slide
 		// TTS + ffmpeg encode + concat). Async=true routes the
 		// MCP tools/call through the SEP-1686 task envelope path so
@@ -160,9 +165,15 @@ type slidesNarrateInput struct {
 	MinTurnDurationS     float64 `json:"min_turn_duration_s"`
 	DryRun               bool    `json:"dry_run"`
 	Plan                 string  `json:"plan"`
+	// HeroImagePrompt (#146c) triggers RunImageGen and inlines the
+	// resulting PNG into slide 1. Inserted WITHOUT a `---` separator
+	// so it becomes part of slide 1's existing narration — adding a
+	// blank intro slide would break the audio pipeline.
+	HeroImagePrompt string `json:"hero_image_prompt"`
+	HeroImageModel  string `json:"hero_image_model"`
 }
 
-func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFunc {
+func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuard) packs.HandlerFunc {
 	return func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
 		var in slidesNarrateInput
 		if err := json.Unmarshal(ec.Input, &in); err != nil {
@@ -173,6 +184,40 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFun
 		}
 		if ec.Exec == nil {
 			return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "slides.narrate requires a session executor"}
+		}
+
+		// Hero image — when prompt set, generate PNG via RunImageGen
+		// and inline-inject into slide 1's content (no `---` separator
+		// — adding a blank intro slide would break the per-slide TTS
+		// pipeline). Skipped during dry_run for the same reason as
+		// podcast.generate's cover_image (no real money on a preview).
+		heroImageModelUsed := ""
+		markdown := in.Markdown
+		if strings.TrimSpace(in.HeroImagePrompt) != "" && !in.DryRun {
+			heroModel := in.HeroImageModel
+			if heroModel == "" {
+				heroModel = imageGenDefaultModel
+			}
+			heroRes, perr := RunImageGen(ctx, ec, vs, eg, ImageGenRequest{
+				Prompt: in.HeroImagePrompt,
+				Model:  heroModel,
+			})
+			if perr != nil {
+				return nil, perr
+			}
+			heroImageModelUsed = heroRes.ModelUsed
+			imgBytes, _, gerr := ec.Artifacts.Get(ctx, heroRes.ArtifactKeys[0])
+			if gerr != nil {
+				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+					Message: fmt.Sprintf("read hero image artifact: %v", gerr), Cause: gerr}
+			}
+			dataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgBytes)
+			heroBlock := fmt.Sprintf("<img src=\"%s\" alt=\"hero\" class=\"hero-image\" />\n\n", dataURI)
+			if idx := frontmatterEndIndex(markdown); idx > 0 {
+				markdown = markdown[:idx] + "\n" + heroBlock + markdown[idx:]
+			} else {
+				markdown = heroBlock + markdown
+			}
 		}
 
 		// Defaults.
@@ -191,7 +236,7 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFun
 
 		// 1. Parse slides + notes.
 		ec.Report(0, "parsing slides")
-		slides := parseSlidesAndNotes(in.Markdown)
+		slides := parseSlidesAndNotes(markdown)
 		if len(slides) == 0 {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "no slides found in markdown"}
 		}
@@ -253,7 +298,7 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFun
 		}
 
 		// 4. Write markdown to sidecar + export PNGs.
-		if _, err := execWithStdin(ctx, ec, "/tmp/helmdeck-deck.md", []byte(in.Markdown)); err != nil {
+		if _, err := execWithStdin(ctx, ec, "/tmp/helmdeck-deck.md", []byte(markdown)); err != nil {
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 				Message: fmt.Sprintf("write markdown to sidecar: %v", err)}
 		}
@@ -458,6 +503,9 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store) packs.HandlerFun
 		}
 		if metadata != nil {
 			out["metadata"] = metadata
+		}
+		if heroImageModelUsed != "" {
+			out["hero_image_model_used"] = heroImageModelUsed
 		}
 		return json.Marshal(out)
 	}

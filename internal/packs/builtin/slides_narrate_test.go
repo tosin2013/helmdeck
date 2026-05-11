@@ -106,7 +106,7 @@ func stubElevenLabs(t *testing.T) *httptest.Server {
 // runNarrate calls the handler directly with hand-built ExecutionContext.
 func runNarrate(t *testing.T, disp *scriptedDispatcherWT, vs *vault.Store, exec *narrateExecScript, input string) (json.RawMessage, error) {
 	t.Helper()
-	pack := SlidesNarrate(disp, vs)
+	pack := SlidesNarrate(disp, vs, nil)
 	artifacts := packs.NewMemoryArtifactStore()
 	ec := &packs.ExecutionContext{
 		Pack:      pack,
@@ -222,6 +222,72 @@ func TestSlidesNarrate_NoMetadataModel(t *testing.T) {
 	}
 }
 
+func TestSlidesNarrate_HeroImageInlinedIntoSlide1(t *testing.T) {
+	// hero_image_prompt → RunImageGen (HTTP fal stub) → base64 inline
+	// into the markdown BEFORE parsing. Slide 1's content should
+	// contain the data-URI <img> tag.
+	stubFalAPI(t, "sk_fal", 1)
+	v := vaultWithFalKey(t, "sk_fal")
+	exec := &narrateExecScript{}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# Welcome\n\n<!-- intro narration -->",
+		"hero_image_prompt": "warm gradient title card",
+		"allow_silent_output": true
+	}`
+	raw, err := runNarrate(t, nil, v, exec, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		HeroImageModelUsed string `json:"hero_image_model_used"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.HeroImageModelUsed != imageGenDefaultModel {
+		t.Errorf("hero_image_model_used = %q, want %q", out.HeroImageModelUsed, imageGenDefaultModel)
+	}
+	// The marp invocation wrote the modified markdown to a tmp file
+	// via `cat > /tmp/helmdeck-deck.md` — find that call and assert
+	// the stdin contains a data:image/png;base64, substring.
+	var heroFound bool
+	for _, c := range exec.calls {
+		if strings.Contains(string(c.Stdin), `data:image/png;base64,`) {
+			heroFound = true
+			break
+		}
+	}
+	if !heroFound {
+		t.Error("hero image data URI not found in any session exec stdin")
+	}
+}
+
+func TestSlidesNarrate_DryRunSkipsHeroImage(t *testing.T) {
+	// dry_run short-circuits BEFORE hero image generation, same as
+	// podcast.generate's cover_image. No fal stub seeded; HTTP attempt
+	// would fail. The dry_run path must not call RunImageGen.
+	v := vaultWithFalKey(t, "")
+	exec := &narrateExecScript{}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# Welcome",
+		"hero_image_prompt": "cover",
+		"dry_run": true
+	}`
+	raw, err := runNarrate(t, nil, v, exec, input)
+	if err != nil {
+		t.Fatalf("dry_run + hero_image_prompt should succeed with no fal creds: %v", err)
+	}
+	var out struct {
+		DryRun             bool   `json:"dry_run"`
+		HeroImageModelUsed string `json:"hero_image_model_used"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if !out.DryRun {
+		t.Error("dry_run should be true")
+	}
+	if out.HeroImageModelUsed != "" {
+		t.Errorf("dry_run must not generate hero image; got model = %q", out.HeroImageModelUsed)
+	}
+}
+
 func TestSlidesNarrate_EmptyMarkdown(t *testing.T) {
 	exec := &narrateExecScript{}
 	_, err := runNarrate(t, nil, nil, exec, `{"markdown":""}`)
@@ -232,7 +298,7 @@ func TestSlidesNarrate_EmptyMarkdown(t *testing.T) {
 }
 
 func TestSlidesNarrate_MissingExecutor(t *testing.T) {
-	pack := SlidesNarrate(nil, nil)
+	pack := SlidesNarrate(nil, nil, nil)
 	ec := &packs.ExecutionContext{
 		Pack:  pack,
 		Input: json.RawMessage(`{"markdown":"# Slide"}`),
@@ -261,7 +327,7 @@ func TestSlidesNarrate_MarpFailure(t *testing.T) {
 		return origFn(ctx, req)
 	}
 	_ = exec2
-	pack := SlidesNarrate(nil, nil)
+	pack := SlidesNarrate(nil, nil, nil)
 	artifacts := packs.NewMemoryArtifactStore()
 	ec := &packs.ExecutionContext{
 		Pack: pack,
@@ -323,7 +389,7 @@ func TestSlidesNarrate_DryRun_ShortCircuits(t *testing.T) {
 }
 
 func TestSlidesNarrate_FfmpegConcatFailure(t *testing.T) {
-	pack := SlidesNarrate(nil, nil)
+	pack := SlidesNarrate(nil, nil, nil)
 	artifacts := packs.NewMemoryArtifactStore()
 	ec := &packs.ExecutionContext{
 		Pack: pack,
@@ -372,7 +438,7 @@ func TestSlidesNarrate_FfmpegSegmentFailure_FullStderrSurfaced(t *testing.T) {
 	// can assert the new 4096-byte cap is in effect AND that the
 	// artifact persists the full payload.
 	longStderr := strings.Repeat("frame_too_big_blah_blah ", 200) // ~4800 bytes
-	pack := SlidesNarrate(nil, nil)
+	pack := SlidesNarrate(nil, nil, nil)
 	artifacts := packs.NewMemoryArtifactStore()
 	ec := &packs.ExecutionContext{
 		Pack: pack,

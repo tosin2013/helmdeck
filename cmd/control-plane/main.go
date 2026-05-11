@@ -353,7 +353,7 @@ func main() {
 	if err := packReg.Register(builtin.ScrapeSPA()); err != nil {
 		logger.Warn("register scrape_spa pack failed", "err", err)
 	}
-	if err := packReg.Register(builtin.SlidesRender()); err != nil {
+	if err := packReg.Register(builtin.SlidesRender(vaultStore, egressGuard)); err != nil {
 		logger.Warn("register slides_render pack failed", "err", err)
 	}
 	if err := packReg.Register(builtin.DesktopRunAppAndScreenshot()); err != nil {

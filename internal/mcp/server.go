@@ -61,6 +61,11 @@ type PackServer struct {
 	// the underlying ElevenLabs API call on a 1h TTL — the MCP
 	// package itself doesn't enforce caching.
 	voiceLister VoiceLister
+	// imageModelLister, when set, backs the helmdeck://image-models
+	// resource (issue #158). Today wraps the in-tree
+	// internal/imagemodels catalog — no caching needed. Future
+	// dynamic-fetch impls slot in here.
+	imageModelLister ImageModelLister
 }
 
 // SessionLister is the minimum surface PackServer needs to expose live
@@ -102,6 +107,31 @@ type VoiceView struct {
 	Source     string            `json:"source"`
 }
 
+// ImageModelLister backs the helmdeck://image-models resource (#158).
+// Same shape as VoiceLister: production wraps internal/imagemodels;
+// tests use a fake. No caching needed (catalog is in-tree today;
+// future dynamic-fetch impls can add caching at the adapter layer).
+type ImageModelLister interface {
+	List(ctx context.Context) ([]ImageModelView, error)
+}
+
+// ImageModelView is the JSON shape surfaced via helmdeck://image-models.
+// Mirrors internal/imagemodels.Model. Lives here for the same
+// cyclic-import-safety reason as VoiceView above.
+type ImageModelView struct {
+	ID                    string   `json:"model_id"`
+	DisplayName           string   `json:"display_name"`
+	Provider              string   `json:"provider"`
+	Engine                string   `json:"engine"`
+	ApproxCostPerImageUSD float64  `json:"approx_cost_per_image_usd"`
+	P50LatencyS           float64  `json:"p50_latency_s"`
+	SupportsSeed          bool     `json:"supports_seed"`
+	SupportsImageSize     bool     `json:"supports_image_size"`
+	MaxResolution         string   `json:"max_resolution"`
+	Capabilities          []string `json:"capabilities,omitempty"`
+	Notes                 string   `json:"notes,omitempty"`
+}
+
 // PackServerOption configures a PackServer at construction time.
 type PackServerOption func(*PackServer)
 
@@ -130,6 +160,13 @@ func WithSessions(s SessionLister) PackServerOption {
 // without it, that resource is omitted from list/read.
 func WithVoices(v VoiceLister) PackServerOption {
 	return func(p *PackServer) { p.voiceLister = v }
+}
+
+// WithImageModels registers an image-model lister so the server can
+// expose helmdeck://image-models as an MCP resource (issue #158).
+// Optional — without it, that resource is omitted from list/read.
+func WithImageModels(m ImageModelLister) PackServerOption {
+	return func(p *PackServer) { p.imageModelLister = m }
 }
 
 // NewPackServer constructs a server bound to a pack registry and
@@ -297,6 +334,14 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 				MimeType:    "application/json",
 			})
 		}
+		if s.imageModelLister != nil {
+			resources = append(resources, Resource{
+				URI:         "helmdeck://image-models",
+				Name:        "Image-generation model catalog",
+				Description: "Available image-generation models (fal.ai) with per-image cost, p50 latency, max resolution, and capability tags. Used by image.generate's `model` input and by chained content packs (podcast.generate cover_image, slides.{render,narrate} hero_image, blog.publish feature_image) to pick a sensible model.",
+				MimeType:    "application/json",
+			})
+		}
 		return mk(map[string]any{"resources": resources}, nil)
 
 	case "resources/read":
@@ -367,6 +412,28 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			body, err := json.Marshal(payload)
 			if err != nil {
 				return mk(nil, &rpcError{Code: -32603, Message: "encode voice list: " + err.Error()})
+			}
+			return mk(map[string]any{
+				"contents": []ResourceContent{
+					{URI: params.URI, MimeType: "application/json", Text: string(body)},
+				},
+			}, nil)
+		case "helmdeck://image-models":
+			if s.imageModelLister == nil {
+				return mk(nil, &rpcError{Code: -32602, Message: "helmdeck://image-models unavailable: image-model catalog not wired"})
+			}
+			models, err := s.imageModelLister.List(ctx)
+			if err != nil {
+				return mk(nil, &rpcError{Code: -32603, Message: "list image models: " + err.Error()})
+			}
+			payload := map[string]any{
+				"models":     models,
+				"engine":     "fal",
+				"fetched_at": time.Now().UTC().Format(time.RFC3339),
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				return mk(nil, &rpcError{Code: -32603, Message: "encode image-models list: " + err.Error()})
 			}
 			return mk(map[string]any{
 				"contents": []ResourceContent{

@@ -3,8 +3,9 @@ package api
 // Adapters that wire concrete in-process services into the MCP
 // PackServer's read-only resource interfaces:
 //
-//   - sessionListerAdapter      → helmdeck://sessions  (issue #44)
-//   - voiceListerCachingAdapter → helmdeck://voices    (issue #143)
+//   - sessionListerAdapter        → helmdeck://sessions      (issue #44)
+//   - voiceListerCachingAdapter   → helmdeck://voices        (issue #143)
+//   - imageModelListerAdapter     → helmdeck://image-models  (issue #158)
 //
 // Kept narrow on purpose: PackServer doesn't need (or want) the full
 // session.Runtime API (Create / Logs / Delete) — only List. Limiting
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tosin2013/helmdeck/internal/imagemodels"
 	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/session"
 	"github.com/tosin2013/helmdeck/internal/vault"
@@ -114,5 +116,44 @@ func (a *voiceListerCachingAdapter) List(ctx context.Context) ([]mcp.VoiceView, 
 	a.cachedFP = fp
 	a.mu.Unlock()
 
+	return views, nil
+}
+
+// imageModelListerAdapter wraps internal/imagemodels for the MCP
+// resource surface. No caching: the catalog is in-tree, the work is
+// a slice copy + struct re-shape. Future dynamic-fetch impls can
+// either replace this adapter or add caching here.
+type imageModelListerAdapter struct {
+	src imagemodels.Lister
+}
+
+// newImageModelListerAdapter constructs the adapter over the
+// in-tree static catalog. Tests can construct directly with their
+// own Lister fake.
+func newImageModelListerAdapter() *imageModelListerAdapter {
+	return &imageModelListerAdapter{src: imagemodels.StaticLister{}}
+}
+
+func (a *imageModelListerAdapter) List(ctx context.Context) ([]mcp.ImageModelView, error) {
+	models, err := a.src.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]mcp.ImageModelView, 0, len(models))
+	for _, m := range models {
+		views = append(views, mcp.ImageModelView{
+			ID:                    m.ID,
+			DisplayName:           m.DisplayName,
+			Provider:              m.Provider,
+			Engine:                m.Engine,
+			ApproxCostPerImageUSD: m.ApproxCostPerImageUSD,
+			P50LatencyS:           m.P50LatencyS,
+			SupportsSeed:          m.SupportsSeed,
+			SupportsImageSize:     m.SupportsImageSize,
+			MaxResolution:         m.MaxResolution,
+			Capabilities:          m.Capabilities,
+			Notes:                 m.Notes,
+		})
+	}
 	return views, nil
 }

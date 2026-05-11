@@ -114,6 +114,8 @@ func registerMCPSSERoutes(mux *http.ServeMux, deps Deps) {
 	if deps.Runtime != nil {
 		mcpOpts = append(mcpOpts, mcp.WithSessions(sessionListerAdapter{rt: deps.Runtime}))
 	}
+	// helmdeck://image-models is unconditional — catalog is in-tree.
+	mcpOpts = append(mcpOpts, mcp.WithImageModels(newImageModelListerAdapter()))
 	server := mcp.NewPackServer(deps.PackRegistry, deps.PackEngine, mcpOpts...)
 	registry := newSSERegistry()
 

@@ -42,6 +42,10 @@ func registerMCPServerRoute(mux *http.ServeMux, deps Deps) {
 		// credential is configured (handled inside ResolveByName).
 		mcpOpts = append(mcpOpts, mcp.WithVoices(newVoiceListerCachingAdapter(deps.Vault, 0)))
 	}
+	// helmdeck://image-models has no vault dependency — the catalog is
+	// in-tree (internal/imagemodels). Always wire it on so agents can
+	// discover available models even before they set HELMDECK_FAL_KEY.
+	mcpOpts = append(mcpOpts, mcp.WithImageModels(newImageModelListerAdapter()))
 	server := mcp.NewPackServer(deps.PackRegistry, deps.PackEngine, mcpOpts...)
 	mux.HandleFunc("/api/v1/mcp/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, _, _, err := ws.UpgradeHTTP(r, w)

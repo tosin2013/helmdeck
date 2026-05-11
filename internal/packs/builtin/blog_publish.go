@@ -41,7 +41,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -70,38 +72,45 @@ func BlogPublish(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) 
 	return &packs.Pack{
 		Name:        "blog.publish",
 		Version:     "v1",
-		Description: "Publish a post to a Ghost blog or render markdown/HTML to the artifact store. Body or prompt+model. Markdown bodies may include ```mermaid``` fenced blocks — diagrams render client-side in HTML/Ghost outputs (Ghost theme must include MermaidJS).",
+		Description: "Publish a post to a Ghost blog or render markdown/HTML to the artifact store. Body or prompt+model. Optional feature image (auto-generated via fal.ai or operator-supplied artifact). Markdown bodies may include ```mermaid``` fenced blocks — diagrams render client-side in HTML/Ghost outputs (Ghost theme must include MermaidJS).",
 		InputSchema: packs.BasicSchema{
 			Required: []string{"destination", "format", "title"},
 			Properties: map[string]string{
-				"destination":  "string", // "ghost" | "artifact"
-				"format":       "string", // "markdown" | "html"
-				"title":        "string",
-				"body":         "string",
-				"prompt":       "string",
-				"model":        "string",
-				"max_tokens":   "number",
-				"tags":         "array",
-				"status":       "string",
-				"published_at": "string",
-				"host":         "string",
-				"credential":   "string",
+				"destination":                "string", // "ghost" | "artifact"
+				"format":                     "string", // "markdown" | "html"
+				"title":                      "string",
+				"body":                       "string",
+				"prompt":                     "string",
+				"model":                      "string",
+				"max_tokens":                 "number",
+				"tags":                       "array",
+				"status":                     "string",
+				"published_at":               "string",
+				"host":                       "string",
+				"credential":                 "string",
+				"feature_image_artifact_key": "string",
+				"hero_image":                 "boolean",
+				"hero_image_model":           "string",
+				"hero_image_prompt":          "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
 			Required: []string{"destination", "format", "body_source"},
 			Properties: map[string]string{
-				"destination":   "string",
-				"format":        "string",
-				"body_source":   "string",
-				"model_used":    "string",
-				"post_id":       "string",
-				"url":           "string",
-				"html_url":      "string",
-				"status":        "string",
-				"published_at":  "string",
-				"artifact_key":  "string",
-				"size":          "number",
+				"destination":                "string",
+				"format":                     "string",
+				"body_source":                "string",
+				"model_used":                 "string",
+				"post_id":                    "string",
+				"url":                        "string",
+				"html_url":                   "string",
+				"status":                     "string",
+				"published_at":               "string",
+				"artifact_key":               "string",
+				"size":                       "number",
+				"feature_image_artifact_key": "string",
+				"feature_image_url":          "string",
+				"hero_image_model_used":      "string",
 			},
 		},
 		Handler: blogPublishHandler(v, eg, d),
@@ -121,6 +130,19 @@ type blogPublishInput struct {
 	PublishedAt string   `json:"published_at"`
 	Host        string   `json:"host"`
 	Credential  string   `json:"credential"`
+	// Feature image inputs (#146d). Exactly one of these triggers
+	// feature-image processing:
+	//   feature_image_artifact_key — operator passes an artifact key
+	//     from a prior pack call (typically image.generate or another
+	//     content pack's cover_image_artifact_key); pack fetches the
+	//     bytes from ec.Artifacts.Get and uploads to Ghost / surfaces
+	//     in the artifact-mode response.
+	//   hero_image — auto-generate via RunImageGen using title (or
+	//     hero_image_prompt if set) as the prompt.
+	FeatureImageArtifactKey string `json:"feature_image_artifact_key"`
+	HeroImage               bool   `json:"hero_image"`
+	HeroImageModel          string `json:"hero_image_model"`
+	HeroImagePrompt         string `json:"hero_image_prompt"`
 }
 
 func blogPublishHandler(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) packs.HandlerFunc {
@@ -204,14 +226,94 @@ func blogPublishHandler(v *vault.Store, eg *security.EgressGuard, d vision.Dispa
 			modelUsed = in.Model
 		}
 
+		// Resolve feature image (#146d). Either operator-supplied
+		// artifact key OR auto-generated via RunImageGen. Validation:
+		// providing both is an input error — caller picks one source.
+		fi, perr := resolveFeatureImage(ctx, ec, v, eg, in)
+		if perr != nil {
+			return nil, perr
+		}
+
 		switch in.Destination {
 		case "artifact":
-			return blogPublishArtifact(ctx, ec, in.Title, body, in.Format, bodySource, modelUsed)
+			return blogPublishArtifact(ctx, ec, in.Title, body, in.Format, bodySource, modelUsed, fi)
 		case "ghost":
-			return blogPublishGhost(ctx, eg, v, in, body, bodySource, modelUsed)
+			return blogPublishGhost(ctx, ec, eg, v, in, body, bodySource, modelUsed, fi)
 		}
 		return nil, &packs.PackError{Code: packs.CodeInternal, Message: "unreachable destination"}
 	}
+}
+
+// featureImage carries the resolved feature-image state through the
+// destination handlers. Empty Bytes means "no feature image" — both
+// destinations short-circuit gracefully on the zero value.
+type featureImage struct {
+	Bytes       []byte
+	ArtifactKey string // helmdeck artifact key the bytes came from
+	ContentType string
+	ModelUsed   string // empty when caller supplied the artifact directly
+}
+
+// resolveFeatureImage picks between (a) operator-supplied artifact and
+// (b) auto-generated hero. Returns zero value when neither is requested.
+// Hard-fails if both are set (mutually exclusive).
+func resolveFeatureImage(ctx context.Context, ec *packs.ExecutionContext, v *vault.Store, eg *security.EgressGuard, in blogPublishInput) (featureImage, *packs.PackError) {
+	hasArt := strings.TrimSpace(in.FeatureImageArtifactKey) != ""
+	if hasArt && in.HeroImage {
+		return featureImage{}, &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: "provide either feature_image_artifact_key OR hero_image:true, not both"}
+	}
+	if hasArt {
+		if ec.Artifacts == nil {
+			return featureImage{}, &packs.PackError{Code: packs.CodeInternal,
+				Message: "blog.publish feature_image_artifact_key requires an artifact store"}
+		}
+		bytes, art, err := ec.Artifacts.Get(ctx, in.FeatureImageArtifactKey)
+		if err != nil {
+			return featureImage{}, &packs.PackError{Code: packs.CodeInvalidInput,
+				Message: fmt.Sprintf("feature_image_artifact_key %q not found: %v", in.FeatureImageArtifactKey, err)}
+		}
+		ct := art.ContentType
+		if ct == "" {
+			ct = "image/png"
+		}
+		return featureImage{
+			Bytes:       bytes,
+			ArtifactKey: in.FeatureImageArtifactKey,
+			ContentType: ct,
+		}, nil
+	}
+	if !in.HeroImage {
+		return featureImage{}, nil
+	}
+	// Auto-generate. Prompt: explicit hero_image_prompt > title.
+	prompt := strings.TrimSpace(in.HeroImagePrompt)
+	if prompt == "" {
+		prompt = in.Title
+	}
+	model := in.HeroImageModel
+	if model == "" {
+		model = imageGenDefaultModel
+	}
+	res, perr := RunImageGen(ctx, ec, v, eg, ImageGenRequest{Prompt: prompt, Model: model})
+	if perr != nil {
+		return featureImage{}, perr
+	}
+	bytes, art, err := ec.Artifacts.Get(ctx, res.ArtifactKeys[0])
+	if err != nil {
+		return featureImage{}, &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("read generated hero image: %v", err), Cause: err}
+	}
+	ct := art.ContentType
+	if ct == "" {
+		ct = "image/png"
+	}
+	return featureImage{
+		Bytes:       bytes,
+		ArtifactKey: res.ArtifactKeys[0],
+		ContentType: ct,
+		ModelUsed:   res.ModelUsed,
+	}, nil
 }
 
 // blogExpandPrompt asks the gateway LLM for a body the agent didn't
@@ -253,7 +355,10 @@ func blogExpandPrompt(ctx context.Context, d vision.Dispatcher, title, prompt, m
 // blogPublishArtifact renders the body in the requested format and
 // stores it as a helmdeck artifact. No external network calls; no
 // vault. The agent fetches the artifact later via /api/v1/artifacts/<key>.
-func blogPublishArtifact(ctx context.Context, ec *packs.ExecutionContext, title, body, format, bodySource, modelUsed string) (json.RawMessage, error) {
+// When fi.Bytes is non-empty, the feature image is also written as a
+// sidecar artifact (and surfaced in the output) so the agent can
+// publish or display it separately from the post body.
+func blogPublishArtifact(ctx context.Context, ec *packs.ExecutionContext, title, body, format, bodySource, modelUsed string, fi featureImage) (json.RawMessage, error) {
 	var (
 		ext         string
 		contentType string
@@ -317,13 +422,36 @@ func blogPublishArtifact(ctx context.Context, ec *packs.ExecutionContext, title,
 	if modelUsed != "" {
 		out["model_used"] = modelUsed
 	}
+	if len(fi.Bytes) > 0 {
+		// Sidecar artifact: write the cover next to the post so the
+		// agent can fetch both via /api/v1/artifacts/. Reuse the same
+		// pack-name namespace + slug-based filename so the pair is
+		// discoverable by prefix.
+		coverArt, err := ec.Artifacts.Put(ctx, ec.Pack.Name,
+			slug+"-cover."+contentTypeToExt(fi.ContentType),
+			fi.Bytes, fi.ContentType)
+		if err == nil {
+			out["feature_image_artifact_key"] = coverArt.Key
+		}
+		// If err: not fatal — the post artifact landed; surface the
+		// already-resolved key from fi instead.
+		if err != nil {
+			out["feature_image_artifact_key"] = fi.ArtifactKey
+		}
+		if fi.ModelUsed != "" {
+			out["hero_image_model_used"] = fi.ModelUsed
+		}
+	}
 	return json.Marshal(out)
 }
 
 // blogPublishGhost mints a 5-min HS256 JWT from the vault-stored Admin
 // API key, optionally renders markdown→html (Ghost takes html/lexical/
 // mobiledoc, not markdown), and POSTs to /ghost/api/admin/posts/.
-func blogPublishGhost(ctx context.Context, eg *security.EgressGuard, v *vault.Store, in blogPublishInput, body, bodySource, modelUsed string) (json.RawMessage, error) {
+// When fi.Bytes is non-empty, the image is uploaded to Ghost's
+// /ghost/api/admin/images/upload/ first and the returned URL goes into
+// the post body's feature_image field.
+func blogPublishGhost(ctx context.Context, ec *packs.ExecutionContext, eg *security.EgressGuard, v *vault.Store, in blogPublishInput, body, bodySource, modelUsed string, fi featureImage) (json.RawMessage, error) {
 	credName := in.Credential
 	if credName == "" {
 		credName = defaultGhostCred
@@ -373,6 +501,20 @@ func blogPublishGhost(ctx context.Context, eg *security.EgressGuard, v *vault.St
 		htmlBody = out
 	}
 
+	// Upload feature image to Ghost FIRST so its returned URL can be
+	// stamped into the post's feature_image field. Ghost's
+	// /images/upload/ accepts multipart form-data with the same JWT.
+	featureImageURL := ""
+	if len(fi.Bytes) > 0 {
+		scheme, hostNoSchema := splitSchemeHost(in.Host)
+		imgURL := fmt.Sprintf("%s://%s/ghost/api/admin/images/upload/", scheme, hostNoSchema)
+		uploaded, uperr := ghostUploadImage(ctx, imgURL, tok, fi)
+		if uperr != nil {
+			return nil, uperr
+		}
+		featureImageURL = uploaded
+	}
+
 	postBody := map[string]any{
 		"posts": []map[string]any{
 			{
@@ -386,19 +528,15 @@ func blogPublishGhost(ctx context.Context, eg *security.EgressGuard, v *vault.St
 	if in.PublishedAt != "" {
 		postBody["posts"].([]map[string]any)[0]["published_at"] = in.PublishedAt
 	}
+	if featureImageURL != "" {
+		postBody["posts"].([]map[string]any)[0]["feature_image"] = featureImageURL
+	}
 
 	// Use ?source=html so Ghost knows to ingest the html field as the
 	// authoritative body (vs lexical/mobiledoc). Host can carry an
 	// explicit scheme (handy for self-hosted Ghost on a non-HTTPS
 	// port, and for tests against httptest servers); default https.
-	scheme := "https"
-	host := in.Host
-	if strings.HasPrefix(host, "http://") {
-		scheme = "http"
-		host = strings.TrimPrefix(host, "http://")
-	} else if strings.HasPrefix(host, "https://") {
-		host = strings.TrimPrefix(host, "https://")
-	}
+	scheme, host := splitSchemeHost(in.Host)
 	url := fmt.Sprintf("%s://%s%s?source=html", scheme, host, ghostAdminPostsPath)
 	respRaw, perr := callGhostAPI(ctx, "POST", url, tok, postBody)
 	if perr != nil {
@@ -432,7 +570,93 @@ func blogPublishGhost(ctx context.Context, eg *security.EgressGuard, v *vault.St
 	if modelUsed != "" {
 		out["model_used"] = modelUsed
 	}
+	if featureImageURL != "" {
+		out["feature_image_url"] = featureImageURL
+		out["feature_image_artifact_key"] = fi.ArtifactKey
+	}
+	if fi.ModelUsed != "" {
+		out["hero_image_model_used"] = fi.ModelUsed
+	}
 	return json.Marshal(out)
+}
+
+// splitSchemeHost extracts the scheme + bare hostname from a Ghost
+// host input that may carry an explicit scheme. Defaults to https.
+// Pulled out so both the post POST and the image upload share the
+// same parser.
+func splitSchemeHost(host string) (scheme, bare string) {
+	scheme = "https"
+	bare = host
+	if strings.HasPrefix(bare, "http://") {
+		scheme = "http"
+		bare = strings.TrimPrefix(bare, "http://")
+	} else if strings.HasPrefix(bare, "https://") {
+		bare = strings.TrimPrefix(bare, "https://")
+	}
+	return scheme, bare
+}
+
+// ghostUploadImage POSTs an image to Ghost's /ghost/api/admin/images/upload/
+// endpoint as multipart form-data and returns the hosted URL. Same JWT
+// auth as the post POST. The response shape is:
+//
+//	{"images":[{"url":"https://.../content/images/...","ref":null}]}
+//
+// On non-2xx the function surfaces the body so operators can debug
+// content-type / size limits (Ghost caps at 10MB by default).
+func ghostUploadImage(ctx context.Context, url, tok string, fi featureImage) (string, *packs.PackError) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	// Filename matters for content-type sniffing on Ghost's side.
+	filename := "feature-image." + contentTypeToExt(fi.ContentType)
+	partHdr := textproto.MIMEHeader{}
+	partHdr.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, filename))
+	partHdr.Set("Content-Type", fi.ContentType)
+	part, err := w.CreatePart(partHdr)
+	if err != nil {
+		return "", &packs.PackError{Code: packs.CodeInternal,
+			Message: fmt.Sprintf("compose multipart: %v", err), Cause: err}
+	}
+	if _, err := part.Write(fi.Bytes); err != nil {
+		return "", &packs.PackError{Code: packs.CodeInternal,
+			Message: fmt.Sprintf("write image part: %v", err), Cause: err}
+	}
+	if err := w.Close(); err != nil {
+		return "", &packs.PackError{Code: packs.CodeInternal,
+			Message: fmt.Sprintf("close multipart: %v", err), Cause: err}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &body)
+	if err != nil {
+		return "", &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("ghost image upload: %v", err), Cause: err}
+	}
+	req.Header.Set("Authorization", "Ghost "+tok)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("ghost image upload request: %v", err), Cause: err}
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("ghost image upload %d: %s", resp.StatusCode, truncateString(string(respBody), 512))}
+	}
+	var parsed struct {
+		Images []struct {
+			URL string `json:"url"`
+		} `json:"images"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil || len(parsed.Images) == 0 || parsed.Images[0].URL == "" {
+		return "", &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("ghost image upload: unexpected response (raw: %s)", truncateString(string(respBody), 256))}
+	}
+	return parsed.Images[0].URL, nil
 }
 
 // mintGhostJWT splits the Admin API key into <id>:<secret>, hex-decodes

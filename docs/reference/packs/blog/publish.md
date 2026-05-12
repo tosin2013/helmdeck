@@ -47,9 +47,14 @@ For the `artifact` destination, **no vault credential is needed** — the pack w
 | `published_at` | `string` | with `status="scheduled"` | — | RFC3339 timestamp in the future. |
 | `host` | `string` | with `destination="ghost"` | — | Ghost installation hostname. Accepts `host`, `https://host`, or `http://host:port` (the last for self-hosted Ghost on a non-HTTPS port). |
 | `credential` | `string` | no | `"ghost-admin-key"` | Vault credential name. Override only if you store the key under a non-default name. |
+| `feature_image_artifact_key` | `string` | no | — | Operator-supplied feature image (v0.12.0 #146). Pass an artifact key from a prior pack call — typically `image.generate`, or a chained pack's `cover_image_artifact_key`. For Ghost, the pack uploads the bytes via `/ghost/api/admin/images/upload/` then stamps the returned URL into the post's `feature_image` field. For artifact-mode, the cover lands as a sidecar `<slug>-cover.png` artifact alongside the post body. **Mutually exclusive with `hero_image:true`.** |
+| `hero_image` | `boolean` | no | `false` | Auto-generate the feature image via `image.generate` (v0.12.0 #146). Uses `hero_image_prompt` if set, falling back to the post title. **Mutually exclusive with `feature_image_artifact_key`.** |
+| `hero_image_prompt` | `string` | no | — | Prompt for the auto-generated hero image when `hero_image:true`. Defaults to the post title if omitted. |
+| `hero_image_model` | `string` | no | `"fal-ai/flux/schnell"` | fal.ai model used when `hero_image:true`. Browse choices via the `helmdeck://image-models` MCP resource. |
 
 **Validation:**
 - Exactly one of `body` or (`prompt`+`model`) — providing both or neither errors.
+- Providing both `feature_image_artifact_key` AND `hero_image:true` errors — pick one source for the cover.
 - `status="scheduled"` requires `published_at` in the future.
 - `destination="ghost"` requires `host` and a vault credential.
 
@@ -73,6 +78,7 @@ Ghost-specific:
 | `html_url` | `string` | Same as `url`, for parity with `github.*` packs. |
 | `status` | `string` | Ghost-confirmed status. |
 | `published_at` | `string` | Ghost-assigned RFC3339. |
+| `feature_image_url` | `string` | Ghost-hosted CDN URL of the uploaded cover (present when `feature_image_artifact_key` or `hero_image:true` was set). |
 
 Artifact-specific:
 
@@ -80,6 +86,13 @@ Artifact-specific:
 |---|---|---|
 | `artifact_key` | `string` | `blog.publish/<slug>.{md\|html}`. Resolve via `/api/v1/artifacts/<key>`. |
 | `size` | `number` | Bytes. |
+| `feature_image_artifact_key` | `string` | Sidecar cover artifact (`blog.publish/<slug>-cover.png`) when a feature image was supplied or auto-generated. |
+
+Feature-image fields (both destinations):
+
+| Field | Type | Notes |
+|---|---|---|
+| `hero_image_model_used` | `string` | Only when `hero_image:true`. Echoes the model that actually generated the cover. |
 
 ## Vault credentials needed
 

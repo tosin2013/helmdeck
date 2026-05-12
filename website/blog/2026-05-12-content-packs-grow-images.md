@@ -5,7 +5,6 @@ authors: [tosin]
 tags: [field-report, agent-architecture, content-packs]
 description: v0.12.0 chains image.generate into podcast covers, slide hero artwork, and blog feature images. Each chained pack saves a registry round-trip and an audit-log entry per call — and the agent never has to remember which model to use.
 date: 2026-05-12
-draft: true
 ---
 
 ## The friction

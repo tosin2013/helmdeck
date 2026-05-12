@@ -17,6 +17,8 @@ For narrated video output (MP4 with TTS over each slide), see [`slides.narrate`]
 | `markdown` | `string` | yes | — | Marp deck. Must start with `---\nmarp: true\n---` frontmatter for the directives to apply. Slides separated by `---`. May contain ```` ```mermaid ```` fenced blocks — see [Mermaid diagrams](#mermaid-diagrams) below. |
 | `format` | `string` | no | `"pdf"` | Closed-set: `pdf`, `pptx`, `html`. Picks the Marp output codec. |
 | `mermaid` | `boolean` | no | `true` | Pre-render ```` ```mermaid ```` fenced blocks to inline-SVG `<img>` data-URIs via `mmdc` before Marp sees the deck. Set `false` to skip the pre-pass (saves a few hundred ms of mmdc startup if the deck has no diagrams or you've embedded SVGs by hand). |
+| `hero_image_prompt` | `string` | no | — | When non-empty (v0.12.0 #146), the pack calls `image.generate` with this prompt, fetches the resulting PNG, and base64-inlines it as `<img src="data:image/png;base64,…">` immediately after the deck's frontmatter so PDF/PPTX/HTML outputs all carry the hero. Fails loud on missing `fal-key` credential — no silent omission. |
+| `hero_image_model` | `string` | no | `"fal-ai/flux/schnell"` | fal.ai model used when `hero_image_prompt` is set. Browse choices via the `helmdeck://image-models` MCP resource. |
 
 ## Outputs
 
@@ -24,6 +26,7 @@ For narrated video output (MP4 with TTS over each slide), see [`slides.narrate`]
 |---|---|---|
 | `format` | `string` | Echo of the chosen format. |
 | `artifact_key` | `string` | `slides.render/<rand>-deck.{pdf|pptx|html}` — pass to `/api/v1/artifacts/<key>` to retrieve. |
+| `hero_image_model_used` | `string` | Only when `hero_image_prompt` was set. Echoes the model that actually generated the hero. |
 | `size` | `number` | Bytes. |
 
 ## Vault credentials needed

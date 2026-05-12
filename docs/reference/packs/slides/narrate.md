@@ -42,6 +42,8 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 | `metadata_model` | `string` | no | — | Provider/model for YouTube metadata (e.g., `openrouter/openai/gpt-4o-mini`). When unset, no `metadata_artifact_key` is returned. |
 | `webhook_url` | `string` | no | — | Push the result to this URL on completion (sync alternative to polling). |
 | `webhook_secret` | `string` | no | — | HMAC signature secret for the webhook callback. |
+| `hero_image_prompt` | `string` | no | — | When non-empty (v0.12.0 #146), the pack calls `image.generate` and inlines the resulting PNG INTO slide 1's content (no `---` separator) so the per-slide TTS pipeline still sees a narrated slide. Skipped automatically during `dry_run`. Fails loud on missing `fal-key` credential. |
+| `hero_image_model` | `string` | no | `"fal-ai/flux/schnell"` | fal.ai model used when `hero_image_prompt` is set. Browse choices via the `helmdeck://image-models` MCP resource. |
 
 ## Outputs
 
@@ -55,6 +57,7 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 | `voice_used` | `string` | Voice ID that narrated. Empty when `has_narration: false`. |
 | `metadata_artifact_key` | `string` | Present only when `metadata_model` was set. JSON file with the YouTube metadata. |
 | `metadata` | `object` | Same content as `metadata_artifact_key`'s JSON, inline for convenience: `{title, description, tags, category, language}`. |
+| `hero_image_model_used` | `string` | Only when `hero_image_prompt` was set. Echoes the model that actually generated the hero. |
 
 ## Vault credentials needed
 

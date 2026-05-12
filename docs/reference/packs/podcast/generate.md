@@ -58,6 +58,8 @@ For mode C with `source_url`, the Firecrawl overlay must be enabled (`HELMDECK_F
 | `duration_target_min` | `number` | no | `8` | LLM target length in minutes (modes B/C). At ~150 wpm, an 8-min target asks for ~1200 total words. |
 | `silence_between_turns_ms` | `number` | no | `600` | Pause between consecutive turns (ms). 600ms feels conversational; 200ms feels rushed; 1000ms feels formal. |
 | `generate_cover_prompt` | `boolean` | no | `false` | When `true`, output includes `cover_image_prompt` — a one-paragraph prompt the agent can pass to a future image-gen pack for cover art. |
+| `cover_image` | `boolean` | no | `false` | When `true`, the pack auto-generates the cover via `image.generate` and surfaces `cover_image_artifact_key` in the output. Uses the same prompt as `generate_cover_prompt`. Honored only outside `dry_run`. Added v0.12.0 (#146). |
+| `cover_image_model` | `string` | no | `"fal-ai/flux/schnell"` | fal.ai model used when `cover_image:true`. Browse choices via the `helmdeck://image-models` MCP resource. |
 | `credential` | `string` | no | `"elevenlabs-key"` | Vault credential name. |
 
 **Validation:**
@@ -84,6 +86,8 @@ For mode C with `source_url`, the Firecrawl overlay must be enabled (`HELMDECK_F
 | `has_narration` | `boolean` | `false` when the vault key was missing — MP3 contains silence (5s per turn). |
 | `theme` | `string` | Echo. |
 | `cover_image_prompt` | `string` | Only when `generate_cover_prompt: true`. |
+| `cover_image_artifact_key` | `string` | Only when `cover_image: true`. Namespaced under `podcast.generate/`. Resolve via `/api/v1/artifacts/<key>`. |
+| `cover_image_model_used` | `string` | Only when `cover_image: true`. Echoes the model that actually generated the cover. |
 
 ## Vault credentials needed
 

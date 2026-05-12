@@ -171,6 +171,31 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 - `pack.status` — Poll the state of a `pack.start` job. Returns `{state, progress, message}`. Poll every 2-5 seconds. State transitions: `running` → `done` or `failed`.
 - `pack.result` — Retrieve the final result of a completed async job. Errors with `not_ready` if the job is still running. Job results are kept for 1 hour after completion.
 
+### Operator-supplied subprocess packs (`cmd.*`, v0.12.0)
+Operators can drop executables into `$HELMDECK_COMMAND_PACKS_DIR` to register additional packs under the `cmd.*` namespace. Protocol: stdin = your input JSON, stdout = the response JSON, non-zero exit = `handler_failed` with stderr surfaced. The catalog above lists only built-in packs; check `tools/list` (or `helmdeck://packs`) at runtime for the operator's custom ones.
+
+---
+
+## MCP resources
+
+Beyond packs, helmdeck exposes read-only resources for catalog discovery. Use `resources/list` to enumerate, `resources/read` to fetch.
+
+- `helmdeck://packs` — Live pack catalog. Equivalent to `tools/list` but as a browsable resource.
+- `helmdeck://sessions` — Live session list (id, status, image, created_at).
+- `helmdeck://voices` — ElevenLabs voice catalog (id, name, labels, preview URL) for `podcast.generate`'s `speakers` and `slides.narrate`'s `voice_id`. Requires `elevenlabs-key` in the vault.
+- `helmdeck://image-models` (v0.12.0 #158) — Curated fal.ai model catalog for `image.generate` and the chained image inputs (`cover_image_model`, `hero_image_model`). Each entry has cost, p50 latency, max resolution, capabilities. **Read this before picking a non-default model** so you understand cost/quality trade-offs.
+
+## Chained image generation (v0.12.0 #146)
+
+Four content packs can auto-generate cover/hero/feature artwork without a separate `image.generate` call:
+
+- `podcast.generate` — `cover_image: true` emits `cover_image_artifact_key`.
+- `slides.render` — `hero_image_prompt: "<text>"` inlines the PNG before slide 1.
+- `slides.narrate` — `hero_image_prompt: "<text>"` inlines INTO slide 1 (so the per-slide TTS pipeline still sees content).
+- `blog.publish` — `feature_image_artifact_key: "<key>"` OR `hero_image: true`. For Ghost, uploads to `/images/upload/` then stamps `feature_image`.
+
+Use the chained inputs when the cover is part of the same call. Call `image.generate` separately when iterating on the cover, reusing one image across packs, or using different models per pack.
+
 ---
 
 ## Driving the visible desktop (when the operator is watching)

@@ -1,9 +1,17 @@
 name: Publish to MCP Registry
 
 # Auto-publishes .mcp/server.json to registry.modelcontextprotocol.io
-# whenever a v* tag is pushed. Authenticates via GitHub OIDC against
-# the io.github.tosin2013/* namespace (no PAT or stored secret needed —
-# the id-token: write permission is sufficient).
+# AFTER the Release workflow finishes successfully. This sequencing
+# matters: the MCP Registry validators check that the npm package
+# referenced in server.json actually exists at the declared version
+# — and that's only true once Release's goreleaser step has finished
+# the npm publish. Pre-this-change we triggered on the same tag push
+# that triggered Release, which raced (v0.11.0 and v0.12.0 both hit
+# this).
+#
+# Authenticates via GitHub OIDC against the io.github.tosin2013/*
+# namespace (no PAT or stored secret needed — the id-token: write
+# permission is sufficient).
 #
 # Manual run is also supported via workflow_dispatch — useful when you
 # need to re-publish without cutting a tag (e.g. metadata-only fix).
@@ -20,13 +28,17 @@ name: Publish to MCP Registry
 #     automating for one entry.
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # Chain off the Release workflow: when it finishes, we run. This
+  # closes the npm-publish race that hit v0.11.0 and v0.12.0.
+  # workflow_run fires on every completion; the job-level `if:` below
+  # filters to tag-push-triggered Release runs that succeeded.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       version_override:
-        description: 'Version to publish (e.g. 0.10.0). If empty, uses the version field already in .mcp/server.json'
+        description: 'Version to publish (e.g. 0.12.0). If empty, uses the version field already in .mcp/server.json'
         required: false
         type: string
 
@@ -34,6 +46,16 @@ jobs:
   publish:
     name: Publish server.json
     runs-on: ubuntu-latest
+    # When chained off Release, only run when Release succeeded AND
+    # was triggered by a tag push (skip dry-run workflow_dispatch
+    # invocations of Release). workflow_dispatch invocations of THIS
+    # workflow bypass the filter — operators can always re-fire
+    # manually.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
     permissions:
       id-token: write   # Required for GitHub OIDC authentication
       contents: read    # Required for actions/checkout
@@ -41,6 +63,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # When chained off Release, default ref is the default
+          # branch — not the tag. Check out the tag the Release run
+          # was for so the .mcp/server.json we read matches the
+          # release content.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref }}
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
@@ -56,13 +84,19 @@ jobs:
           ./mcp-publisher --help | head -5
 
       - name: Sync version with the tag
+        env:
+          # workflow_run event carries the tag name in head_branch
+          # (yes, "head_branch" — workflow_run uses branch
+          # terminology for tag-push triggers, that's the GitHub
+          # event-payload quirk). Strip leading 'v' below.
+          UPSTREAM_REF: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
-          # On a tag push: derive version from the ref (strip leading 'v').
-          # On manual dispatch: use the input override if provided, else
-          # leave the version field alone.
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
+          # Three trigger paths, three version derivations:
+          #   workflow_run         — upstream tag from head_branch (strip v)
+          #   workflow_dispatch    — inputs.version_override (may be empty)
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            VERSION="${UPSTREAM_REF#v}"
           else
             VERSION="${{ inputs.version_override }}"
           fi
@@ -119,6 +153,34 @@ jobs:
             }
             console.log('Schema VALID ✓');
           "
+
+      - name: Wait for npm package to be reachable
+        # Belt-and-suspenders: workflow_run sequencing already
+        # guarantees Release's npm publish completed before we run,
+        # but the npm registry CDN takes a few seconds to propagate.
+        # Poll until the version is visible (or 2 min cap) so we
+        # don't surface a misleading 404 to mcp-publisher.
+        run: |
+          set -euo pipefail
+          NAME=$(jq -r '.packages[] | select(.registryType == "npm") | .identifier' .mcp/server.json | head -1)
+          VERSION=$(jq -r '.packages[] | select(.registryType == "npm") | .version' .mcp/server.json | head -1)
+          if [[ -z "$NAME" || -z "$VERSION" ]]; then
+            echo "No npm package in server.json — skipping precheck."
+            exit 0
+          fi
+          echo "Waiting for $NAME@$VERSION on npm..."
+          for i in $(seq 1 24); do  # 24 × 5s = 2 min cap
+            if curl -fsS "https://registry.npmjs.org/$NAME/$VERSION" >/dev/null 2>&1; then
+              echo "Found $NAME@$VERSION ✓"
+              exit 0
+            fi
+            echo "  attempt $i: not yet visible, sleeping 5s"
+            sleep 5
+          done
+          echo "::error::$NAME@$VERSION still not visible on npm after 2 min."
+          echo "::error::Either Release's npm publish failed, or this workflow was run before Release completed."
+          echo "::error::Re-run after verifying npm view $NAME versions includes $VERSION."
+          exit 1
 
       - name: Authenticate via GitHub OIDC
         run: ./mcp-publisher login github-oidc

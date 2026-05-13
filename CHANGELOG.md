@@ -11,6 +11,30 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-05-13
+
+**Theme:** hot-patch for the v0.12.0 release-image regression + three reliability bugs found within hours of v0.12.0 shipping.
+
+The release-blocker (#180) is the dominant fix: every fresh `docker pull ghcr.io/tosin2013/helmdeck:0.12.0` user saw a blank Management UI because the embedded `web/dist/index.html` referenced asset hashes not present in the image. Root cause was a workflow sequencing bug — the release workflow never ran `npm run build` before bundling the docker image, so the image baked in whatever stale `index.html` was last committed. The fix adds a Node + web-build step before `docker/build-push-action` plus a verify step that fails the release loud if the rebuilt `index.html` references assets that aren't on disk. Defense in depth: if v0.12.0's release had run this check, the broken image would never have shipped.
+
+The other three are smaller but each pinches at a real operator-visible failure mode introduced (or surfaced) by v0.12.0's content-pack push.
+
+### Fixed
+
+- **Release image's blank Management UI on fresh pulls (#180)** — `.github/workflows/release.yml` now runs `cd web && npm ci && npm run build` before `docker/build-push-action`, then verifies that every asset hash referenced from the rebuilt `web/dist/index.html` exists in `web/dist/assets/`. Closes #180. Doesn't change `web/dist/`'s gitignore status — the workflow-step fix is the architecturally correct choice (committing the dist folder would create merge churn on every `web/src/` PR).
+- **`firecrawl-rabbitmq` cold-boot race (#181)** — `deploy/compose/compose.firecrawl.yml` bumps the rabbitmq healthcheck's `start_period: 15s` → `60s`. RabbitMQ's Erlang VM + mnesia init takes 30-60s on alpine; the shorter window exhausted retries before the node was ready → container reported unhealthy → `helmdeck-firecrawl` (correctly waiting via `depends_on: condition: service_healthy`) never started → operator had to `docker compose up` again. 60s aligns with `firecrawl-searxng`'s precedent in the same file. Tutorial note added that firecrawl overlay cold-boot takes ~60-90s. Closes #181.
+- **`content.ground` truncated-JSON failure mode (#179)** — the hard-coded 1024-token completion cap was too tight for the structured claim-plan JSON the extractor returns (~750 tokens for 5 claims left ~270 tokens of headroom; weak models or large posts blew through it). Default bumped to **2048** (~1200 tokens of output budget); new optional `max_completion_tokens` input on `contentGroundInput` lets operators raise the cap up to 8192. Over-cap requests now reject with `CodeInvalidInput` (runaway-cost guard) instead of silently truncating downstream. Closes #179.
+- **`content.ground` silent degradation when Firecrawl unreachable (#182)** — the per-claim grounding loop swallowed `callFirecrawlSearch` transport errors silently, producing an empty-success "no sources found" output instead of surfacing the underlying reachability issue. Now tracks `firecrawlCalls` vs `firecrawlErrors` separately; when 100% of attempted calls hit transport errors, the handler returns `CodeHandlerFailed` with a message pointing at the firecrawl service URL. Partial-success runs preserved: claims with "search succeeded but no usable source" still land under `skipped` and the run completes. Mirrors the v0.11 narration contract's fail-loud-on-missing-dependency pattern. Closes #182.
+
+### Tests
+
+- 5 new tests in `content_ground_test.go` — `DefaultMaxTokens`, `MaxCompletionTokensOverride`, `MaxCompletionTokensOverCap`, `FirecrawlAllErrors`, `FirecrawlPartialErrorsSucceed`.
+
+### Changed
+
+- `skills/helmdeck/SKILL.md` — refreshed catalog (#184). Now correctly advertises 39 packs (was stamped at pre-v0.10.2 commit `24bd0c3` advertising 36 — missing `blog.publish`, `podcast.generate`, `image.generate`). Frontmatter `helmdeckVersion` bumped to `v0.12.0`. Brings SKILL.md in line with `docs/integrations/SKILLS.md`, which was already current.
+- `website/docusaurus.config.ts` — sitemap ignores `/blog/tags`, `/blog/tags/**`, `/blog/archive`, `/blog/authors` to concentrate Google crawl budget on content pages (137 URLs → 122). Filed as SEO follow-up after Search Console reported 61 URLs in "Discovered – currently not indexed" with crawl timestamp `1969-12-31` (never crawled). Pages still render at their URLs — they're just no longer advertised in the sitemap.
+
 ## [0.12.0] - 2026-05-12
 
 **Theme:** content-pack image chaining + v1.0 install-path unblocker + pack-authoring MVP.

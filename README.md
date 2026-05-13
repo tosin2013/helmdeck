@@ -37,12 +37,20 @@ Three audiences specifically:
 
 ## Status
 
-**v0.12.0 shipped** — 39 capability packs with **end-to-end content chaining** (image.generate auto-feeds
-podcast/slides/blog covers and hero images), the **`helmdeck://image-models` MCP resource** for agent
-discoverability, **image-mode install** (`./scripts/install.sh --image-mode` pulls from ghcr.io with no Go
-toolchain — the v1.0 Helm chart unblocker), the **Pack Test Runner UI** (click any pack in `/packs` to run it
-with a JSON body), and the **subprocess pack type** (drop an executable into `$HELMDECK_COMMAND_PACKS_DIR` to
-register a `cmd.<name>` pack — Python/Node/Bash/Rust authors welcome). Helmdeck is also published to the [official
+**v0.12.1 shipped** — patch release fixing v0.12.0's release-image regression (#180 — fresh
+`docker pull` users saw a blank Management UI because the release workflow skipped `npm run build`)
+plus three reliability bugs: firecrawl-rabbitmq cold-boot race (#181 — `start_period: 15s` → `60s`),
+`content.ground` truncated-JSON failure mode (#179 — token cap 1024 → 2048, now configurable),
+and `content.ground` silent degradation when Firecrawl is unreachable (#182 — fails loud with
+`handler_failed` instead of returning empty-success).
+
+v0.12.0's headline features remain: 39 capability packs with **end-to-end content chaining**
+(image.generate auto-feeds podcast/slides/blog covers and hero images), the **`helmdeck://image-models`
+MCP resource** for agent discoverability, **image-mode install** (`./scripts/install.sh --image-mode`
+pulls from ghcr.io with no Go toolchain — the v1.0 Helm chart unblocker), the **Pack Test Runner UI**
+(click any pack in `/packs` to run it with a JSON body), and the **subprocess pack type** (drop an
+executable into `$HELMDECK_COMMAND_PACKS_DIR` to register a `cmd.<name>` pack — Python/Node/Bash/Rust
+authors welcome). Helmdeck is also published to the [official
 MCP Registry](https://registry.modelcontextprotocol.io/) as
 `io.github.tosin2013/helmdeck` for one-line install in registry-aware
 clients. Phase 6.5 (MCP Server Hosting & Pack Evolution) is complete;

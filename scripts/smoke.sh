@@ -18,6 +18,7 @@ COMPOSE_FILE="${REPO_ROOT}/deploy/compose/compose.yaml"
 ENV_FILE="${REPO_ROOT}/deploy/compose/.env.smoke"
 SIDECAR_IMAGE="${SIDECAR_IMAGE:-helmdeck-sidecar:dev}"
 PORT="${PORT:-3000}"
+SHOT=""
 
 cleanup() {
   local rc=$?
@@ -27,7 +28,7 @@ cleanup() {
   fi
   echo "--- tearing down compose stack ---"
   docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -f "${ENV_FILE}"
+  rm -f "${ENV_FILE}" "${SHOT}"
   exit $rc
 }
 trap cleanup EXIT
@@ -48,7 +49,13 @@ fi
 
 echo "--- generating ephemeral .env.smoke"
 JWT_SECRET=$(head -c 32 /dev/urandom | xxd -p -c 64)
-DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 999)
+# on macOS, Docker Desktop runs in a Linux VM where the socket is root:root (GID 0).
+# stat -c is GNU only and silently fails on macOS, so detect the platform instead.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  DOCKER_GID=0
+else
+  DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 999)
+fi
 {
   echo "HELMDECK_JWT_SECRET=${JWT_SECRET}"
   echo "HELMDECK_DOCKER_GID=${DOCKER_GID}"
@@ -138,13 +145,12 @@ fi
 echo "execute OK"
 
 echo "--- screenshot"
-SHOT="$(mktemp /tmp/helmdeck-smoke-XXXXXX.png)"
-trap 'rm -f "${SHOT}"' RETURN
+SHOT="$(mktemp /tmp/helmdeck-smoke-XXXXXX)"
 api POST /api/v1/browser/screenshot -o "${SHOT}" -d "{
   \"session_id\": \"${SESSION_ID}\",
   \"full_page\": false
 }"
-if ! head -c4 "${SHOT}" | grep -q $'\x89PNG'; then
+if ! head -c4 "${SHOT}" | LC_ALL=C grep -q $'\x89PNG'; then
   echo "smoke: screenshot is not a PNG (head: $(head -c8 "${SHOT}" | xxd))" >&2
   exit 1
 fi
@@ -185,7 +191,7 @@ if [[ ${PACK_SHOT_SIZE} -lt 500 ]]; then
   echo "smoke: pack screenshot suspiciously small (${PACK_SHOT_SIZE} bytes)" >&2
   exit 1
 fi
-if ! head -c4 /tmp/pack-shot.png | grep -q $'\x89PNG'; then
+if ! head -c4 /tmp/pack-shot.png | LC_ALL=C grep -q $'\x89PNG'; then
   echo "smoke: pack screenshot is not a PNG" >&2
   exit 1
 fi

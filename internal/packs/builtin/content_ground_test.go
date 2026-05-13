@@ -410,6 +410,60 @@ func TestContentGround_MaxClaimsCap(t *testing.T) {
 	}
 }
 
+// TestContentGround_DefaultMaxTokens verifies the claim-extractor
+// dispatch carries the new 2048-token default cap (#179 — 1024 was
+// too tight and truncated JSON mid-response with weak models).
+func TestContentGround_DefaultMaxTokens(t *testing.T) {
+	fc := stubFirecrawlSearch(t, 200, `{"success":true,"data":[]}`)
+	disp := &scriptedDispatcherWT{replies: []string{`{"claims":[]}`}}
+	_, err := runContentGround(t, disp, &execScript{}, fc,
+		`{"text":"A short post.","model":"openai/gpt-4o-mini"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if len(disp.captured) == 0 {
+		t.Fatal("dispatcher received no requests")
+	}
+	got := disp.captured[0].MaxTokens
+	if got == nil || *got != 2048 {
+		t.Errorf("MaxTokens = %v, want 2048", got)
+	}
+}
+
+// TestContentGround_MaxCompletionTokensOverride verifies operators
+// can raise the cap via the new input field for verbose JSON or
+// long-claim posts.
+func TestContentGround_MaxCompletionTokensOverride(t *testing.T) {
+	fc := stubFirecrawlSearch(t, 200, `{"success":true,"data":[]}`)
+	disp := &scriptedDispatcherWT{replies: []string{`{"claims":[]}`}}
+	_, err := runContentGround(t, disp, &execScript{}, fc,
+		`{"text":"A short post.","model":"openai/gpt-4o-mini","max_completion_tokens":4096}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	got := disp.captured[0].MaxTokens
+	if got == nil || *got != 4096 {
+		t.Errorf("MaxTokens = %v, want 4096", got)
+	}
+}
+
+// TestContentGround_MaxCompletionTokensOverCap rejects values above
+// the 8192 hard cap with CodeInvalidInput so runaway costs are
+// surfaced loud rather than silently truncated downstream.
+func TestContentGround_MaxCompletionTokensOverCap(t *testing.T) {
+	fc := stubFirecrawlSearch(t, 200, `{"success":true,"data":[]}`)
+	disp := &scriptedDispatcherWT{}
+	_, err := runContentGround(t, disp, &execScript{}, fc,
+		`{"text":"x","model":"openai/gpt-4o-mini","max_completion_tokens":16384}`)
+	pe := &packs.PackError{}
+	if !errors.As(err, &pe) || pe.Code != packs.CodeInvalidInput {
+		t.Errorf("want invalid_input for over-cap, got %v", err)
+	}
+	if len(disp.captured) != 0 {
+		t.Errorf("dispatcher should not be called when input is rejected, got %d calls", len(disp.captured))
+	}
+}
+
 // itoa is a tiny helper because the test file otherwise only uses
 // `strings` and I'd rather not import strconv just for one call.
 func itoa(n int) string {

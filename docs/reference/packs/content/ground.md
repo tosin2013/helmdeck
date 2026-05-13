@@ -38,6 +38,7 @@ Two input modes — supply **either** `text` (in-memory) **or** `clone_path` + `
 | `max_claims` | `number` | no | `5` | Cap on claims to ground. Hard cap at 8 (Firecrawl per-call cost). |
 | `topic` | `string` | no | — | Hint for the claim extractor. e.g. `"quantum computing"` narrows extraction to topic-relevant claims and biases the search step. |
 | `rewrite` | `boolean` | no | `false` | When `true`, the LLM also rewrites weak claims into stronger prose backed by the discovered source. More expensive (multiple LLM passes); use when "make this blog post more credible" is the goal. |
+| `max_completion_tokens` | `number` | no | `2048` | Cap on the claim-extractor LLM's completion. Raise when running against a verbose weak model or a long post — JSON truncation surfaces as an unparseable-JSON handler error. Hard upper bound: `8192`. |
 | `_session_id` | `string` | yes (file mode) | — | Required when `clone_path` is set; not used in text mode. |
 
 ## Outputs

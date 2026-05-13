@@ -92,7 +92,15 @@ import (
 const (
 	defaultContentGroundClaims  = 5
 	maxContentGroundClaims      = 8
-	defaultContentGroundTokens  = 1024
+	// defaultContentGroundTokens is the completion-token cap for the
+	// claim-extractor call. 1024 was too tight: the system prompt +
+	// topic + 5-8 claim JSON entries can land near ~750 tokens, leaving
+	// minimal headroom; weak models or large posts would truncate the
+	// JSON mid-response, surfacing as "unparseable JSON" with an empty
+	// snippet (#179). 2048 gives ~1200 tokens of output budget while
+	// staying cheap on the common case.
+	defaultContentGroundTokens  = 2048
+	maxContentGroundTokens      = 8192
 	// contentGroundPrompt is the frozen system prompt for the claim
 	// extractor. The strict JSON schema is critical — we parse the
 	// response with json.Unmarshal and bail on invalid_input if it
@@ -178,6 +186,11 @@ type contentGroundInput struct {
 	MaxClaims int    `json:"max_claims"`
 	Topic     string `json:"topic"`
 	Rewrite   bool   `json:"rewrite"` // when true, rewrite weak claims using source content
+	// MaxCompletionTokens optionally raises the claim-extractor's
+	// completion cap above the 2048 default. Useful for posts with
+	// long claim summaries or when running against a weak model that
+	// produces verbose JSON. Hard upper bound: 8192.
+	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
 }
 
 // claimPlan is the parsed shape the extractor LLM returns.
@@ -228,6 +241,17 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 		}
 		if maxClaims > maxContentGroundClaims {
 			maxClaims = maxContentGroundClaims
+		}
+		maxTokens := defaultContentGroundTokens
+		if in.MaxCompletionTokens > 0 {
+			if in.MaxCompletionTokens > maxContentGroundTokens {
+				return nil, &packs.PackError{
+					Code: packs.CodeInvalidInput,
+					Message: fmt.Sprintf("max_completion_tokens %d exceeds cap of %d",
+						in.MaxCompletionTokens, maxContentGroundTokens),
+				}
+			}
+			maxTokens = in.MaxCompletionTokens
 		}
 
 		// Two modes:
@@ -292,7 +316,7 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 		// knows what to do with it because it reads like part of
 		// the goal framing rather than a schema field.
 		ec.Report(10, "extracting claims")
-		claims, rawModel, perr := extractClaims(ctx, d, in.Model, original, in.Topic, maxClaims)
+		claims, rawModel, perr := extractClaims(ctx, d, in.Model, original, in.Topic, maxClaims, maxTokens)
 		if perr != nil {
 			return nil, perr
 		}
@@ -428,11 +452,10 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 // extractClaims asks the LLM to pick up to maxClaims grounding
 // candidates. Returns the parsed claim list plus the raw model
 // response (useful for future audit logging).
-func extractClaims(ctx context.Context, d vision.Dispatcher, model, markdown, topic string, maxClaims int) ([]struct {
+func extractClaims(ctx context.Context, d vision.Dispatcher, model, markdown, topic string, maxClaims, maxTokens int) ([]struct {
 	Text  string `json:"text"`
 	Query string `json:"query"`
 }, string, *packs.PackError) {
-	maxTokens := defaultContentGroundTokens
 	var userMsg strings.Builder
 	fmt.Fprintf(&userMsg, "MAX_CLAIMS: %d\n", maxClaims)
 	if strings.TrimSpace(topic) != "" {

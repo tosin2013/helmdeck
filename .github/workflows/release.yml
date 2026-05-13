@@ -37,6 +37,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Build the Management UI bundle FIRST so the embedded
+      # web/dist/ in the image matches the asset hashes referenced
+      # from web/dist/index.html. web/dist/assets/ is gitignored;
+      # without this step the image ships with whatever stale
+      # index.html was last committed, breaking the UI on fresh
+      # pulls (#180).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      - name: Build web bundle
+        run: |
+          cd web
+          npm ci
+          npm run build
+      - name: Verify embedded web hashes resolve
+        run: |
+          set -euo pipefail
+          cd web/dist
+          missing=0
+          for asset in $(grep -oE 'assets/(index|[A-Za-z0-9_-]+)-[A-Za-z0-9_-]+\.(js|css)' index.html); do
+            if [ ! -f "$asset" ]; then
+              echo "MISSING: $asset (referenced from index.html but not in web/dist/)"
+              missing=1
+            fi
+          done
+          if [ "$missing" = "1" ]; then
+            echo "::error::web build produced index.html referencing assets not on disk; aborting release"
+            exit 1
+          fi
+          echo "All embedded asset hashes resolve."
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 

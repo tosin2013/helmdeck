@@ -71,7 +71,16 @@ const config: Config = {
           changefreq: 'weekly',
           priority: 0.5,
           filename: 'sitemap.xml',
-          ignorePatterns: ['/search'],
+          ignorePatterns: [
+            '/search',
+            // Thin/duplicate index pages — listed in Google Search Console's
+            // "Discovered – currently not indexed" bucket. Excluding from
+            // sitemap concentrates crawl budget on content pages.
+            '/blog/tags',
+            '/blog/tags/**',
+            '/blog/archive',
+            '/blog/authors',
+          ],
           // Per-route priority/changefreq bumps for the highest-value
           // pages. Docusaurus's default sitemap plugin does NOT read
           // frontmatter priority/changefreq, so we override here.

@@ -118,7 +118,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 15s
+      # RabbitMQ's Erlang VM + mnesia cold-boot takes 30-60s on
+      # alpine; a shorter start_period exhausts retries before the
+      # node is ready, container reports unhealthy, and firecrawl
+      # (depends_on: condition: service_healthy) never starts (#181).
+      start_period: 60s
 
   firecrawl:
     image: ghcr.io/firecrawl/firecrawl:latest

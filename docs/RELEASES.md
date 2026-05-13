@@ -507,6 +507,30 @@ Released as feature-gated minors as they stabilize. No hard sequence.
 | v1.6 | Pre-packaged Chrome DevTools MCP / Playwright MCP entries | 006 |
 | v1.7 | Firecracker production hardening (bare-metal node guidance) | 011 |
 | v1.x | Lightpanda alternate browser engine | 001 |
+| v1.x | **NVIDIA OpenShell integration** — sidecars in MicroVMs + L7 policy | 011, 036 (planned) |
+
+## v1.x — Enterprise integration tracks {#enterprise-integration-tracks}
+
+Post-GA themes that compose with the innovation tracks above but are scoped as community-led integration work rather than core platform features. Each is broken into independently-mergeable phases tracked as separate GitHub issues so contributors can pick up one phase without blocking on the others.
+
+### NVIDIA OpenShell integration
+
+**Theme:** "Helmdeck sidecars inside hardware-isolated, policy-governed sandboxes."
+
+[NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) is a Rust-based safe runtime for autonomous AI agents — declarative YAML policies, OPA-enforced L7 network rules, libkrun MicroVM compute driver, Landlock filesystem isolation. Helmdeck's pack engine operates at the tool layer; OpenShell operates at the sandbox layer. The integration is non-duplicative — each project covers a layer the other doesn't.
+
+Canonical design doc: [`docs/integrations/openshell.md`](integrations/openshell.md).
+
+**Four phases (all post-v1.0):**
+
+1. **Shallow integration** — run the helmdeck control plane inside an OpenShell sandbox. Docs + example policy only. No helmdeck code changes. Good first issue.
+2. **Agent sandbox integration** — run the agent (OpenClaw / Claude Code / Hermes) inside an OpenShell sandbox with egress restricted to helmdeck MCP + `inference.local`. Docs + example policy. Extends `openclaw.md`'s topology section. Good first issue.
+3. **`OpenShellSessionRuntime` backend** — third `SessionRuntime` implementation (alongside `DockerSessionRuntime` and v1.0's `KubernetesSessionRuntime`) that routes sidecar lifecycle through the OpenShell Gateway API. Hardware-isolated browser / Python / Node sidecars. Help wanted; multi-week Go work. Lands a new ADR (036).
+4. **Correlated observability** — join helmdeck's OTel GenAI traces with OpenShell's OCSF security events on the sandbox ID. End-to-end traces from MCP tool call → policy decision → outbound HTTP. Help wanted; OTel collector + OPA experience.
+
+**Why post-v1.0:** Phase 3 modifies `SessionRuntime`, the seam between helmdeck's pack engine and execution backends. Touching it pre-GA forks the v1.0 test matrix; post-GA it's purely additive. Plus OpenShell is alpha — production deployments need a stable OpenShell Gateway API first.
+
+**Gating:** v1.0 ships first. Phases 1 and 2 can land as docs-only PRs once both projects are GA. Phases 3 and 4 wait on a stable OpenShell Gateway API (no calendar commitment).
 
 ---
 

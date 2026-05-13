@@ -73,6 +73,7 @@ The shape you use depends on whether your client supports a URL-based MCP transp
 | [Claude Code](claude-code.md) | B (host) | stdio bridge **or** URL/SSE (T302a) | ⚠️ via `ANTHROPIC_BASE_URL` (needs `/v1/messages`, blocked on T201b) | 🟡 Documented |
 | [Claude Desktop](claude-desktop.md) | B (host, mac/win only) | stdio bridge | ❌ not documented | 🟡 Documented |
 | [Gemini CLI](gemini-cli.md) | B (host) | stdio bridge **or** URL/HTTP (T302a) | ❌ hard-wired to Gemini/Vertex | 🟡 Documented |
+| [NVIDIA OpenShell](openshell.md) | C (sandbox + sidecar runtime) | inherits agent's MCP transport, inside policy-governed sandbox | OpenShell injects via provider; helmdeck calls unchanged | 📋 Roadmap (post-v1.0) |
 
 > When a client is promoted to ✅, update both its page banner **and** the row in this matrix. Keep them in sync.
 

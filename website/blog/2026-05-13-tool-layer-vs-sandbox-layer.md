@@ -24,6 +24,45 @@ Helmdeck's thesis from day one has been that the bottleneck for production-grade
 
 Both projects ship something the other doesn't have. We are not solving the same problem.
 
+```mermaid
+graph TB
+    subgraph agent_layer["Agent layer"]
+        agent["Claude Code / OpenClaw / Hermes"]
+    end
+
+    subgraph tool_layer["Tool layer — helmdeck owns"]
+        mcp["MCP server + 39 packs"]
+        vault["Vault (AES-256-GCM, placeholder tokens)"]
+        engine["Pack engine + SessionRuntime"]
+    end
+
+    subgraph sandbox_layer["Sandbox layer — OpenShell owns"]
+        gateway["Gateway API"]
+        opa["L7 OPA policy"]
+        microvm["libkrun MicroVM"]
+        landlock["Landlock filesystem"]
+    end
+
+    subgraph sidecar["Sidecar workload<br/>(browser / python / node / vision)"]
+        s1["MicroVM-isolated kernel<br/>policy-enforced egress<br/>landlock-restricted FS"]
+    end
+
+    agent -->|MCP tool call| mcp
+    engine -->|SessionRuntime API| gateway
+    gateway -->|provisions| sidecar
+
+    classDef helmdeck fill:#dbeafe,stroke:#1d4ed8,color:#1e3a8a
+    classDef openshell fill:#fed7aa,stroke:#c2410c,color:#7c2d12
+    classDef agent fill:#e9d5ff,stroke:#7e22ce,color:#581c87
+    classDef workload fill:#dcfce7,stroke:#15803d,color:#14532d
+    class tool_layer helmdeck
+    class sandbox_layer openshell
+    class agent_layer agent
+    class sidecar workload
+```
+
+The sidecar workload at the bottom is the composed outcome — neither team owns it alone, but together they produce a hardware-isolated kernel + L7 policy + Landlock FS that neither could ship standalone.
+
 ## What changes if you compose them
 
 The standalone helmdeck story today: agents call our 39 packs via MCP. The packs run in Docker containers with seccomp profiles and dropped capabilities. The egress guard rejects outbound URLs against a blocklist. That's solid for most operators, and Phase 7 (Kubernetes & GA, in progress as of v0.12.1) adds the production hardening — NetworkPolicies, KEDA autoscaling, External Secrets, the works.
@@ -94,4 +133,15 @@ Two reasons. First, OpenShell is NVIDIA's project — they're optimizing for the
 
 Second, and more importantly: the two-stack story is *more honest* about what each layer does. A merged product would have to abstract both layers behind one API, and the abstractions would leak. An enterprise reviewing helmdeck-with-OpenShell can audit each layer independently — read OpenShell's policy YAML, read helmdeck's pack schemas, see exactly what each layer is responsible for. That's a security property of the architecture, not just an aesthetic preference.
 
-If you're an architect evaluating either project today: read [helmdeck's design doc](/integrations/openshell) for the composed story, read [OpenShell's openclaw.md example](https://github.com/NVIDIA/OpenShell) for the standalone sandbox story, and decide which layer is your current bottleneck. Then watch the four issues — Phases 1 and 2 will land first, and you can be the operator who reports on the production deployment.
+## CTA — Tell us where you'd want OpenShell first
+
+The four-phase roadmap is real but the phasing is currently maintainer-best-guess. If you're an architect reviewing helmdeck for production, the most useful thing you can do today is comment on **[issue #193](https://github.com/tosin2013/helmdeck/issues/193)** with two fields:
+
+- **Pack family that worries you most** — `browser.*`, `python.run` / `node.run`, `vision.*`, `web.scrape`, `repo.*`, something else?
+- **What you're isolating against** — Chromium zero-day + drive-by exploit, LLM-generated code reading host secrets, prompt-injected egress to an attacker-controlled URL, an internal SSRF target reachable from the sidecar network, something else?
+
+If the same pack family + threat shows up from three independent commenters, **Phase 3 ([#196](https://github.com/tosin2013/helmdeck/issues/196)) moves up the queue**. If a different pattern dominates — say everyone cares about `python.run` + filesystem isolation but nobody cares about browser MicroVMs — the roadmap re-prioritizes accordingly (Landlock support could land before the libkrun work).
+
+This isn't a marketing waitlist. It's the same pattern that drove [#173 and #174](https://github.com/tosin2013/helmdeck/issues/173) (subprocess pack follow-ups filed in real-time as community needs surfaced) and the [cost-reproduction comments](/explanation/why-helmdeck#run-the-comparison-yourself) that calibrate the [Why helmdeck](/explanation/why-helmdeck) page. Your input shapes what ships first.
+
+If you want to *write* one of the phases instead of just shape it, Phases 1 and 2 ([#194](https://github.com/tosin2013/helmdeck/issues/194), [#195](https://github.com/tosin2013/helmdeck/issues/195)) are docs + example YAML and explicitly tagged `good first issue`.

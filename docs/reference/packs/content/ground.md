@@ -25,6 +25,8 @@ Needs the Firecrawl overlay (same toggle as [`research.deep`](../research/deep.m
 HELMDECK_FIRECRAWL_ENABLED=true
 ```
 
+If the env var is unset the pack fails fast with `invalid_input`. If the env var is set but the `firecrawl` service is unreachable (every search call errors at the transport layer), the pack fails with `handler_failed` and a message pointing at the service URL — rather than silently returning "no sources found." Partial successes are preserved: when Firecrawl is healthy and some queries genuinely return zero results, those claims show up under `skipped` and the run still completes.
+
 ## Inputs
 
 Two input modes — supply **either** `text` (in-memory) **or** `clone_path` + `path` (session-file mode), not both.

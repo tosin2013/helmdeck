@@ -346,6 +346,17 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 		skipped := make([]string, 0)
 		patched := original
 		considered := 0
+		// firecrawlCalls counts claims that survived the substring
+		// check and reached callFirecrawlSearch. firecrawlErrors
+		// counts how many of those returned a transport error.
+		// When every reached call failed → Firecrawl is unreachable
+		// and we must fail loud (#182) rather than return an empty-
+		// success "no sources found" output. "Search returned zero
+		// results" or "verify rejected the result" do NOT increment
+		// firecrawlErrors — those are legitimate empty outcomes that
+		// preserve partial-success behavior when Firecrawl is healthy.
+		firecrawlCalls := 0
+		firecrawlErrors := 0
 
 		for i, c := range claims {
 			ec.Report(20+float64(i)*60/float64(len(claims)),
@@ -357,6 +368,7 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 			}
 			// Search with inline scrape so we get page content
 			// alongside URLs — needed for source verification.
+			firecrawlCalls++
 			fc, searchErr := callFirecrawlSearch(ctx, base, firecrawlSearchRequest{
 				Query: c.Query,
 				Limit: 3,
@@ -365,6 +377,10 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 				},
 			})
 			if searchErr != nil {
+				firecrawlErrors++
+				if ec.Logger != nil {
+					ec.Logger.Warn("firecrawl search failed", "claim", c.Text, "err", searchErr)
+				}
 				skipped = append(skipped, c.Text)
 				continue
 			}
@@ -389,6 +405,18 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 				Title:   title,
 				Snippet: snippet,
 			})
+		}
+
+		// Fail loud if every Firecrawl call we attempted errored at
+		// the transport layer — that's a service issue, not a result
+		// issue, and silently producing an empty-success output would
+		// mislead the caller into thinking content.ground "tried but
+		// found nothing" rather than "couldn't reach Firecrawl" (#182).
+		if firecrawlCalls > 0 && firecrawlErrors == firecrawlCalls {
+			return nil, &packs.PackError{
+				Code:    packs.CodeHandlerFailed,
+				Message: fmt.Sprintf("content.ground: every Firecrawl search call failed; verify the firecrawl service is reachable at %s", base),
+			}
 		}
 
 		// 5. Rewrite (optional). When rewrite=true, ask the LLM to

@@ -11,16 +11,12 @@
 # See docs/SIDECAR-EXTENDING.md for the operator runbook on adding tools,
 # fonts, and language packs.
 
-FROM debian:bookworm-slim AS marp-dl
-ARG MARP_VERSION=4.0.4
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl tar \
- && curl -fsSL "https://github.com/marp-team/marp-cli/releases/download/v${MARP_VERSION}/marp-cli-v${MARP_VERSION}-linux.tar.gz" -o /tmp/marp.tgz \
- && tar -xzf /tmp/marp.tgz -C /usr/local/bin marp \
- && chmod +x /usr/local/bin/marp \
- && /usr/local/bin/marp --version
-
 FROM debian:bookworm-slim
 ARG DEBIAN_FRONTEND=noninteractive
+# marp-cli version, installed via npm in Layer 4b so the same layer
+# works on amd64 and arm64. The pre-built binary releases only
+# publish amd64 tarballs
+ARG MARP_VERSION=4.0.4
 
 # Layer 1 — base, locale, fonts, CA bundle
 #
@@ -83,13 +79,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       x11-xserver-utils \
  && rm -rf /var/lib/apt/lists/*
 
-# Layer 4 — pack dependencies (Marp from build stage, plus tesseract / ffmpeg / xdotool / scrot / xclip / socat)
+# Layer 4 — pack dependencies (tesseract / ffmpeg / xdotool / scrot / xclip / socat)
 #
 # socat is the workaround for Chromium 122+ ignoring --remote-debugging-address.
 # Modern Chromium hardcodes the CDP listener to 127.0.0.1; we run socat alongside
 # to expose port 9222 on the container's eth0 interface for the control plane to
 # reach. Bound to $(hostname -i) so it doesn't collide with Chromium on lo:9222.
-COPY --from=marp-dl /usr/local/bin/marp /usr/local/bin/marp
 RUN apt-get update && apt-get install -y --no-install-recommends \
       tesseract-ocr \
       tesseract-ocr-eng \
@@ -107,7 +102,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       universal-ctags \
  && rm -rf /var/lib/apt/lists/*
 
-# Layer 4b — Node.js 20 + @playwright/mcp (T807a / ADR 035) + @mermaid-js/mermaid-cli (#161)
+# Layer 4b — Node.js 20 + @playwright/mcp (T807a / ADR 035) + @mermaid-js/mermaid-cli (#161) + marp
 #
 # Playwright MCP is the "don't rebuild the browser automation layer" half
 # of ADR 035: it exposes Chromium via the accessibility tree so weak LLMs
@@ -128,12 +123,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # system chromium via /etc/mmdc/puppeteer-config.json. In a container we
 # must pass --no-sandbox to Chromium; the puppeteer config carries that.
 #
+# marp is installed via npm rather than the GitHub binary release because
+# marp only publishes amd64 tarballs — arm64 hosts get a 404 on download.
+# npm resolves the correct native modules per platform automatically.
+#
 # The SSE/HTTP surface is bound to 0.0.0.0:8931 at runtime by the
 # entrypoint, so exposing it here is just a hint for `docker inspect`.
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get update && apt-get install -y --no-install-recommends nodejs \
  && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g @playwright/mcp@latest \
  && PUPPETEER_SKIP_DOWNLOAD=1 npm install -g @mermaid-js/mermaid-cli@latest \
+ && npm install -g @marp-team/marp-cli@${MARP_VERSION} \
  && mkdir -p /etc/mmdc \
  && printf '{\n  "executablePath": "/usr/bin/chromium",\n  "args": ["--no-sandbox", "--disable-dev-shm-usage"]\n}\n' > /etc/mmdc/puppeteer-config.json \
  && npm cache clean --force \

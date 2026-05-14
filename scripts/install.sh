@@ -313,10 +313,14 @@ write_env_file() {
   password="$(generate_password)"
   # On Linux the host's docker group GID needs to be passed into the
   # control-plane container so the nonroot user can read the docker
-  # socket. macOS Docker Desktop runs in a VM and doesn't need this
-  # but a default of 999 (Debian/Ubuntu's standard) keeps the file
-  # parseable on every platform.
-  docker_gid="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 999)"
+  # socket. On macOS, Docker Desktop runs containers in a Linux VM
+  # where the socket is owned by root:root (GID 0) — stat -c is
+  # GNU only and silently fails on macOS, so detect the platform.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    docker_gid=0
+  else
+    docker_gid="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 999)"
+  fi
 
   umask 077  # rw------- on the env file
   cat > "${ENV_FILE}" <<EOF

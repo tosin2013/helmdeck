@@ -306,6 +306,8 @@ func TestBlogPublish_Ghost_HappyPath_MarkdownBody(t *testing.T) {
 		PostID      string `json:"post_id"`
 		HTMLURL     string `json:"html_url"`
 		Status      string `json:"status"`
+		ArtifactKey string `json:"artifact_key"`
+		ArtifactURL string `json:"artifact_url"`
 	}
 	_ = json.Unmarshal(raw, &out)
 	if out.PostID != "post-id-123" || out.HTMLURL != "https://blog.example/p/test-post/" || out.Status != "draft" {
@@ -313,6 +315,13 @@ func TestBlogPublish_Ghost_HappyPath_MarkdownBody(t *testing.T) {
 	}
 	if out.BodySource != "input" {
 		t.Errorf("body_source = %q, want input", out.BodySource)
+	}
+	// #203: Ghost-happy path also saves the artifact safety net by default.
+	if out.ArtifactKey == "" {
+		t.Errorf("expected artifact_key in Ghost happy-path response (#203 safety net); got: %+v", out)
+	}
+	if !strings.HasSuffix(out.ArtifactKey, ".md") {
+		t.Errorf("artifact_key %q should be the markdown safety-net artifact", out.ArtifactKey)
 	}
 
 	// Inspect what the pack actually sent to Ghost.
@@ -479,56 +488,107 @@ func TestBlogPublish_PromptMode_NoDispatcher(t *testing.T) {
 }
 
 func TestBlogPublish_Ghost_NoCredentialInVault(t *testing.T) {
+	// #203: under the safety-net default, vault-credential-missing no
+	// longer hard-fails — the artifact saves successfully and the
+	// response carries status="artifact_saved_ghost_failed" with the
+	// vault error in ghost_error. Agent can retry against the artifact.
 	_, _, _ = validGhostKey()
-	// Vault exists but doesn't have ghost-admin-key.
 	v := vaultWithGhostKey(t, "other-key", "b.example", "id:abcd1234")
-	_, err := runBlogPublish(t, v, nil, `{
+	raw, err := runBlogPublish(t, v, nil, `{
 		"destination": "ghost",
 		"format":      "markdown",
 		"title":       "x",
 		"body":        "y",
 		"host":        "blog.example"
 	}`)
-	if err == nil || !strings.Contains(err.Error(), "ghost-admin-key") {
-		t.Fatalf("expected vault credential error, got %v", err)
+	if err != nil {
+		t.Fatalf("expected partial-success response, got hard error: %v", err)
 	}
-	pe, ok := err.(*packs.PackError)
-	if !ok || pe.Code != packs.CodeInvalidInput {
-		t.Fatalf("expected CodeInvalidInput, got %T %v", err, err)
+	var out struct {
+		Status      string `json:"status"`
+		GhostError  string `json:"ghost_error"`
+		ArtifactKey string `json:"artifact_key"`
+	}
+	if uerr := json.Unmarshal(raw, &out); uerr != nil {
+		t.Fatalf("unmarshal partial-success: %v", uerr)
+	}
+	if out.Status != "artifact_saved_ghost_failed" {
+		t.Errorf("status = %q, want artifact_saved_ghost_failed", out.Status)
+	}
+	if !strings.Contains(out.GhostError, "ghost-admin-key") {
+		t.Errorf("ghost_error should mention the missing credential name, got %q", out.GhostError)
+	}
+	if out.ArtifactKey == "" {
+		t.Error("artifact_key should be present on partial-success response (safety net saved the body)")
 	}
 }
 
 func TestBlogPublish_Ghost_API401(t *testing.T) {
+	// #203: 401 from Ghost no longer hard-fails — the safety-net artifact
+	// saves and the response surfaces the 401 in ghost_error so the agent
+	// can fix credentials and retry.
 	srv, _ := stubGhost(t, 401, `{"errors":[{"message":"Authorization failed","type":"NoPermissionError"}]}`)
 	_, _, key := validGhostKey()
 	v := vaultWithGhostKey(t, "ghost-admin-key", "b.example", key)
 	host := strings.TrimPrefix(srv.URL, "http://")
-	_, err := runBlogPublish(t, v, nil, `{
+	raw, err := runBlogPublish(t, v, nil, `{
 		"destination": "ghost",
 		"format":      "markdown",
 		"title":       "x",
 		"body":        "y",
 		"host":        "http://`+host+`"
 	}`)
-	if err == nil || !strings.Contains(err.Error(), "401") {
-		t.Fatalf("expected 401 surfaced, got %v", err)
+	if err != nil {
+		t.Fatalf("expected partial-success response, got hard error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "Authorization failed") {
-		t.Errorf("expected ghost message in error, got %v", err)
+	var out struct {
+		Status      string `json:"status"`
+		GhostError  string `json:"ghost_error"`
+		ArtifactKey string `json:"artifact_key"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.Status != "artifact_saved_ghost_failed" {
+		t.Errorf("status = %q, want artifact_saved_ghost_failed", out.Status)
+	}
+	if !strings.Contains(out.GhostError, "401") {
+		t.Errorf("ghost_error should surface the 401, got %q", out.GhostError)
+	}
+	if !strings.Contains(out.GhostError, "Authorization failed") {
+		t.Errorf("ghost_error should carry Ghost's error message, got %q", out.GhostError)
+	}
+	if out.ArtifactKey == "" {
+		t.Error("artifact_key should be present (safety net saved the body)")
 	}
 }
 
 func TestBlogPublish_Ghost_BadJWTKeyFormat(t *testing.T) {
+	// #203: bad-format vault value surfaces in ghost_error, not as a
+	// hard error — the post body is safe in the artifact store.
 	v := vaultWithGhostKey(t, "ghost-admin-key", "b.example", "no-colon-here")
-	_, err := runBlogPublish(t, v, nil, `{
+	raw, err := runBlogPublish(t, v, nil, `{
 		"destination": "ghost",
 		"format":      "markdown",
 		"title":       "x",
 		"body":        "y",
 		"host":        "blog.example"
 	}`)
-	if err == nil || !strings.Contains(err.Error(), "id>:<secret") {
-		t.Fatalf("expected bad-key-format error, got %v", err)
+	if err != nil {
+		t.Fatalf("expected partial-success response, got hard error: %v", err)
+	}
+	var out struct {
+		Status      string `json:"status"`
+		GhostError  string `json:"ghost_error"`
+		ArtifactKey string `json:"artifact_key"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.Status != "artifact_saved_ghost_failed" {
+		t.Errorf("status = %q, want artifact_saved_ghost_failed", out.Status)
+	}
+	if !strings.Contains(out.GhostError, "id>:<secret") {
+		t.Errorf("ghost_error should mention the key-format problem, got %q", out.GhostError)
+	}
+	if out.ArtifactKey == "" {
+		t.Error("artifact_key should be present (safety net saved the body)")
 	}
 }
 
@@ -717,6 +777,182 @@ func TestBlogPublish_Ghost_FeatureImageUploadedBeforePost(t *testing.T) {
 	}
 	if out.FeatureImageArtifactKey != art.Key {
 		t.Errorf("feature_image_artifact_key = %q, want %q", out.FeatureImageArtifactKey, art.Key)
+	}
+}
+
+// --- #203 artifact-first tests --------------------------------------------
+
+func TestBlogPublish_DefaultDestination_SavesArtifactOnly(t *testing.T) {
+	// #203: omitting destination defaults to artifact-only — the safety
+	// net is on, no Ghost call attempted. Response shape matches the
+	// pre-refactor destination=artifact path plus the new status field.
+	raw, err := runBlogPublish(t, nil, nil, `{
+		"format":      "markdown",
+		"title":       "Default destination",
+		"body":        "# Hello\n\nNo destination field at all."
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		Destination string `json:"destination"`
+		Status      string `json:"status"`
+		ArtifactKey string `json:"artifact_key"`
+		ArtifactURL string `json:"artifact_url"`
+		PostID      string `json:"post_id"`
+		BodySource  string `json:"body_source"`
+	}
+	if uerr := json.Unmarshal(raw, &out); uerr != nil {
+		t.Fatal(uerr)
+	}
+	if out.Destination != "artifact" {
+		t.Errorf("destination = %q, want artifact (default)", out.Destination)
+	}
+	if out.Status != "artifact_saved" {
+		t.Errorf("status = %q, want artifact_saved", out.Status)
+	}
+	if out.ArtifactKey == "" || out.ArtifactURL == "" {
+		t.Errorf("artifact_key/url should be populated: %+v", out)
+	}
+	if out.PostID != "" {
+		t.Errorf("no Ghost call expected — post_id should be empty, got %q", out.PostID)
+	}
+	if out.BodySource != "input" {
+		t.Errorf("body_source = %q, want input", out.BodySource)
+	}
+}
+
+func TestBlogPublish_PromptMode_ArtifactContainsExpandedBody(t *testing.T) {
+	// #203: prompt-mode + no destination → the expensive prompt-expansion
+	// output is preserved in the artifact, NOT just the raw prompt. This
+	// is the "expensive work survives" guarantee — if Ghost (or any
+	// downstream step) fails, the agent doesn't pay for the model call again.
+	// Constructed by hand (not via runBlogPublish) so we can fetch the
+	// stored artifact bytes after the handler returns.
+	disp := &scriptedDispatcherWT{replies: []string{
+		"# Generated body\n\nThis paragraph came from the gateway LLM.",
+	}}
+	pack := BlogPublish(nil, nil, disp)
+	store := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack: pack,
+		Input: json.RawMessage(`{
+			"format":      "markdown",
+			"title":       "LLM-Generated",
+			"prompt":      "Write a short post about Go testing.",
+			"model":       "openai/gpt-4o-mini"
+		}`),
+		Artifacts: store,
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		Status      string `json:"status"`
+		ArtifactKey string `json:"artifact_key"`
+		ModelUsed   string `json:"model_used"`
+		BodySource  string `json:"body_source"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.Status != "artifact_saved" {
+		t.Errorf("status = %q, want artifact_saved", out.Status)
+	}
+	if out.BodySource != "model" {
+		t.Errorf("body_source = %q, want model", out.BodySource)
+	}
+	if out.ModelUsed != "openai/gpt-4o-mini" {
+		t.Errorf("model_used = %q, want openai/gpt-4o-mini", out.ModelUsed)
+	}
+	if disp.calls != 1 {
+		t.Errorf("dispatcher calls = %d, want 1", disp.calls)
+	}
+
+	// Load-bearing assertion: artifact bytes carry the EXPANDED body
+	// (from the dispatcher reply), not the raw prompt.
+	bytes, _, err := store.Get(context.Background(), out.ArtifactKey)
+	if err != nil {
+		t.Fatalf("artifact get: %v", err)
+	}
+	md := string(bytes)
+	if !strings.Contains(md, "This paragraph came from the gateway LLM.") {
+		t.Errorf("artifact should contain the LLM-expanded body; got:\n%s", md)
+	}
+	if strings.Contains(md, "Write a short post about Go testing.") {
+		t.Errorf("artifact should NOT contain the raw prompt — that would mean we saved the wrong bytes:\n%s", md)
+	}
+}
+
+func TestBlogPublish_GhostOnly_WhenSafetyNetOptedOut(t *testing.T) {
+	// #203 opt-out path: also_save_artifact:false + destination=ghost +
+	// happy Ghost → response carries post_id but NO artifact_key. Today's
+	// destination=ghost exact behaviour preserved for callers who don't
+	// want the artifact churn.
+	srv, captured := stubGhost(t, 201, `{
+		"posts": [{
+			"id": "p-opt-out", "url": "https://b.example/p/x",
+			"status": "draft", "published_at": null
+		}]
+	}`)
+	_, _, key := validGhostKey()
+	v := vaultWithGhostKey(t, "ghost-admin-key", "b.example", key)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	raw, err := runBlogPublish(t, v, nil, `{
+		"destination":        "ghost",
+		"also_save_artifact": false,
+		"format":             "markdown",
+		"title":              "Opt out",
+		"body":               "# No artifact",
+		"host":               "http://`+host+`"
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("expected 1 ghost call, got %d", len(*captured))
+	}
+	var out struct {
+		PostID      string `json:"post_id"`
+		ArtifactKey string `json:"artifact_key"`
+		Status      string `json:"status"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.PostID != "p-opt-out" {
+		t.Errorf("post_id = %q, want p-opt-out", out.PostID)
+	}
+	if out.ArtifactKey != "" {
+		t.Errorf("artifact_key should be empty when also_save_artifact:false; got %q", out.ArtifactKey)
+	}
+	if out.Status != "draft" {
+		t.Errorf("status = %q, want draft (Ghost-echoed)", out.Status)
+	}
+}
+
+func TestBlogPublish_GhostFails_HardFail_WhenSafetyNetOptedOut(t *testing.T) {
+	// #203 opt-out + failure: also_save_artifact:false + destination=ghost
+	// + Ghost 500 → original hard-fail behaviour. The caller explicitly
+	// opted out of the artifact safety net, so they accept losing the body.
+	srv, _ := stubGhost(t, 500, `{"errors":[{"message":"Internal Server Error","type":"InternalServerError"}]}`)
+	_, _, key := validGhostKey()
+	v := vaultWithGhostKey(t, "ghost-admin-key", "b.example", key)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	_, err := runBlogPublish(t, v, nil, `{
+		"destination":        "ghost",
+		"also_save_artifact": false,
+		"format":             "markdown",
+		"title":              "Opt out + fail",
+		"body":               "# Lost forever",
+		"host":               "http://`+host+`"
+	}`)
+	if err == nil {
+		t.Fatal("expected hard error when safety net opted out and Ghost fails")
+	}
+	pe, ok := err.(*packs.PackError)
+	if !ok || pe.Code != packs.CodeHandlerFailed {
+		t.Fatalf("expected CodeHandlerFailed, got %T %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("hard error should mention the 500, got %v", err)
 	}
 }
 

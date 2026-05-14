@@ -74,10 +74,11 @@ func BlogPublish(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) 
 		Version:     "v1",
 		Description: "Publish a post to a Ghost blog or render markdown/HTML to the artifact store. Body or prompt+model. Optional feature image (auto-generated via fal.ai or operator-supplied artifact). Markdown bodies may include ```mermaid``` fenced blocks — diagrams render client-side in HTML/Ghost outputs (Ghost theme must include MermaidJS).",
 		InputSchema: packs.BasicSchema{
-			Required: []string{"destination", "format", "title"},
+			Required: []string{"format", "title"},
 			Properties: map[string]string{
-				"destination":                "string", // "ghost" | "artifact"
-				"format":                     "string", // "markdown" | "html"
+				"destination":                "string",  // "ghost" | "artifact" | "" (defaults to artifact)
+				"also_save_artifact":         "boolean", // default true; when destination=ghost, also writes the artifact safety net
+				"format":                     "string",  // "markdown" | "html"
 				"title":                      "string",
 				"body":                       "string",
 				"prompt":                     "string",
@@ -104,10 +105,12 @@ func BlogPublish(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) 
 				"post_id":                    "string",
 				"url":                        "string",
 				"html_url":                   "string",
-				"status":                     "string",
+				"status":                     "string", // "artifact_saved" | "draft" | "published" | "scheduled" | "artifact_saved_ghost_failed"
 				"published_at":               "string",
 				"artifact_key":               "string",
+				"artifact_url":               "string",
 				"size":                       "number",
+				"ghost_error":                "string", // populated only when status="artifact_saved_ghost_failed"
 				"feature_image_artifact_key": "string",
 				"feature_image_url":          "string",
 				"hero_image_model_used":      "string",
@@ -118,8 +121,16 @@ func BlogPublish(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) 
 }
 
 type blogPublishInput struct {
-	Destination string   `json:"destination"`
-	Format      string   `json:"format"`
+	Destination string `json:"destination"`
+	// AlsoSaveArtifact controls the artifact safety net. When destination
+	// is "ghost", a true value (the default when unset) causes the pack
+	// to also write the post body as an artifact so Ghost failures don't
+	// lose the agent's work product. A nil pointer means "field absent in
+	// JSON" → treated as true; an explicit false opts out of the safety
+	// net (today's hard-fail-on-ghost-error behaviour). Pointer not bool
+	// so we can distinguish absent vs explicitly-false.
+	AlsoSaveArtifact *bool    `json:"also_save_artifact,omitempty"`
+	Format           string   `json:"format"`
 	Title       string   `json:"title"`
 	Body        string   `json:"body"`
 	Prompt      string   `json:"prompt"`
@@ -153,9 +164,11 @@ func blogPublishHandler(v *vault.Store, eg *security.EgressGuard, d vision.Dispa
 		}
 
 		// Schema validation — closed sets and exactly-one-mode rules.
-		if in.Destination != "ghost" && in.Destination != "artifact" {
+		// destination is now optional: empty/unset defaults to artifact-only
+		// (the safety-net path). Explicit "ghost" or "artifact" still work.
+		if in.Destination != "" && in.Destination != "ghost" && in.Destination != "artifact" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
-				Message: `destination must be "ghost" or "artifact"`}
+				Message: `destination must be "ghost", "artifact", or empty (defaults to artifact)`}
 		}
 		if in.Format != "markdown" && in.Format != "html" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
@@ -234,14 +247,98 @@ func blogPublishHandler(v *vault.Store, eg *security.EgressGuard, d vision.Dispa
 			return nil, perr
 		}
 
-		switch in.Destination {
-		case "artifact":
-			return blogPublishArtifact(ctx, ec, in.Title, body, in.Format, bodySource, modelUsed, fi)
-		case "ghost":
-			return blogPublishGhost(ctx, ec, eg, v, in, body, bodySource, modelUsed, fi)
+		// Dispatch — #203 artifact-first refactor.
+		//
+		//   - Always save an artifact (the safety net) UNLESS the caller
+		//     explicitly opts out with also_save_artifact:false.
+		//   - When destination is empty or "artifact": return the
+		//     artifact-only response. This is the new default — agents
+		//     that don't specify a destination get a saved post they can
+		//     fetch later.
+		//   - When destination is "ghost": attempt the Ghost publish on
+		//     top of the saved artifact. If Ghost fails AND we saved the
+		//     artifact, return a partial-success response so the agent
+		//     can retry against the artifact without losing the body.
+		//     If Ghost fails AND the caller opted out of the artifact
+		//     safety net (also_save_artifact:false), fall through to the
+		//     pre-refactor hard-fail behaviour.
+		shouldSaveArtifact := in.AlsoSaveArtifact == nil || *in.AlsoSaveArtifact
+		isGhost := in.Destination == "ghost"
+
+		var artifactJSON json.RawMessage
+		if shouldSaveArtifact || !isGhost {
+			aj, err := blogPublishArtifact(ctx, ec, in.Title, body, in.Format, bodySource, modelUsed, fi)
+			if err != nil {
+				// Artifact-write failure is hard fail — the safety net
+				// itself broke; nothing useful to return.
+				return nil, err
+			}
+			artifactJSON = aj
 		}
-		return nil, &packs.PackError{Code: packs.CodeInternal, Message: "unreachable destination"}
+
+		if !isGhost {
+			return artifactJSON, nil
+		}
+
+		ghostJSON, gerr := blogPublishGhost(ctx, ec, eg, v, in, body, bodySource, modelUsed, fi)
+		if gerr != nil {
+			if artifactJSON != nil {
+				// Partial success: post body is safe in the artifact
+				// store, Ghost publish failed. Surface both so the agent
+				// can retry the Ghost step without re-running prompt
+				// expansion.
+				return mergeBlogResults(artifactJSON, partialFailureResult(gerr)), nil
+			}
+			// Caller opted out of the safety net AND Ghost failed —
+			// honour the original hard-fail contract.
+			return nil, gerr
+		}
+
+		if artifactJSON == nil {
+			return ghostJSON, nil
+		}
+		return mergeBlogResults(artifactJSON, ghostJSON), nil
 	}
+}
+
+// mergeBlogResults combines the artifact and Ghost response shapes into
+// a single JSON object. Ghost fields take precedence on overlapping
+// keys (destination, format, body_source, status) — they describe the
+// authoritative outcome of the user-requested side effect. The artifact
+// fields (artifact_key, artifact_url, size) survive the merge because
+// Ghost doesn't emit them.
+//
+// Errors during unmarshal/marshal fall back to returning the artifact
+// half alone — better partial information than no response at all.
+func mergeBlogResults(artifactJSON, ghostJSON json.RawMessage) json.RawMessage {
+	var am, gm map[string]any
+	if err := json.Unmarshal(artifactJSON, &am); err != nil {
+		return artifactJSON
+	}
+	if err := json.Unmarshal(ghostJSON, &gm); err != nil {
+		return artifactJSON
+	}
+	for k, v := range gm {
+		am[k] = v
+	}
+	out, err := json.Marshal(am)
+	if err != nil {
+		return artifactJSON
+	}
+	return out
+}
+
+// partialFailureResult builds the artifact-saved-ghost-failed response
+// fragment. Merged on top of the artifact response, this gives the
+// agent enough information to retry Ghost against the saved body.
+func partialFailureResult(err error) json.RawMessage {
+	out := map[string]any{
+		"status":      "artifact_saved_ghost_failed",
+		"destination": "ghost",
+		"ghost_error": err.Error(),
+	}
+	raw, _ := json.Marshal(out)
+	return raw
 }
 
 // featureImage carries the resolved feature-image state through the
@@ -416,7 +513,9 @@ func blogPublishArtifact(ctx context.Context, ec *packs.ExecutionContext, title,
 		"destination":  "artifact",
 		"format":       format,
 		"body_source":  bodySource,
+		"status":       "artifact_saved",
 		"artifact_key": art.Key,
+		"artifact_url": art.URL,
 		"size":         art.Size,
 	}
 	if modelUsed != "" {

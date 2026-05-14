@@ -27,6 +27,11 @@ $(BRIDGE): $(shell find cmd/helmdeck-mcp -name '*.go' 2>/dev/null) go.mod
 
 .PHONY: test
 test: ## Run unit tests
+	@command -v ctags >/dev/null 2>&1 && ctags --version 2>&1 | grep -qi "universal" || \
+	  { echo "error: universal-ctags required for repo-map tests"; \
+	    echo "  mac:    brew install universal-ctags"; \
+	    echo "  debian: sudo apt-get install universal-ctags"; \
+	    exit 1; }
 	$(GO) test -race -count=1 ./...
 
 .PHONY: vet

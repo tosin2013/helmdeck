@@ -168,6 +168,17 @@ the project also welcomes:
 
 ## Development workflow
 
+`make test` requires `universal-ctags` for the repo-map tests. Install
+it before running tests:
+
+```sh
+# macOS
+brew install universal-ctags
+
+# Debian / Ubuntu
+sudo apt-get install universal-ctags
+```
+
 ```sh
 # Run the full test suite
 make test

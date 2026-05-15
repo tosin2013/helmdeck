@@ -1,0 +1,49 @@
+name: CI (macOS)
+
+# Mirrors the Linux `vet + test + build` job on macos-latest (Apple Silicon)
+# so future regressions of the BSD/GNU coreutil + arm64 dependency kind that
+# PR #205 fixed get caught in CI before they reach contributors. Smoke tests
+# stay Linux-only — GitHub-hosted macOS runners don't ship Docker Desktop.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: vet + test + build (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      # universal-ctags is required by the repo-map integration tests
+      # (enforced by the Makefile preflight added in #205). macOS ships
+      # legacy BSD ctags by default, which is a different tool.
+      - name: Install universal-ctags
+        run: brew install universal-ctags
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (race)
+        run: go test -race -count=1 ./...
+
+      - name: build
+        run: make build
+
+      - name: install.sh --help (flag-parsing smoke)
+        run: bash scripts/install.sh --help >/dev/null

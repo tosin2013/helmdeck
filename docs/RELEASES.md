@@ -424,24 +424,53 @@ The auto-publish workflow republishes the listing on `v*` tag push. Watch for th
 
 ---
 
-## v0.13.0 — Marketplace beta (planned, was v0.12.0) {#v0130}
+## v0.13.0 — Marketplace beta — ✅ Shipped 2026-05-15 {#v0130}
 
 **Theme:** "Discover and install community packs."
 
-### Ships (planned)
+### Shipped
 
-- **T810** — Pack marketplace registry model. `index.yaml` catalog schema, `helmdeck-pack.yaml` manifest, cosign trust verification, `HELMDECK_MARKETPLACE_URL` env var, catalog refresh endpoint.
-- **T811-followup — subprocess pack manifest format ([#173](https://github.com/tosin2013/helmdeck/issues/173)).** YAML/JSON sidecar manifest declares typed `input_schema`/`output_schema`, version, author, env, timeout. The v0.12.0 MVP shipped passthrough schemas only; this completes the authoring surface.
-- **T811-followup — subprocess egress sandbox ([#174](https://github.com/tosin2013/helmdeck/issues/174)).** Today subprocess egress is the host environment's responsibility (helmdeck's `EgressGuard` only intercepts in-process HTTP). Proxy-mode confinement closes the gap for the 90% case.
-- **T606a-followup — schema-derived test-runner form.** Replaces the v0.12.0 MVP textarea with a real React form rendered from the pack's `BasicSchema`. Dropdowns for closed-set fields, client-side required-fields validation, typed inputs.
-- **T812** — `helmdeck pack install/uninstall` CLI commands + `POST /api/v1/marketplace/install` REST endpoint. Hot-load (no restart).
-- **T813** — Marketplace UI panel at `/marketplace`. Browse-by-category, search, pack detail, install/uninstall, trust badges (Core / Signed / Unsigned).
-- **T814** — Community marketplace repo (`tosin2013/helmdeck-marketplace`) seeded with the worked-example pack from v0.10 + initial catalog from accepted `pack-candidate` issues.
-- **`hyperframes.render` built-in pack ([#200](https://github.com/tosin2013/helmdeck/issues/200)).** New media-output pack that renders an HTML/CSS/JS composition into a deterministic MP4 via Chromium BeginFrame + FFmpeg inside a dedicated `helmdeck-sidecar-hyperframes` image. Audio is optional — silent animations, pre-mixed audio, and chained `podcast.generate` → `hyperframes.render` workflows all work without handler branching. Short-form only (≤12 min at 1080p, 512 MiB artifact cap); long-form streaming defers to the v1.x artifact-streaming track ([#201](https://github.com/tosin2013/helmdeck/issues/201)). Pack count 39 → 40.
+**Marketplace track (the headline):**
+
+- **T810 catalog endpoint ([#219](https://github.com/tosin2013/helmdeck/pull/219))** — `GET /api/v1/marketplace/catalog` + `POST /api/v1/marketplace/refresh`. Fetches `index.yaml` from `HELMDECK_MARKETPLACE_URL` (default `https://github.com/tosin2013/helmdeck-marketplace`) at boot; failed refresh preserves the previously-cached snapshot. Three URL shapes supported: `github.com/<owner>/<repo>`, direct raw URLs, `file:///` for air-gapped operators. `HELMDECK_MARKETPLACE_DISABLE=1` opts out.
+- **T812 install/uninstall REST ([#220](https://github.com/tosin2013/helmdeck/pull/220))** — `POST /api/v1/marketplace/{install,uninstall}` + `GET /api/v1/marketplace/installed`. Hot-load: `git clone --depth=1 --filter=blob:none` the marketplace repo, copy `packs/<name>/` to `HELMDECK_PACKS_DIR`, register with the live `packs.Registry` — pack appears in `tools/list` immediately. `command`-handler packs only in beta; `builtin`/`composite`/`wasm` reject. Lands [ADR 038](adrs/038-marketplace-pack-execution-via-sidecar.md) — marketplace packs route through a dedicated `helmdeck-sidecar-marketplace` image (bash + jq + curl + python3 + Node 20) rather than the distroless control plane.
+- **T813 `/marketplace` UI panel ([#221](https://github.com/tosin2013/helmdeck/pull/221))** — React panel with browse-by-category chips, free-text search, pack-detail dialog with schema preview + worked examples + trust badge, install/uninstall buttons with automatic `tools/list` cache invalidation, unsigned-pack confirmation per ADR 034. New `GET /api/v1/marketplace/packs/{name}` returns catalog entry + full `helmdeck-pack.yaml` manifest on demand (catalog endpoint deliberately doesn't pre-load every manifest).
+- **Marketplace trust verification stage A ([#222](https://github.com/tosin2013/helmdeck/pull/222))** — replaces PR #220's structured stub with real deterministic SHA256 content-hash verification. Excludes `helmdeck-pack.yaml` from the hash (chicken-and-egg). Hard-rejects install on mismatch (removes materialized files). Stage B (full sigstore keyless cosign-verify) deferred to v1.0 hardening.
+- **`helmdeck` CLI binary ([#223](https://github.com/tosin2013/helmdeck/pull/223))** — operator-facing CLI wrapping the marketplace endpoints: `pack list`, `pack marketplace [--refresh]`, `pack install <name>`, `pack uninstall <name>`, `pack installed`. Same env-var conventions as `helmdeck-mcp` (`HELMDECK_URL` + `HELMDECK_TOKEN`). `--json` for shell pipelines. Ships via goreleaser alongside `control-plane` + `helmdeck-mcp`. See [`docs/howto/use-the-helmdeck-cli.md`](howto/use-the-helmdeck-cli.md).
+- **T814 community marketplace repo** — [`tosin2013/helmdeck-marketplace`](https://github.com/tosin2013/helmdeck-marketplace) seeded with three packs (`cmd.upper`, `ai.review`, `gif.make`) + maintainer-run `scripts/populate-trust-hashes.mjs` + CI `validate.yml` + `sign.yml`-with-`--check` gate.
+
+**New built-in packs:**
+
+- **`hyperframes.render` ([#200](https://github.com/tosin2013/helmdeck/issues/200))** — HTML/CSS/JS composition → deterministic MP4 via Chromium BeginFrame + ffmpeg using upstream [`hyperframes`](https://github.com/heygen-com/hyperframes) CLI in the new `helmdeck-sidecar-hyperframes` image. Composable sizing: `resolution` (`1080p`/`4k`) × `aspect_ratio` (`16:9`/`9:16`/`1:1`) resolves to one of six upstream presets. Mode-free audio: silent compositions produce silent MP4s; `<audio src>` produces narrated MP4s — chain `podcast.generate` → `hyperframes.render` by embedding the podcast's presigned URL. Short-form only (≤12 min, 512 MiB cap). Pack count 39 → 40.
+- **`stock.search` ([#218](https://github.com/tosin2013/helmdeck/pull/218))** — Pexels-backed stock photo search; downloads top 1-4 results into the artifact store with per-photo attribution metadata. Same chained-input contract as `image.generate` — drops straight into `slides.render`/`slides.narrate`/`blog.publish`/`podcast.generate`/`hyperframes.render`. Engine-pluggable; `unsplash`/`pixabay` reserved for community PRs. Pack count 40 → 41.
+
+**Quality + diagnostics:**
+
+- **`slides.render` contrast guardrails ([#216](https://github.com/tosin2013/helmdeck/pull/216), closes [#202](https://github.com/tosin2013/helmdeck/issues/202))** — three-pronged fix: docs + agent skill teaching WCAG-AA 4.5:1; static contrast lint surfacing `section-background-without-nested-overrides` + `wcag-aa-text-contrast` warnings in the response; two curated embedded Marp themes (`helmdeck-dark`, `helmdeck-corporate`) declaring WCAG-AA colors for every nested element.
+- **`provider_calls` diagnostic columns ([#183](https://github.com/tosin2013/helmdeck/issues/183))** — `job_id` (joins gateway audit to the pack-job that triggered the call), `finish_reason`, `raw_content_len`. Migration `0005_provider_calls_diagnostics.sql` via `ALTER TABLE ADD COLUMN` (O(1) metadata-only).
+- **Subprocess pack manifest format ([#173](https://github.com/tosin2013/helmdeck/issues/173))** — operator-supplied command packs declare typed I/O schemas + execution overrides via a sibling `<basename>.helmdeck-pack.yaml`. Completes the v0.12.0 MVP. New how-to: [`docs/howto/build-subprocess-pack.md`](howto/build-subprocess-pack.md).
+- **`blog.publish` artifact-first refactor ([#203](https://github.com/tosin2013/helmdeck/issues/203))** — `destination` is now optional, defaults to `"artifact"`. Ghost-targeted calls also save the body as an artifact by default (`also_save_artifact: false` to opt out). Ghost failures return a partial-success response (`status: "artifact_saved_ghost_failed"` + `ghost_error` + `artifact_key`) instead of losing the expensive prompt-expanded body.
+
+### Architecture decisions captured
+
+- **[ADR 034 — Pack marketplace](adrs/034-pack-marketplace.md)** — catalog + manifest + trust model + handler types. Written ahead of T810/T812/T813 implementation.
+- **[ADR 037 — Upstream package version management](adrs/037-upstream-package-version-management.md)** — exact pins + CLI-surface sentinel + Dependabot. Surfaced by the hyperframes-npm-pin incident; now a project-wide discipline.
+- **[ADR 038 — Marketplace pack execution via sidecar](adrs/038-marketplace-pack-execution-via-sidecar.md)** — control plane is distroless-static; marketplace packs need bash/jq/python/node; therefore packs route through `helmdeck-sidecar-marketplace` via `ec.Exec` rather than in-process `exec.CommandContext`.
+
+### Slipped to v1.x
+
+- **Stage B trust verification** — full sigstore keyless cosign-verify of the signer identity. Captures malicious-author-modifying-the-manifest, which stage A doesn't.
+- **`hyperframes.render` long-form** ([#201](https://github.com/tosin2013/helmdeck/issues/201)) — multi-GB MP4 streaming via `ArtifactStore.PutStream`. Defers to the v1.x artifact-streaming track.
+- **T606a schema-derived test-runner form** — JSON Schema → React form rendering. The v0.12.0 MVP textarea ships in v0.13.0 unchanged; schema-derived form lands later.
+- **Multi-arch `helmdeck-sidecar-marketplace`** — amd64 only at v0.13.0; multi-arch follows the base sidecar's track.
 
 ### Audience
 
 Operators looking for "an existing pack for X" before writing one. Designed to land before K8s so community surface area precedes enterprise surface area.
+
+### MCP Registry
+
+The auto-publish workflow republishes the listing on `v*` tag push. After tagging, verify at `https://registry.modelcontextprotocol.io/v0/servers?search=io.github.tosin2013%2Fhelmdeck` (expect `version: 0.13.0`, `isLatest: true`).
 
 ---
 

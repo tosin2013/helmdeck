@@ -207,12 +207,53 @@ Per ADR 034:
 
 In both cases `trust_verified: false` is returned. Operators choosing to install can do so; the audit log records the install decision (status code, actor) per the existing `audit_log` mechanism.
 
+## Pack detail (T813)
+
+`GET /api/v1/marketplace/packs/<name>` returns the catalog entry **plus** the full `helmdeck-pack.yaml` manifest fetched from the marketplace repo on demand. Used by the `/marketplace` UI panel's detail dialog to render input/output schemas, examples, and the trust block.
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/api/v1/marketplace/packs/cmd.upper
+```
+
+```json
+{
+  "entry": { "name": "cmd.upper", "version": "v1", "...": "..." },
+  "manifest": {
+    "name": "cmd.upper",
+    "version": "v1",
+    "author": "tosin2013",
+    "description": "Uppercase a string.",
+    "input_schema": { "required": ["text"], "properties": { "text": { "type": "string" } } },
+    "output_schema": { "required": ["text"], "properties": { "text": { "type": "string" } } },
+    "handler": { "type": "command", "command": ["./upper"], "timeout_s": 5 },
+    "examples": [{ "name": "hello", "input": { "text": "hello" }, "expected_output_subset": { "text": "HELLO" } }]
+  }
+}
+```
+
+| Response | Code | When |
+|---|---|---|
+| `200 OK` | Catalog entry exists and manifest fetched successfully. |
+| `404 pack_not_in_catalog` | Name not in the current catalog snapshot. POST `/refresh` if the pack was added upstream recently. |
+| `502 manifest_fetch_failed` | Upstream returned 4xx/5xx or the manifest failed to parse. |
+
+The catalog endpoint deliberately doesn't pre-load every manifest (most packs are never opened); the detail endpoint fetches the one being viewed.
+
+## Management UI panel (T813)
+
+Operators browse + install via the `/marketplace` route in the Management UI. The panel calls the REST endpoints documented above:
+
+- Browse-by-category chips + free-text search across name / description / tags
+- Pack detail dialog with schema preview + examples + trust badge
+- Install / Uninstall buttons with busy-state and `tools/list` cache invalidation
+- Refresh button → `POST /refresh`
+- Unsigned-pack confirmation dialog before install (per ADR 034 trust model)
+
 ## What still lands in follow-up PRs
 
 - **Real cosign-verify call.** Replaces the stub above.
 - **`helmdeck pack install/uninstall` CLI binary.** Calls these REST endpoints. Issue [#30](https://github.com/tosin2013/helmdeck/issues/30) tracks the CLI separately.
-- **`/marketplace` UI panel.** Browse + install from the Management UI. Issue [#31 / T813](https://github.com/tosin2013/helmdeck/issues/31).
-- **Pack-detail endpoint.** `GET /api/v1/marketplace/packs/<name>` returns the full manifest (lands with UI panel).
 
 ## Schema references
 

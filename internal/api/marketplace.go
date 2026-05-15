@@ -45,6 +45,52 @@ func registerMarketplaceRoutes(mux *http.ServeMux, deps Deps) {
 		})
 	})
 
+	// GET /api/v1/marketplace/packs/{name} — pack detail (T813).
+	// Returns the full helmdeck-pack.yaml manifest for one pack so the
+	// UI's detail card can render input/output schemas, examples, and
+	// the trust block. Fetched on demand (not pre-loaded with the
+	// catalog) because the manifest can be larger than the catalog
+	// entry and most packs are never opened.
+	mux.HandleFunc("GET /api/v1/marketplace/packs/{name}", func(w http.ResponseWriter, r *http.Request) {
+		if deps.Marketplace == nil {
+			writeError(w, http.StatusServiceUnavailable, "marketplace_disabled",
+				"marketplace is not configured. Set HELMDECK_MARKETPLACE_URL or remove HELMDECK_MARKETPLACE_DISABLE to enable.")
+			return
+		}
+		name := r.PathValue("name")
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "invalid_input", "pack name is required in the URL path")
+			return
+		}
+		idx, _, err := deps.Marketplace.Catalog()
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "marketplace_not_ready", err.Error())
+			return
+		}
+		var entry *marketplace.IndexEntry
+		for i := range idx.Packs {
+			if idx.Packs[i].Name == name {
+				entry = &idx.Packs[i]
+				break
+			}
+		}
+		if entry == nil {
+			writeError(w, http.StatusNotFound, "pack_not_in_catalog",
+				"no pack named "+name+" in the catalog. Did you POST /api/v1/marketplace/refresh recently?")
+			return
+		}
+		manifest, err := marketplace.LoadManifest(r.Context(), deps.Marketplace.Source(), entry.Path)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "manifest_fetch_failed",
+				"failed to fetch pack manifest: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"entry":    entry,
+			"manifest": manifest,
+		})
+	})
+
 	mux.HandleFunc("POST /api/v1/marketplace/refresh", func(w http.ResponseWriter, r *http.Request) {
 		if deps.Marketplace == nil {
 			writeError(w, http.StatusServiceUnavailable, "marketplace_disabled",

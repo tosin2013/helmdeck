@@ -6,7 +6,7 @@ tags: [release-notes, agent-architecture]
 description: helmdeck v0.13.0 turns the in-tree pack catalog into one of two paths. Built-ins still ship in the binary, but anything else — from a one-script helper to a video-rendering toolchain — can live in a community marketplace, install with a single REST call or the new CLI, and run inside a dedicated sidecar. Plus hyperframes.render, stock.search, contrast guardrails, and three new ADRs.
 image: /img/social-card.png
 date: 2026-05-15
-draft: true
+draft: false
 ---
 
 ## Hook

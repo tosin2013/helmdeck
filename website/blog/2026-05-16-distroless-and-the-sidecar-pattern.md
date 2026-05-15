@@ -6,7 +6,7 @@ tags: [agent-architecture, security]
 description: Helmdeck's control plane ships on gcr.io/distroless/static:nonroot — no shell, no jq, no Python. The v0.13.0 marketplace beta needed all three. The decision we walked, and why "another sidecar image" was the answer that didn't compromise the orchestrator.
 image: /img/social-card.png
 date: 2026-05-16
-draft: true
+draft: false
 ---
 
 ## Hook

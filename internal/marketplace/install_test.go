@@ -434,6 +434,242 @@ func TestGitURLForSource(t *testing.T) {
 	}
 }
 
+// --- trust verification (stage A) -------------------------------------
+
+func TestComputePackHash_DeterministicAcrossRuns(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "handler"), []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "helmdeck-pack.yaml"), []byte("name: cmd.x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := computePackHash(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := computePackHash(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Errorf("hash not deterministic: %s vs %s", a, b)
+	}
+	if len(a) != 64 {
+		t.Errorf("hex digest should be 64 chars, got %d (%q)", len(a), a)
+	}
+}
+
+func TestComputePackHash_SensitiveToFileChange(t *testing.T) {
+	dir := t.TempDir()
+	handlerPath := filepath.Join(dir, "handler")
+	if err := os.WriteFile(handlerPath, []byte("v1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "helmdeck-pack.yaml"), []byte("name: cmd.x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := computePackHash(dir)
+	if err := os.WriteFile(handlerPath, []byte("v2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := computePackHash(dir)
+	if first == second {
+		t.Errorf("hash unchanged after file modification — should be sensitive")
+	}
+}
+
+func TestComputePackHash_SensitiveToFileAdd(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("aaa"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := computePackHash(dir)
+	if err := os.WriteFile(filepath.Join(dir, "b"), []byte("bbb"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := computePackHash(dir)
+	if first == second {
+		t.Errorf("hash unchanged after add — should be sensitive")
+	}
+}
+
+func TestComputePackHash_SensitiveToRename(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("same-content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := computePackHash(dir)
+	if err := os.Rename(filepath.Join(dir, "a"), filepath.Join(dir, "b")); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := computePackHash(dir)
+	if first == second {
+		t.Errorf("hash unchanged after rename — should be sensitive (path is in the digest)")
+	}
+}
+
+// scaffoldMarketplaceWithTrust extends scaffoldMarketplace with the
+// ability to embed a trust block in each pack's manifest. The map
+// value is the handler body; the trust map keyed by pack name
+// supplies the trust block.
+func scaffoldMarketplaceWithTrust(t *testing.T, dir string, handlers map[string]string, trust map[string]map[string]string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "packs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	idxBody := "catalog_version: v1\npacks:\n"
+	for name, body := range handlers {
+		packDir := filepath.Join(dir, "packs", name)
+		if err := os.MkdirAll(packDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		manifest := `name: ` + name + `
+version: v1
+author: tester
+description: Test pack ` + name + `
+input_schema:
+  required: [text]
+  properties:
+    text:
+      type: string
+output_schema:
+  required: [text]
+  properties:
+    text:
+      type: string
+handler:
+  type: command
+  command: ["./handler"]
+  timeout_s: 5
+`
+		if tb, ok := trust[name]; ok && len(tb) > 0 {
+			manifest += "trust:\n"
+			if v, ok := tb["signed_by"]; ok && v != "" {
+				manifest += "  signed_by: " + v + "\n"
+			}
+			if v, ok := tb["sha256"]; ok && v != "" {
+				manifest += "  sha256: " + v + "\n"
+			}
+		}
+		if err := os.WriteFile(filepath.Join(packDir, "helmdeck-pack.yaml"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(packDir, "handler"), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		idxBody += "  - name: " + name + "\n"
+		idxBody += "    version: v1\n"
+		idxBody += "    path: packs/" + name + "\n"
+		idxBody += "    description: Test pack\n"
+		idxBody += "    author: tester\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.yaml"), []byte(idxBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return "file://" + dir
+}
+
+// expectedHashFor computes the hash of just the non-manifest files
+// in a pack. Mirrors what computePackHash will do during the install
+// (the manifest is excluded — see computePackHash's doc comment for
+// the chicken-and-egg explanation). Used so trust-verified tests
+// don't have to hard-code hex digests that would shift if the helper
+// changes.
+func expectedHashFor(t *testing.T, _packName, handlerBody string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "handler"), []byte(handlerBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h, err := computePackHash(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func TestInstall_MatchingSHA256_TrustVerified(t *testing.T) {
+	mktDir := t.TempDir()
+	handlerBody := "#!/usr/bin/env bash\necho '{\"text\":\"ok\"}'\n"
+	hash := expectedHashFor(t, "cmd.signed", handlerBody)
+	_ = scaffoldMarketplaceWithTrust(t,
+		mktDir,
+		map[string]string{"cmd.signed": handlerBody},
+		map[string]map[string]string{"cmd.signed": {"signed_by": "tosin2013", "sha256": hash}},
+	)
+	inst := quietInstaller(t, mktDir)
+	res, err := inst.Install(context.Background(), "cmd.signed")
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if !res.Pack.TrustVerified {
+		t.Errorf("expected TrustVerified=true on matching hash; got note: %s", res.Pack.TrustNote)
+	}
+	if !strings.Contains(res.Pack.TrustNote, "sha256 verified") {
+		t.Errorf("expected TrustNote to mention verification; got: %s", res.Pack.TrustNote)
+	}
+	if !strings.Contains(res.Pack.TrustNote, "signed_by=tosin2013") {
+		t.Errorf("expected TrustNote to mention declared signer; got: %s", res.Pack.TrustNote)
+	}
+}
+
+func TestInstall_MismatchSHA256_RefusesInstall(t *testing.T) {
+	mktDir := t.TempDir()
+	wrongHash := strings.Repeat("0", 64)
+	_ = scaffoldMarketplaceWithTrust(t,
+		mktDir,
+		map[string]string{"cmd.tampered": "#!/usr/bin/env bash\necho '{}'\n"},
+		map[string]map[string]string{"cmd.tampered": {"signed_by": "tosin2013", "sha256": wrongHash}},
+	)
+	inst := quietInstaller(t, mktDir)
+	_, err := inst.Install(context.Background(), "cmd.tampered")
+	if err == nil {
+		t.Fatal("expected install to fail on SHA256 mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Errorf("expected sha256-mismatch error, got: %v", err)
+	}
+	// Pack files must NOT be left on disk after a rejected install —
+	// otherwise a subsequent Install of a clean pack would race
+	// against the tampered files.
+	if _, err := os.Stat(filepath.Join(inst.installDir, "cmd.tampered")); !os.IsNotExist(err) {
+		t.Errorf("expected install dir cleaned up after rejection, stat error: %v", err)
+	}
+	// Pack must NOT be registered.
+	if got := inst.Installed(); len(got) != 0 {
+		t.Errorf("expected no installed packs after rejection, got %+v", got)
+	}
+}
+
+func TestInstall_SignedByButNoSHA256_RemainsUnsigned(t *testing.T) {
+	// Manifest has trust.signed_by but no sha256 (the "stage A not
+	// yet populated" case). Install proceeds, trust_verified=false,
+	// note explains why.
+	mktDir := t.TempDir()
+	_ = scaffoldMarketplaceWithTrust(t,
+		mktDir,
+		map[string]string{"cmd.partial": "#!/usr/bin/env bash\necho '{}'\n"},
+		map[string]map[string]string{"cmd.partial": {"signed_by": "tosin2013"}},
+	)
+	inst := quietInstaller(t, mktDir)
+	res, err := inst.Install(context.Background(), "cmd.partial")
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if res.Pack.TrustVerified {
+		t.Errorf("expected TrustVerified=false when sha256 absent")
+	}
+	if !strings.Contains(res.Pack.TrustNote, "no sha256") {
+		t.Errorf("expected note about missing sha256, got: %s", res.Pack.TrustNote)
+	}
+	if !strings.Contains(res.Pack.TrustNote, "signed_by=tosin2013") {
+		t.Errorf("expected note to mention declared identity, got: %s", res.Pack.TrustNote)
+	}
+}
+
+// --- helper coverage --------------------------------------------------
+
 func TestManifestSchemaToBasic_PropertiesMap(t *testing.T) {
 	s := BasicSchema{
 		Required: []string{"text", "count"},

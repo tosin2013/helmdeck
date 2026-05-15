@@ -110,8 +110,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
     "path": "packs/cmd.upper",
     "installed_at": "2026-05-15T17:42:11Z",
     "install_dir": "/home/helmdeck/.helmdeck/packs/cmd.upper",
-    "trust_verified": false,
-    "trust_note": "cosign verification deferred (manifest declares signed_by=tosin2013); v0.13.0 beta does not yet execute verify"
+    "trust_verified": true,
+    "trust_note": "sha256 verified (a3f12b…); manifest declares signed_by=tosin2013 (full cosign identity verification deferred to stage B)"
   },
   "hot_loaded_as": "cmd.upper"
 }
@@ -192,7 +192,7 @@ handler:
 
 When `handler.sidecar` is absent, the installer uses the default `HELMDECK_SIDECAR_MARKETPLACE` image. The registered pack's `SessionSpec.Image` is observable via `GET /api/v1/packs`.
 
-## Trust model (v0.13.0 beta status)
+## Trust model (v0.13.0 GA status)
 
 Per ADR 034:
 
@@ -200,12 +200,40 @@ Per ADR 034:
 - **Signed packs** — cosign-verified at install time. The pack's `helmdeck-pack.yaml` carries a `trust:` block with `signed_by` + `sha256`; the [marketplace `sign.yml`](https://github.com/tosin2013/helmdeck-marketplace/blob/main/.github/workflows/sign.yml) workflow populates these on every release.
 - **Unsigned packs** — packs with no `trust:` block. The install response surfaces `trust_verified: false` + a `trust_note` so the UI / CLI can show a warning before the operator confirms.
 
-**v0.13.0 beta caveat**: the cosign-verify call itself is a structured stub. The hook is wired (the response always carries `trust_verified` + `trust_note`), and the manifest's `trust:` metadata flows through end-to-end, but the actual sigstore.dev verification logic ships in a follow-up PR. For the beta:
+### Stage A — deterministic content hash (ships v0.13.0 GA)
 
-- Packs with a `trust:` block in their manifest surface a note like *"cosign verification deferred (manifest declares signed_by=tosin2013); v0.13.0 beta does not yet execute verify"*.
-- Packs without a `trust:` block surface *"no trust block in manifest — pack is unsigned"*.
+The installer **hashes the materialized pack files** and compares to the manifest's `trust.sha256`. This is the actual verification call replacing the v0.13.0-beta stub.
 
-In both cases `trust_verified: false` is returned. Operators choosing to install can do so; the audit log records the install decision (status code, actor) per the existing `audit_log` mechanism.
+**Hash algorithm** (the marketplace `sign.yml` workflow uses the same):
+
+1. Walk the pack directory, skipping directories AND the `helmdeck-pack.yaml` manifest itself (the manifest carries the hash; including it would be circular).
+2. For each remaining file in lexical-by-relative-path order, emit `<forward-slash-rel-path>\0<file-sha256-hex>\n` into a rolling SHA256.
+3. Hex-encode the final digest.
+
+What stage A catches:
+
+- Handler script or data files modified between author sign and operator install
+- Files renamed, added, or removed under `packs/<name>/`
+- Corrupt downloads / wrong marketplace URL
+
+What stage A does NOT catch (manifest is excluded):
+
+- A malicious author modifying the manifest itself (e.g., swapping the handler argv to point at an exfiltrating binary). The manifest's identity claim (`trust.signed_by`) is informational at stage A; **stage B** (cosign keyless verification of the manifest signer's identity against `signed_by`) is the fix.
+
+**Behavior at install time:**
+
+| Manifest state | `trust_verified` | Install proceeds? | `trust_note` shape |
+|---|---|---|---|
+| No `trust:` block | `false` | Yes (unsigned) | `"no trust block in manifest — pack is unsigned"` |
+| `trust.sha256` empty | `false` | Yes (unsigned) | `"manifest declares signed_by=X but no sha256 — pack hash not yet populated (stage A); see ADR 034"` |
+| `trust.sha256` matches | `true` | Yes | `"sha256 verified (HEX); manifest declares signed_by=X (full cosign identity verification deferred to stage B)"` |
+| `trust.sha256` mismatches | n/a | **No — install fails** | error: `"sha256 mismatch: manifest says X, computed Y — pack contents do not match what the marketplace signed"` |
+
+A mismatch is a **hard rejection** — the installer removes the just-materialized files and returns an error to the caller. The pack is NOT registered. The audit log captures the failed-install decision.
+
+### Stage B — sigstore keyless verify (deferred to v1.0)
+
+Replace stage A's identity-claim-is-informational status with actual cosign keyless verification: fetch the signature artifact for the pack tarball from the marketplace's GitHub Release, verify against Fulcio's root CA chain, match the cert's identity claim against `manifest.trust.signed_by`. Tracked as a v1.0 hardening item. Until then, `trust.signed_by` is documented as informational and the UI's "Signed by X" badge is qualified with "(unverified identity)" when stage A is the only check applied.
 
 ## Pack detail (T813)
 

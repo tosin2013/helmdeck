@@ -5,6 +5,7 @@ package marketplace
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -134,6 +135,16 @@ func (i *Installer) Install(ctx context.Context, name string) (*InstallResult, e
 	}
 
 	trustVerified, trustNote := i.verifyTrust(packDir, manifest)
+	// Hard-gate on a SHA256 mismatch (manifest declares a hash but
+	// the materialized content doesn't match). Per ADR 034 §"Trust
+	// model" + the stage-A spec: a mismatch means the bytes operators
+	// are about to register differ from what the marketplace signed,
+	// and we MUST refuse the install. trust_verified=false with no
+	// declared hash → not a mismatch, install proceeds (unsigned).
+	if !trustVerified && manifest.Trust != nil && manifest.Trust.SHA256 != "" {
+		_ = os.RemoveAll(packDir)
+		return nil, fmt.Errorf("trust verification failed: %s", trustNote)
+	}
 
 	pack, err := buildPackFromManifest(manifest, packDir)
 	if err != nil {
@@ -323,26 +334,145 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return nil
 }
 
-// --- trust verification (stub) ----------------------------------------
+// --- trust verification (stage A: deterministic content hash) -------
 
-// verifyTrust runs the cosign verification per ADR 034's "Signed"
-// trust level. **v0.13.0 beta ships a structured stub** — the hook
-// is wired so callers can read TrustVerified + TrustNote on every
-// install, but the actual sigstore.dev cosign-verify call lands in
-// a follow-up PR. For now: returns (false, "...") with a clear
-// reason so the UI can show the "Unsigned" badge per ADR 034's
-// Community-pack rules.
+// verifyTrust hashes the materialized pack files and compares against
+// the manifest's trust.sha256, returning (verified, note) for the
+// install record.
+//
+// v0.13.0 GA implements "stage A" of the trust model from ADR 034:
+// deterministic content hashing. The hash spec is documented at
+// computePackHash — every byte of every file under packDir, keyed by
+// relative path, sorted lexically, concatenated and re-hashed. The
+// marketplace's sign.yml workflow populates trust.sha256 on each
+// release tag using the same algorithm.
+//
+// Stage B (full sigstore keyless verification of the manifest signer
+// against the declared signed_by identity) is tracked as a v1.0
+// hardening item — see the follow-up issue + the catalog.md trust
+// model docs. Stage A catches:
+//   - pack files modified between author sign + operator install
+//   - corrupt downloads
+//   - operator pointing at the wrong marketplace by accident
+// Stage A does NOT catch a malicious author who controls both the
+// files and the manifest. That's stage B's job.
+//
+// Behavior summary:
+//   - manifest.trust missing                 → unsigned, install proceeds
+//   - manifest.trust.sha256 empty            → unsigned, install proceeds
+//   - manifest.trust.sha256 mismatch         → (false, error-style note); CALLER MUST REJECT
+//   - manifest.trust.sha256 match            → (true, hash note)
 func (i *Installer) verifyTrust(packDir string, manifest *Manifest) (bool, string) {
 	if manifest.Trust == nil {
 		return false, "no trust block in manifest — pack is unsigned"
 	}
-	if manifest.Trust.SignedBy == "" {
-		return false, "manifest trust block has no signed_by — pack is unsigned"
+	if manifest.Trust.SHA256 == "" {
+		// trust block exists but no hash. Could be a pack that has
+		// only declared an identity (signed_by) but hasn't yet been
+		// signed, or a pre-sign.yml-update pack. Either way: can't
+		// verify integrity, surface as unsigned.
+		if manifest.Trust.SignedBy != "" {
+			return false, fmt.Sprintf("manifest declares signed_by=%s but no sha256 — pack hash not yet populated (stage A); see ADR 034", manifest.Trust.SignedBy)
+		}
+		return false, "no sha256 in manifest trust block — pack is unsigned"
 	}
-	// TODO(#30 follow-up): real sigstore.dev cosign-verify call here.
-	// For now we surface the structured "trust metadata exists but
-	// hasn't been verified at runtime" answer so callers can decide.
-	return false, fmt.Sprintf("cosign verification deferred (manifest declares signed_by=%s); v0.13.0 beta does not yet execute verify", manifest.Trust.SignedBy)
+
+	got, err := computePackHash(packDir)
+	if err != nil {
+		return false, fmt.Sprintf("could not compute pack hash: %v", err)
+	}
+	if !strings.EqualFold(got, manifest.Trust.SHA256) {
+		return false, fmt.Sprintf("sha256 mismatch: manifest says %s, computed %s — pack contents do not match what the marketplace signed", manifest.Trust.SHA256, got)
+	}
+	if manifest.Trust.SignedBy != "" {
+		return true, fmt.Sprintf("sha256 verified (%s); manifest declares signed_by=%s (full cosign identity verification deferred to stage B)", got, manifest.Trust.SignedBy)
+	}
+	return true, fmt.Sprintf("sha256 verified (%s)", got)
+}
+
+// computePackHash returns the deterministic SHA256 of a marketplace
+// pack directory's NON-MANIFEST files. Algorithm:
+//
+//  1. Walk packDir, skipping directories.
+//  2. Skip `helmdeck-pack.yaml` — see "why the manifest is excluded"
+//     below.
+//  3. For each remaining file (filepath.Walk visits in lexical order)
+//     write to the rolling SHA256:
+//        <forward-slash-rel-path> \0 <file_sha256_hex> \n
+//  4. Hex-encode the final digest.
+//
+// Why the manifest is excluded
+//
+// The trust.sha256 field this digest fills LIVES IN the manifest. If
+// we included the manifest in the hash, populating trust.sha256 would
+// change the manifest's bytes and invalidate the hash we just wrote
+// — a circular dependency. Same pattern as Helm chart hashes
+// (excludes Chart.lock), Cargo (excludes Cargo.lock from .toml hash),
+// npm (excludes package-lock.json from package.json shasum).
+//
+// What this hash protects against
+//
+//   - Handler script / data files modified between author sign + install
+//   - File renamed or added/removed under packs/<name>/
+//   - Corrupt download
+//
+// What it does NOT protect against (manifest is excluded)
+//
+//   - A malicious author modifying the MANIFEST (e.g. changing the
+//     handler.command argv to point at an exfiltrating binary).
+//     Stage B (cosign keyless verify of the manifest signer's
+//     identity) is the fix.
+//   - File-mode changes (we don't hash mode bits; the marketplace
+//     install always chmods +x in the sidecar regardless).
+//
+// Properties of the digest itself:
+//   - Reproducible across platforms (no tar/gzip non-determinism,
+//     no timestamp / uid / gid leakage into the bytes)
+//   - Sensitive to any byte change in any non-manifest file
+//   - Sensitive to file rename (path is in the digest)
+//   - Sensitive to add/remove (length of input changes)
+//
+// The marketplace's sign.yml workflow MUST use the same algorithm
+// when populating trust.sha256. A reference Bash port lives next to
+// sign.yml in tosin2013/helmdeck-marketplace.
+const packManifestFilename = "helmdeck-pack.yaml"
+
+func computePackHash(packDir string) (string, error) {
+	outer := sha256.New()
+	err := filepath.Walk(packDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(packDir, path)
+		if err != nil {
+			return err
+		}
+		// Forward slashes for cross-platform reproducibility.
+		rel = filepath.ToSlash(rel)
+
+		// Exclude the manifest itself (see the "why the manifest is
+		// excluded" doc comment above).
+		if rel == packManifestFilename {
+			return nil
+		}
+
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		inner := sha256.Sum256(body)
+		if _, err := fmt.Fprintf(outer, "%s\x00%x\n", rel, inner); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", outer.Sum(nil)), nil
 }
 
 // --- pack-construction helper -----------------------------------------

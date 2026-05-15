@@ -99,8 +99,14 @@ sidecar-hyperframes-build: sidecar-build ## Build the HyperFrames sidecar (HTMLâ
 		--build-arg BASE_IMAGE=helmdeck-sidecar:dev \
 		-t helmdeck-sidecar-hyperframes:dev .
 
+.PHONY: sidecar-marketplace-build
+sidecar-marketplace-build: sidecar-build ## Build the Marketplace sidecar (default runtime for community command-handler packs)
+	docker build -f deploy/docker/sidecar-marketplace.Dockerfile \
+		--build-arg BASE_IMAGE=helmdeck-sidecar:dev \
+		-t helmdeck-sidecar-marketplace:dev .
+
 .PHONY: sidecars
-sidecars: sidecar-build sidecar-python-build sidecar-node-build sidecar-hyperframes-build ## Build every sidecar image (base + every language + hyperframes)
+sidecars: sidecar-build sidecar-python-build sidecar-node-build sidecar-hyperframes-build sidecar-marketplace-build ## Build every sidecar image (base + every language + hyperframes + marketplace)
 
 .PHONY: sidecar-smoke
 sidecar-smoke: sidecar-build ## Run the sidecar headless and curl /json/version

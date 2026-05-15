@@ -91,12 +91,14 @@ func ResolveIndexURL(source string) (string, error) {
 		return "", fmt.Errorf("marketplace url is empty")
 	}
 	if strings.HasPrefix(source, "file://") {
-		// Local file or local dir. If the URL points at a directory,
-		// append index.yaml; otherwise treat as the file itself.
-		// We can't stat across the file:// URL boundary without
-		// parsing, so the convention is: file:// URLs point at
-		// the index.yaml directly.
-		return source, nil
+		// Convention: file:// URLs point at the marketplace ROOT
+		// DIRECTORY. We append /index.yaml automatically so install-
+		// time logic (materializeFromGit) can use the same root URL
+		// to compute pack paths.
+		if strings.HasSuffix(source, "/index.yaml") {
+			return source, nil
+		}
+		return strings.TrimSuffix(source, "/") + "/index.yaml", nil
 	}
 	u, err := url.Parse(source)
 	if err != nil {

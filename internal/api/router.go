@@ -55,7 +55,8 @@ type Deps struct {
 	MCPRegistry  *mcp.Registry   // optional; nil disables /api/v1/mcp/servers
 	Vault        *vault.Store    // optional; nil disables /api/v1/vault/*
 	Injector     *inject.Injector // optional; nil disables vault injection on /api/v1/browser/navigate
-	Marketplace  *marketplace.Service // optional; nil disables /api/v1/marketplace/* (T810)
+	Marketplace          *marketplace.Service   // optional; nil disables /api/v1/marketplace/* (T810)
+	MarketplaceInstaller *marketplace.Installer // optional; nil disables install/uninstall/installed (T812)
 }
 
 // IsProtectedPath returns true for paths the auth middleware must guard.

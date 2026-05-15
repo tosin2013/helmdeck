@@ -69,12 +69,26 @@ type HandlerSpec struct {
 	Env            []string `yaml:"env,omitempty" json:"env,omitempty"`
 	MaxOutputBytes int64    `yaml:"max_output_bytes,omitempty" json:"max_output_bytes,omitempty"`
 
+	// Sidecar overrides the default helmdeck-sidecar-marketplace image
+	// for this pack. When nil/absent, the installer uses
+	// HELMDECK_SIDECAR_MARKETPLACE (env) or the published default.
+	// Per ADR 038 — packs that need a heavier toolchain (image
+	// processing, ML inference) declare their own image here.
+	Sidecar *SidecarSpec `yaml:"sidecar,omitempty" json:"sidecar,omitempty"`
+
 	// Composite-handler fields.
 	Steps []CompositeStep `yaml:"steps,omitempty" json:"steps,omitempty"`
 
 	// WASM-handler fields (Phase 8, not yet executed by helmdeck).
 	Module       string   `yaml:"module,omitempty" json:"module,omitempty"`
 	Capabilities []string `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+}
+
+// SidecarSpec lets a marketplace pack override the default execution
+// runtime. Per ADR 038. Image is the only field for v0.13.0 beta;
+// future fields (memory_mb, mount_paths) can land additively.
+type SidecarSpec struct {
+	Image string `yaml:"image" json:"image"`
 }
 
 // CompositeStep is one entry in a composite-handler's steps array.

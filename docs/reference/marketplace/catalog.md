@@ -89,17 +89,130 @@ Returns the same response shape as the GET endpoint after the refresh completes.
 - **Steady state**: the catalog is served from in-memory cache. **There is no background polling.** Catalogs change at git-push speed; aggressive polling would just hammer the upstream for no operator-visible benefit.
 - **Refresh**: operators or the Management UI explicitly call `POST /api/v1/marketplace/refresh` when they want the latest catalog. The Marketplace UI panel includes a refresh button.
 
-## What this catalog endpoint does NOT do (yet)
+## Install / uninstall (T812 / #30)
 
-The T810 (#28) endpoint is **read-only**. The following land in subsequent PRs:
+### `POST /api/v1/marketplace/install`
 
-- **Install packs** — `POST /api/v1/marketplace/install` (T812, [#30](https://github.com/tosin2013/helmdeck/issues/30)).
-- **Uninstall packs** — same surface (T812).
-- **Pack detail view** — `GET /api/v1/marketplace/packs/<name>` returning the full `helmdeck-pack.yaml` (T813, [#31](https://github.com/tosin2013/helmdeck/issues/31)).
-- **Cosign verification** — runs at install time per ADR 034 §"Trust model" (T812).
-- **Hot-load into the pack registry** — `tools/list` updates immediately on install, no restart (T812).
+Materializes a pack from the marketplace to disk and **hot-loads** it into the pack registry — no restart, no compose recreate. The pack appears in `GET /api/v1/packs` and the MCP `tools/list` immediately.
 
-For the v0.13.0 beta, the catalog endpoint is enough to power discovery. The next PR adds install.
+```sh
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/api/v1/marketplace/install \
+  -d '{"name":"cmd.upper"}'
+```
+
+```json
+{
+  "pack": {
+    "name": "cmd.upper",
+    "version": "v1",
+    "source": "https://github.com/tosin2013/helmdeck-marketplace",
+    "path": "packs/cmd.upper",
+    "installed_at": "2026-05-15T17:42:11Z",
+    "install_dir": "/home/helmdeck/.helmdeck/packs/cmd.upper",
+    "trust_verified": false,
+    "trust_note": "cosign verification deferred (manifest declares signed_by=tosin2013); v0.13.0 beta does not yet execute verify"
+  },
+  "hot_loaded_as": "cmd.upper"
+}
+```
+
+| Response | Code | When |
+|---|---|---|
+| `200 OK` | Pack materialized + registered. The handler is callable via `POST /api/v1/packs/<name>` and `tools/list`. |
+| `404 Not Found` (`pack_not_in_catalog`) | The name isn't in the catalog. Did you spell it right? Try `POST /refresh` if the pack is brand new. |
+| `500` (`install_failed`) | Materialization failed (git clone error, copy failure, manifest mismatch, etc.). Message names the actionable bit. |
+| `503` (`marketplace_install_disabled`) | `HELMDECK_PACKS_DIR` not set and `~/.helmdeck/packs` not creatable. |
+
+### `POST /api/v1/marketplace/uninstall`
+
+Removes a previously-installed pack from disk + the pack registry, in that order (deregister-then-delete). Core packs (built into the binary) cannot be uninstalled through this surface and return `pack_not_installed`.
+
+```sh
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/api/v1/marketplace/uninstall \
+  -d '{"name":"cmd.upper"}'
+```
+
+```json
+{"status": "uninstalled", "name": "cmd.upper"}
+```
+
+### `GET /api/v1/marketplace/installed`
+
+Lists every pack the operator has installed via this marketplace surface (NOT built-in core packs).
+
+```json
+{
+  "installed": [
+    {
+      "name": "cmd.upper",
+      "version": "v1",
+      "source": "https://github.com/tosin2013/helmdeck-marketplace",
+      "installed_at": "2026-05-15T17:42:11Z",
+      "install_dir": "/home/helmdeck/.helmdeck/packs/cmd.upper",
+      "trust_verified": false,
+      "trust_note": "..."
+    }
+  ]
+}
+```
+
+## Install configuration
+
+| Env var | Default | Effect |
+|---|---|---|
+| `HELMDECK_PACKS_DIR` | `~/.helmdeck/packs` | Root directory for installed packs. Each pack lands in `<dir>/<name>/`. |
+| `HELMDECK_SIDECAR_MARKETPLACE` | `ghcr.io/tosin2013/helmdeck-sidecar-marketplace:latest` | Default sidecar image marketplace command-handler packs route through. Per [ADR 038](../../adrs/038-marketplace-pack-execution-via-sidecar.md). |
+
+The installer creates `HELMDECK_PACKS_DIR` at startup if it doesn't exist. If neither it nor `~/.helmdeck/packs` resolves, install endpoints return `503 marketplace_install_disabled` while the catalog endpoint keeps working.
+
+## Execution model (ADR 038)
+
+Marketplace command-handler packs **do not** run in the control-plane container — that runs `gcr.io/distroless/static:nonroot` and ships no shell, no jq, no Python, no Node. Per [ADR 038](../../adrs/038-marketplace-pack-execution-via-sidecar.md), packs route their handler execution through a dedicated `helmdeck-sidecar-marketplace` sidecar that bundles the common toolchain.
+
+| Element | Where it lives |
+|---|---|
+| Manifest + handler files | `HELMDECK_PACKS_DIR/<name>/` on the control-plane filesystem |
+| Sidecar runtime | `helmdeck-sidecar-marketplace` container, spawned per call |
+| Handler invocation | uploaded to the sidecar via `sh -c "cat > /tmp/.../handler"`, chmod +x, then executed with the pack input piped to stdin |
+| Output | stdout from the sidecar handler, returned as the pack response (validated against `output_schema` by the engine) |
+
+The sidecar image ships `bash` 5.x, `jq`, `curl`, `python3` 3.11+, `nodejs` 20 LTS, and standard Unix utilities (`sha256sum`, `sed`, `awk`, `grep`, `tr`, `cut`, `head`, `tail`, `wc`).
+
+Packs that need a heavier toolchain (image processing, video, ML inference) **can override the sidecar image** via the manifest's `handler.sidecar.image` field:
+
+```yaml
+handler:
+  type: command
+  command: ["./handler.py"]
+  sidecar:
+    image: ghcr.io/some-author/helmdeck-sidecar-pillow:v1
+```
+
+When `handler.sidecar` is absent, the installer uses the default `HELMDECK_SIDECAR_MARKETPLACE` image. The registered pack's `SessionSpec.Image` is observable via `GET /api/v1/packs`.
+
+## Trust model (v0.13.0 beta status)
+
+Per ADR 034:
+
+- **Core packs** — built into the helmdeck binary; implicit trust. Not installable / uninstallable.
+- **Signed packs** — cosign-verified at install time. The pack's `helmdeck-pack.yaml` carries a `trust:` block with `signed_by` + `sha256`; the [marketplace `sign.yml`](https://github.com/tosin2013/helmdeck-marketplace/blob/main/.github/workflows/sign.yml) workflow populates these on every release.
+- **Unsigned packs** — packs with no `trust:` block. The install response surfaces `trust_verified: false` + a `trust_note` so the UI / CLI can show a warning before the operator confirms.
+
+**v0.13.0 beta caveat**: the cosign-verify call itself is a structured stub. The hook is wired (the response always carries `trust_verified` + `trust_note`), and the manifest's `trust:` metadata flows through end-to-end, but the actual sigstore.dev verification logic ships in a follow-up PR. For the beta:
+
+- Packs with a `trust:` block in their manifest surface a note like *"cosign verification deferred (manifest declares signed_by=tosin2013); v0.13.0 beta does not yet execute verify"*.
+- Packs without a `trust:` block surface *"no trust block in manifest — pack is unsigned"*.
+
+In both cases `trust_verified: false` is returned. Operators choosing to install can do so; the audit log records the install decision (status code, actor) per the existing `audit_log` mechanism.
+
+## What still lands in follow-up PRs
+
+- **Real cosign-verify call.** Replaces the stub above.
+- **`helmdeck pack install/uninstall` CLI binary.** Calls these REST endpoints. Issue [#30](https://github.com/tosin2013/helmdeck/issues/30) tracks the CLI separately.
+- **`/marketplace` UI panel.** Browse + install from the Management UI. Issue [#31 / T813](https://github.com/tosin2013/helmdeck/issues/31).
+- **Pack-detail endpoint.** `GET /api/v1/marketplace/packs/<name>` returns the full manifest (lands with UI panel).
 
 ## Schema references
 

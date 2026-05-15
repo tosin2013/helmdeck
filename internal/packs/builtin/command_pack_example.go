@@ -3,19 +3,21 @@
 
 package builtin
 
-// command_pack_example.go (T811 MVP) — operator-supplied subprocess
-// packs.
+// command_pack_example.go (T811 MVP + #173 manifest) — operator-
+// supplied subprocess packs.
 //
 // LoadCommandPacks scans a directory for executable files and
-// registers each as a pack named `cmd.<basename>`. Schemas default
-// to BasicSchema{} (passthrough — accepts any JSON, returns any
-// JSON) so operators can drop a binary in and immediately call it
-// from the agent or the Management UI's Test Runner panel (#172).
+// registers each as a pack named `cmd.<basename>`. When an adjacent
+// `<basename>.helmdeck-pack.yaml` manifest is present, its declared
+// input/output schemas and execution overrides are used (see
+// command_pack_manifest.go). When the manifest is absent, schemas
+// default to BasicSchema{} (passthrough — accepts any JSON, returns
+// any JSON) preserving the v0.12.x MVP behavior so operators can
+// still drop a binary in without ceremony.
 //
-// Typed schemas via a manifest format (helmdeck-pack.yaml or
-// similar) ship in v0.13.0. Until then, schema enforcement is the
-// subprocess's responsibility — invalid input surfaces as exit ≠0
-// + stderr.
+// A malformed manifest causes the pack to be skipped with an error
+// logged. Falling back to passthrough would silently mask the
+// operator's typo.
 //
 // Security note: subprocess egress is the HOST environment's
 // responsibility today. helmdeck's EgressGuard intercepts HTTP
@@ -92,20 +94,47 @@ func LoadCommandPacks(ctx context.Context, logger *slog.Logger, dir string) []*p
 		}
 		packName := "cmd." + base
 
-		pack := packs.NewCommandPack(
-			packName,
-			"v1",
-			fmt.Sprintf("Operator-supplied command pack backed by %s (stdin JSON → stdout JSON). v0.13.0 will add manifest-declared typed schemas; today the input/output are passthrough.", path),
-			packs.BasicSchema{}, // passthrough — any JSON in
-			packs.BasicSchema{}, // passthrough — any JSON out
-			packs.CommandSpec{
-				Path:    path,
-				Timeout: 60 * time.Second,
-			},
-		)
+		// Sibling manifest lives at <dir>/<basename>.helmdeck-pack.yaml.
+		// The basename used here is the SANITIZED form so operators
+		// don't have to spell punctuation in the manifest filename.
+		manifestPath := filepath.Join(dir, base+manifestSuffix)
+		manifest, mErr := loadCommandPackManifest(manifestPath)
+		if mErr != nil {
+			logger.Error("command pack skipped (manifest invalid)",
+				"name", packName, "binary", path, "manifest", manifestPath, "err", mErr)
+			continue
+		}
+
+		version := "v1"
+		description := fmt.Sprintf("Operator-supplied command pack backed by %s (stdin JSON → stdout JSON). Schemas are passthrough (no manifest).", path)
+		var inSchema packs.Schema = packs.BasicSchema{}
+		var outSchema packs.Schema = packs.BasicSchema{}
+		spec := packs.CommandSpec{Path: path, Timeout: 60 * time.Second}
+
+		if manifest != nil {
+			if manifest.Name != "" && manifest.Name != packName {
+				logger.Warn("command pack manifest name disagrees with auto-derived; auto-derived wins",
+					"manifest_name", manifest.Name, "auto_name", packName, "manifest", manifestPath)
+			}
+			if manifest.Version != "" {
+				version = manifest.Version
+			}
+			if manifest.Description != "" {
+				description = manifest.Description
+			}
+			inSchema, outSchema = manifest.toSchemas()
+			spec = manifest.toCommandSpec(spec)
+		}
+
+		pack := packs.NewCommandPack(packName, version, description, inSchema, outSchema, spec)
 		out = append(out, pack)
-		logger.Info("command pack registered",
-			"name", packName, "binary", path)
+		if manifest != nil {
+			logger.Info("command pack registered",
+				"name", packName, "binary", path, "manifest", manifestPath)
+		} else {
+			logger.Info("command pack registered (passthrough — no manifest)",
+				"name", packName, "binary", path)
+		}
 	}
 	return out
 }

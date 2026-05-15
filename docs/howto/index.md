@@ -17,6 +17,7 @@ Problem-solving recipes. Each guide assumes you already have helmdeck installed 
 - **[Manage credentials in the vault](./manage-vault-credentials.md)** — create / grant / use / audit credentials of all 5 supported types (`login`, `cookie`, `api_key`, `oauth`, `ssh`). Worked examples for GitHub PAT, SSH deploy keys, Ghost Admin keys, ElevenLabs, site logins, and OAuth bundles.
 - **[Configure LLM providers](./configure-llm-providers.md)** — register provider keys (Anthropic, OpenAI, Gemini, OpenRouter, Ollama, Groq, Mistral, Deepseek), list/rotate/test/delete via REST, configure fallback chains with the three closed-set triggers (`rate_limit`, `timeout`, `error`), and read the T607 success-rate panel.
 - **[Inspect audit logs](./inspect-audit-logs.md)** — query patterns for the three audit tables (`audit_log`, `provider_calls`, `credential_usage_log`) with SQL examples for compliance exports, failure-pattern analysis, fallback-rate monitoring, and cost approximation.
+- **[Build a subprocess pack](./build-subprocess-pack.md)** — drop an executable + YAML manifest into `$HELMDECK_COMMAND_PACKS_DIR` to expose a typed pack in any language. Covers the subprocess protocol, manifest field reference, and security notes.
 
 ## Client integrations
 

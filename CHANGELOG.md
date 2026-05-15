@@ -11,6 +11,10 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Added
+
+- **Subprocess pack manifest format (#173)** — operator-supplied command packs (`$HELMDECK_COMMAND_PACKS_DIR`) can now declare typed input/output schemas + execution overrides via a sibling `<basename>.helmdeck-pack.yaml` file. The manifest carries `name`, `version`, `description`, `author`, `input_schema`/`output_schema` blocks (BasicSchema-compatible: `string`, `number`, `boolean`, `object`, `array`), `timeout_s`, `max_output_bytes`, and an `env` list. Missing manifest falls back to passthrough (the v0.12.x MVP behavior); malformed manifest skips the pack entirely with an error logged. New how-to: [`docs/howto/build-subprocess-pack.md`](docs/howto/build-subprocess-pack.md).
+
 ### Changed
 
 - **`blog.publish` artifact-first refactor (#203)** — `destination` is now optional and defaults to `"artifact"`. When `destination="ghost"`, the pack ALSO saves the post body as an artifact (the safety net) by default; a new `also_save_artifact: false` input restores the pre-#203 ghost-only behaviour. Ghost failures with the safety net enabled return a partial-success response (`status: "artifact_saved_ghost_failed"` + `ghost_error` + `artifact_key`/`artifact_url`) instead of a hard error — agents can retry the Ghost step against the saved artifact without paying for prompt expansion again. Strictly additive schema change; existing callers that send `destination="ghost"` now also see `artifact_key`/`artifact_url`/`size` in the response. See [`docs/reference/packs/blog/publish.md`](docs/reference/packs/blog/publish.md) §Partial success.

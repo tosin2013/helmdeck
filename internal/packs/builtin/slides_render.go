@@ -62,6 +62,11 @@ func SlidesRender(v *vault.Store, eg *security.EgressGuard) *packs.Pack {
 				"artifact_key":          "string",
 				"size":                  "number",
 				"hero_image_model_used": "string",
+				// #202: contrast lint surfaces palette anti-patterns
+				// as warnings (informational, not errors). Empty/absent
+				// when the deck looks clean.
+				"warnings":          "array",
+				"curated_theme_used": "string",
 			},
 		},
 		Handler: slidesRenderHandler(v, eg),
@@ -189,6 +194,28 @@ func slidesRenderHandler(v *vault.Store, eg *security.EgressGuard) packs.Handler
 			markdown = rewritten
 		}
 
+		// #202 Option C: when the deck's frontmatter declares one of
+		// our curated themes, upload the embedded CSS files to the
+		// sidecar so marp can resolve `theme: helmdeck-dark` (etc).
+		// Skip the upload work for built-in Marp themes — operators
+		// using `theme: gaia` shouldn't pay for it on every call.
+		curatedThemeUsed := ""
+		marpArgs := []string{
+			"marp",
+			"--stdin",
+			"--allow-local-files",
+			flag,
+			"-o", "-",
+		}
+		if markdownReferencesCuratedTheme(markdown) {
+			themeDir, terr := uploadCuratedThemes(ctx, ec)
+			if terr != nil {
+				return nil, terr
+			}
+			marpArgs = append(marpArgs, "--theme-set", themeDir)
+			curatedThemeUsed = extractCuratedThemeName(markdown)
+		}
+
 		// Marp reads markdown from stdin when given `-` as the input
 		// path. We use `--stdin -o -` so the binary output streams back
 		// over our captured stdout — no temp files inside the container,
@@ -199,13 +226,7 @@ func slidesRenderHandler(v *vault.Store, eg *security.EgressGuard) packs.Handler
 		// local images; harmless when the markdown has none. We do NOT
 		// pass `--input-dir` so Marp can't escape the stdin sandbox.
 		res, err := ec.Exec(ctx, session.ExecRequest{
-			Cmd: []string{
-				"marp",
-				"--stdin",
-				"--allow-local-files",
-				flag,
-				"-o", "-",
-			},
+			Cmd:   marpArgs,
 			Stdin: []byte(markdown),
 		})
 		if err != nil {
@@ -240,8 +261,49 @@ func slidesRenderHandler(v *vault.Store, eg *security.EgressGuard) packs.Handler
 		if heroModelUsed != "" {
 			out["hero_image_model_used"] = heroModelUsed
 		}
+		if curatedThemeUsed != "" {
+			out["curated_theme_used"] = curatedThemeUsed
+		}
+		// #202 Option B: contrast lint runs on the input markdown
+		// (NOT the mermaid-rewritten copy) so warnings reference the
+		// CSS the author actually wrote. Lint is best-effort — a
+		// parse failure cannot prevent a successful render.
+		if w := LintContrast(in.Markdown); len(w) > 0 {
+			out["warnings"] = w
+		}
 		return json.Marshal(out)
 	}
+}
+
+// extractCuratedThemeName returns the helmdeck-* theme name from the
+// markdown's frontmatter `theme:` value, or empty if none of our
+// curated themes is referenced. Used to populate the response's
+// `curated_theme_used` field so callers can confirm which theme
+// actually applied (rather than guessing from frontmatter parsing
+// on their end).
+func extractCuratedThemeName(md string) string {
+	end := frontmatterEndIndex(md)
+	if end <= 0 {
+		return ""
+	}
+	fm := md[:end]
+	for _, name := range curatedThemeNames() {
+		needles := []string{
+			"\ntheme: " + name + "\n",
+			"\ntheme: \"" + name + "\"\n",
+			"\ntheme: '" + name + "'\n",
+		}
+		for _, n := range needles {
+			if strings.Contains(fm, n) {
+				return name
+			}
+		}
+		if strings.HasPrefix(fm, "---\ntheme: "+name+"\n") ||
+			strings.HasPrefix(fm, "---\r\ntheme: "+name+"\r\n") {
+			return name
+		}
+	}
+	return ""
 }
 
 // frontmatterEndIndex returns the byte index of the start of the line

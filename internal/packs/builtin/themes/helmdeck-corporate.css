@@ -1,0 +1,135 @@
+/* @theme helmdeck-corporate */
+/*
+ * Helmdeck corporate theme (#202) — neutral palette tuned for
+ * business decks. Hand-checked for WCAG AA contrast.
+ * Pick via frontmatter: `theme: helmdeck-corporate`
+ *
+ * Palette (gray scale, accent navy):
+ *   bg primary        #FFFFFF  white
+ *   bg secondary      #F3F4F6  gray-100
+ *   bg surface        #E5E7EB  gray-200
+ *   fg primary        #1F2937  gray-800
+ *   fg strong         #111827  gray-900
+ *   accent            #1E40AF  blue-800
+ *   accent strong     #1E3A8A  blue-900
+ *   muted             #6B7280  gray-500
+ *
+ * Contrast ratios (vs #FFFFFF primary bg):
+ *   1F2937 (body)    ≈ 13.6:1  ✓ WCAG AAA
+ *   1E40AF (accent)  ≈  8.6:1  ✓ WCAG AA body
+ *   6B7280 (muted)   ≈  4.8:1  ✓ WCAG AA body (just above 4.5:1 floor)
+ *
+ * Conservative serif-friendly palette; intended for the "internal
+ * exec deck" and "external-customer report" use cases where the
+ * dark theme would feel out of place.
+ */
+
+@import 'default';
+
+section {
+  background-color: #FFFFFF;
+  color: #1F2937;
+  font-family: 'Helvetica Neue', Arial, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: #111827;
+  font-weight: 600;
+}
+
+h1 {
+  color: #1E40AF;
+  border-bottom: 2px solid #E5E7EB;
+  padding-bottom: 0.3em;
+}
+
+a {
+  color: #1E40AF;
+  text-decoration: underline;
+}
+
+a:hover {
+  color: #1E3A8A;
+}
+
+strong { color: #111827; }
+em { color: #1F2937; }
+
+/* Tables — every nested element gets explicit colors so a future
+ * background tweak on `section` doesn't leave tables looking
+ * mismatched. */
+table {
+  border-collapse: collapse;
+  background-color: #FFFFFF;
+  color: #1F2937;
+}
+
+thead {
+  background-color: #F3F4F6;
+  color: #111827;
+}
+
+th, td {
+  background-color: inherit;
+  color: inherit;
+  border: 1px solid #D1D5DB;
+  padding: 0.5em 0.75em;
+}
+
+tbody tr:nth-child(even) td {
+  background-color: #F9FAFB;
+}
+
+/* Code blocks + inline code */
+code {
+  background-color: #F3F4F6;
+  color: #B91C1C;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+}
+
+pre {
+  background-color: #F9FAFB;
+  color: #1F2937;
+  border-left: 4px solid #1E40AF;
+  padding: 1em;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+pre code {
+  background-color: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+/* Blockquote */
+blockquote {
+  background-color: #F3F4F6;
+  color: #374151;
+  border-left: 4px solid #1E40AF;
+  padding: 0.5em 1em;
+  margin: 1em 0;
+}
+
+/* Horizontal rule */
+hr {
+  border: none;
+  border-top: 1px solid #E5E7EB;
+}
+
+/* Lists */
+ul, ol {
+  color: #1F2937;
+}
+
+li::marker {
+  color: #6B7280;
+}
+
+/* Slide footer/header areas */
+section::after,
+section::before {
+  color: #6B7280;
+}

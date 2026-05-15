@@ -1,0 +1,132 @@
+/* @theme helmdeck-dark */
+/*
+ * Helmdeck dark theme (#202) — hand-tuned for WCAG AA contrast.
+ * Pick via frontmatter: `theme: helmdeck-dark`
+ *
+ * Palette (slate scale, accent sky):
+ *   bg primary        #0F172A  slate-900
+ *   bg secondary      #1E293B  slate-800
+ *   bg surface        #334155  slate-700
+ *   fg primary        #F1F5F9  slate-100
+ *   fg secondary      #E2E8F0  slate-200
+ *   accent            #38BDF8  sky-400
+ *   accent strong     #0EA5E9  sky-500
+ *   code bg           #0B1220
+ *   muted             #94A3B8  slate-400
+ *
+ * Contrast ratios (vs #0F172A primary bg):
+ *   F1F5F9 (body)    ≈ 15.4:1  ✓ WCAG AAA
+ *   38BDF8 (accent)  ≈  7.4:1  ✓ WCAG AA large + body
+ *   94A3B8 (muted)   ≈  5.9:1  ✓ WCAG AA body
+ *
+ * Every element type that nests INSIDE `section` has its colors
+ * declared here — the #202 reproducer ("dark bg + default light
+ * table") cannot occur with this theme because the tables/code/
+ * blockquotes inherit dark-theme palettes explicitly.
+ */
+
+@import 'default';
+
+section {
+  background-color: #0F172A;
+  color: #F1F5F9;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: #F8FAFC;
+  font-weight: 600;
+}
+
+h1 { color: #38BDF8; }
+
+a {
+  color: #38BDF8;
+  text-decoration: underline;
+}
+
+a:hover {
+  color: #0EA5E9;
+}
+
+strong { color: #F8FAFC; }
+
+em { color: #E2E8F0; }
+
+/* Tables — the #202 reproducer's blast radius. Explicit overrides
+ * so the dark section background never bleeds through unstyled cells. */
+table {
+  border-collapse: collapse;
+  background-color: #1E293B;
+  color: #E2E8F0;
+}
+
+thead {
+  background-color: #334155;
+  color: #F1F5F9;
+}
+
+th, td {
+  background-color: inherit;
+  color: inherit;
+  border: 1px solid #475569;
+  padding: 0.5em 0.75em;
+}
+
+tbody tr:nth-child(even) td {
+  background-color: #1E2A3F;
+}
+
+/* Code blocks + inline code */
+code {
+  background-color: #0B1220;
+  color: #F0A500;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+}
+
+pre {
+  background-color: #0B1220;
+  color: #E2E8F0;
+  border-left: 4px solid #38BDF8;
+  padding: 1em;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+pre code {
+  background-color: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+/* Blockquote */
+blockquote {
+  background-color: #1E293B;
+  color: #CBD5E1;
+  border-left: 4px solid #38BDF8;
+  padding: 0.5em 1em;
+  margin: 1em 0;
+}
+
+/* Horizontal rule */
+hr {
+  border: none;
+  border-top: 1px solid #334155;
+}
+
+/* Lists */
+ul, ol {
+  color: #F1F5F9;
+}
+
+li::marker {
+  color: #94A3B8;
+}
+
+/* Slide footer/header areas */
+section::after,
+section::before {
+  color: #94A3B8;
+}

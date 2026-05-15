@@ -190,6 +190,54 @@ theme: gaia      # or: default | uncover
 | `gaia` | Warm cream background, brown accents. Good for narrative decks. |
 | `uncover` | High-contrast minimalist (black/white). Good for keynote-style decks. |
 
+### Helmdeck curated themes (#202)
+
+In addition to Marp's built-ins, the pack ships two hand-tuned themes the agent can pick by name. **These are the safest option for "make my deck look like X" prompts** — they declare colors for every element type explicitly, so the contrast problems custom CSS frequently introduces can't occur.
+
+| Theme | Palette | Use case |
+|---|---|---|
+| `helmdeck-dark` | Slate-900 background, slate-100 body text, sky-400 accent, dark tables/code/blockquote | Modern technical deck, conference talk, dark-mode preference |
+| `helmdeck-corporate` | White background, gray-800 body text, blue-800 accent, conservative tables/code | Internal exec deck, customer report, business pitch |
+
+Pick a curated theme the same way you'd pick a Marp built-in:
+
+```markdown
+---
+marp: true
+theme: helmdeck-dark
+---
+
+# A deck with a known-good palette
+
+Every nested element (h1-h6, p, a, table, th, td, code, pre, blockquote)
+inherits a WCAG-AA-compliant color out of the box. You don't need a `style:`
+block at all.
+```
+
+Source: [`internal/packs/builtin/themes/helmdeck-dark.css`](https://github.com/tosin2013/helmdeck/blob/main/internal/packs/builtin/themes/helmdeck-dark.css), [`helmdeck-corporate.css`](https://github.com/tosin2013/helmdeck/blob/main/internal/packs/builtin/themes/helmdeck-corporate.css). The CSS is embedded into the control-plane binary at build time and uploaded to the sidecar on each call that references one of these themes.
+
+### Color contrast best practices (#202)
+
+When the agent generates a Marp deck with custom CSS, the most common quality bug is **changing `section { background }` without restyling the nested element types** — `table`, `td`, `th`, `code`, `blockquote`, `pre`. The default Marp theme styles those for a light background; against a new dark `section` background, the previous theme's table colors glare through and make the slide unreadable.
+
+Rules of thumb, in priority order:
+
+1. **Prefer a curated theme** (`helmdeck-dark` / `helmdeck-corporate`) over hand-authored CSS. The curated themes have already done the work.
+2. **WCAG AA minimum**: 4.5:1 contrast for body text, 3:1 for large text and UI components. Online checker: <https://webaim.org/resources/contrastchecker/>.
+3. **When overriding `section { background }`, override every nested element type's foreground AND background**. The reproducer for #202 was:
+   ```css
+   /* BAD: leaves default light-themed tables glaring through */
+   section { background: #1e3a8a; color: #fff; }
+
+   /* GOOD: every nested element type gets explicit colors */
+   section { background: #1e3a8a; color: #fff; }
+   table, th, td { background-color: #1e293b; color: #f1f5f9; }
+   code { background-color: #0b1220; color: #f0a500; }
+   blockquote { background-color: #1e293b; color: #cbd5e1; border-left: 4px solid #38bdf8; }
+   pre { background-color: #0b1220; color: #f1f5f9; }
+   ```
+4. **Bad combinations to avoid**: light-grey text on white, white text on light-yellow, dark-blue text on dark-purple, any pair where you'd squint to read it on a phone. The pack's lint (see below) catches a subset automatically.
+
 ### Custom CSS (per-deck overrides)
 
 Two ways to inject custom CSS — both work because Marp processes them inline:
@@ -233,6 +281,53 @@ marp: true
 For an agent driving `slides.render` (or `slides.narrate`) on the user's behalf, the pattern is: **write the design into the markdown frontmatter the agent generates**. The pack itself doesn't accept theme arguments — design lives in the deck. Agents handling "make this deck look like X" prompts should emit the corresponding frontmatter directives, not pass them as separate pack inputs.
 
 Reference: <https://marpit.marp.app/theme-css> for the full Marp directive list.
+
+## Response warnings (contrast lint, #202)
+
+The pack runs a static CSS lint against the markdown's frontmatter `style:` block and embedded `<style>` tags **before** marp renders. When it spots a palette anti-pattern, it adds an entry to the response's `warnings` array. **Lint warnings are informational, not errors** — the deck still renders and the artifact still uploads. Agents should check `warnings` and decide whether to re-render with corrections.
+
+Two warning rules ship today:
+
+| `rule` | Fires when | Recommendation in the response |
+|---|---|---|
+| `section-background-without-nested-overrides` | The CSS overrides `section { background }` but does not set explicit colors for one or more of `table`, `td`, `th`, `code`, `blockquote`, `pre`. | "Add CSS rules for each, or switch to `helmdeck-dark` / `helmdeck-corporate`." |
+| `wcag-aa-text-contrast` | A single CSS rule sets both `color` and `background-color` (or shorthand `background`) using hex values whose computed WCAG contrast is below 4.5:1. | "Darken the background or lighten the foreground until the ratio is ≥ 4.5:1." |
+
+Example response when the deck has a contrast problem:
+
+```json
+{
+  "format": "pdf",
+  "artifact_key": "slides.render/abc-deck.pdf",
+  "size": 12345,
+  "warnings": [
+    {
+      "rule": "section-background-without-nested-overrides",
+      "selector": "section",
+      "recommendation": "section background was customized (#1e3a8a) but the following nested element types were not restyled: table, td, th, code, blockquote, pre. ..."
+    }
+  ]
+}
+```
+
+Decks that use a curated theme (`theme: helmdeck-dark` or `theme: helmdeck-corporate`) almost always produce zero warnings because those themes declare every element's colors explicitly.
+
+The response also carries a `curated_theme_used` field when the frontmatter picked one of helmdeck's curated themes — so the agent can tell whether the theme actually applied or whether Marp fell back to a default. Example:
+
+```json
+{
+  "format": "pdf",
+  "artifact_key": "slides.render/abc-deck.pdf",
+  "size": 12345,
+  "curated_theme_used": "helmdeck-dark"
+}
+```
+
+Limitations of the static lint (deliberate cutoffs, not bugs):
+
+- **Hex colors only.** `rgb(...)`, named colors, `linear-gradient(...)` etc. skip the WCAG ratio check — the lint refuses to make up a contrast value it can't compute from the source. False negatives are preferable to false alarms.
+- **No full CSS cascade.** The lint sees rules in isolation; it can miss subtle inheritance bugs that only surface after full cascade resolution. Adding browser-based scanning is tracked as a follow-up.
+- **Static analysis only.** Anti-patterns embedded in dynamically-generated `<style>` (none today, but possible if Marp ever allows it) won't be caught.
 
 ## See also
 

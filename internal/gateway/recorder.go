@@ -17,6 +17,13 @@ import (
 // provider_calls table. Recorded by Registry.Dispatch on both the
 // success and error paths so the success-rate aggregation in
 // /api/v1/providers/stats has the full denominator.
+//
+// JobID/FinishReason/RawContentLen (#183) supply the diagnostic
+// surface that turns a failed LLM-backed pack call into a one-query
+// post-mortem. They're all optional from the recorder's perspective:
+// JobID is empty for sync (non-async-job) calls, FinishReason is
+// empty when the provider didn't report one, and RawContentLen
+// stays zero on the error path (no response to measure).
 type CallRecord struct {
 	Timestamp        time.Time
 	Provider         string
@@ -28,6 +35,9 @@ type CallRecord struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
+	JobID            string // pack job ID (empty for sync calls)
+	FinishReason     string // provider-reported finish_reason
+	RawContentLen    int    // bytes in choices[0].message.content
 }
 
 // CallRecorder persists CallRecord rows. The interface keeps the
@@ -69,8 +79,9 @@ func (r *SQLiteRecorder) Record(ctx context.Context, c CallRecord) error {
 	_, err := r.db.ExecContext(ctx, `
         INSERT INTO provider_calls
             (ts, provider, model, status, latency_ms, error_code,
-             fallback_used, prompt_tokens, completion_tokens, total_tokens)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             fallback_used, prompt_tokens, completion_tokens, total_tokens,
+             job_id, finish_reason, raw_content_len)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.Timestamp.UTC().Format(time.RFC3339Nano),
 		c.Provider,
 		c.Model,
@@ -81,6 +92,9 @@ func (r *SQLiteRecorder) Record(ctx context.Context, c CallRecord) error {
 		c.PromptTokens,
 		c.CompletionTokens,
 		c.TotalTokens,
+		nullIfEmpty(c.JobID),
+		nullIfEmpty(c.FinishReason),
+		c.RawContentLen,
 	)
 	if err != nil {
 		return fmt.Errorf("recorder: insert: %w", err)

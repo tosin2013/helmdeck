@@ -274,6 +274,7 @@ func (r *Registry) Dispatch(ctx context.Context, req ChatRequest) (ChatResponse,
 				Status:    "error",
 				LatencyMS: latency.Milliseconds(),
 				ErrorCode: classifyRecordError(err),
+				JobID:     JobIDFromContext(ctx),
 			})
 		}
 		return ChatResponse{}, err
@@ -302,7 +303,17 @@ func (r *Registry) Dispatch(ctx context.Context, req ChatRequest) (ChatResponse,
 	// T607: record the success after the response is fully
 	// shaped (provider prefix re-attached, usage tokens parsed)
 	// so the metrics table reflects what the caller actually saw.
+	//
+	// #183: also stamp the job ID + finish reason + raw content
+	// length so a failed LLM-backed pack call is one WHERE clause
+	// away from a full post-mortem.
 	if r.Recorder != nil {
+		var finishReason string
+		var rawContentLen int
+		if len(resp.Choices) > 0 {
+			finishReason = resp.Choices[0].FinishReason
+			rawContentLen = len(resp.Choices[0].Message.Content.Text())
+		}
 		_ = r.Recorder.Record(ctx, CallRecord{
 			Provider:         providerName,
 			Model:            bareModel,
@@ -311,6 +322,9 @@ func (r *Registry) Dispatch(ctx context.Context, req ChatRequest) (ChatResponse,
 			PromptTokens:     resp.Usage.PromptTokens,
 			CompletionTokens: resp.Usage.CompletionTokens,
 			TotalTokens:      resp.Usage.TotalTokens,
+			JobID:            JobIDFromContext(ctx),
+			FinishReason:     finishReason,
+			RawContentLen:    rawContentLen,
 		})
 	}
 	return resp, nil

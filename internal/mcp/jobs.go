@@ -36,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/packs"
 )
 
@@ -227,6 +228,11 @@ func (s *PackServer) startAsync(pack *packs.Pack, input json.RawMessage, opts as
 		j.mu.Unlock()
 	}
 	jobCtx = packs.WithProgress(jobCtx, progress)
+	// #183: thread the job ID into the context so gateway.Dispatch
+	// can stamp every provider_calls row with the originating job,
+	// making failed-pack diagnostics a one-query lookup instead of
+	// timestamp matching against ts.
+	jobCtx = gateway.WithJobID(jobCtx, j.ID)
 
 	go func() {
 		defer cancel()

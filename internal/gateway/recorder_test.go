@@ -129,3 +129,119 @@ func (e *fakeNetErr) Temporary() bool { return false }
 
 // Compile-time assertion that fakeNetErr satisfies net.Error.
 var _ net.Error = (*fakeNetErr)(nil)
+
+// #183: the three diagnostic columns (job_id, finish_reason,
+// raw_content_len) round-trip through the recorder. Asserts both
+// directions of the new nullIfEmpty plumbing — non-empty values
+// land as their literal text; empty job_id / finish_reason persist
+// as NULL so downstream queries can `WHERE job_id IS NOT NULL`
+// without false matches on a sentinel empty string.
+func TestSQLiteRecorder_DiagnosticColumns_RoundTrip(t *testing.T) {
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	r := NewSQLiteRecorder(db)
+	ctx := context.Background()
+
+	if err := r.Record(ctx, CallRecord{
+		Provider:      "openrouter",
+		Model:         "openai/gpt-oss-120b",
+		Status:        "success",
+		LatencyMS:     500,
+		JobID:         "0e5d27beb509e9bdf36420f1b0749aa9",
+		FinishReason:  "length",
+		RawContentLen: 742,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Record(ctx, CallRecord{
+		Provider: "openrouter", Model: "openai/gpt-oss-120b",
+		Status: "success", LatencyMS: 12,
+		// no JobID, no FinishReason, no RawContentLen — emulates a
+		// sync call dispatched without WithJobID.
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	type row struct {
+		jobID, finishReason any
+		rawContentLen       int
+	}
+	rows, err := db.Query(`SELECT job_id, finish_reason, raw_content_len FROM provider_calls ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.jobID, &r.finishReason, &r.rawContentLen); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, r)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d rows, want 2", len(got))
+	}
+	// Row 0: populated.
+	if s, ok := got[0].jobID.(string); !ok || s != "0e5d27beb509e9bdf36420f1b0749aa9" {
+		t.Errorf("row 0 job_id = %v, want the populated id", got[0].jobID)
+	}
+	if s, ok := got[0].finishReason.(string); !ok || s != "length" {
+		t.Errorf("row 0 finish_reason = %v, want 'length'", got[0].finishReason)
+	}
+	if got[0].rawContentLen != 742 {
+		t.Errorf("row 0 raw_content_len = %d, want 742", got[0].rawContentLen)
+	}
+	// Row 1: empty job_id / finish_reason should be NULL (not "").
+	if got[1].jobID != nil {
+		t.Errorf("row 1 job_id = %v, want NULL", got[1].jobID)
+	}
+	if got[1].finishReason != nil {
+		t.Errorf("row 1 finish_reason = %v, want NULL", got[1].finishReason)
+	}
+	if got[1].rawContentLen != 0 {
+		t.Errorf("row 1 raw_content_len = %d, want 0 (NOT NULL DEFAULT 0)", got[1].rawContentLen)
+	}
+}
+
+// #183: job_id index is queryable — the motivating diagnostic query
+// (`WHERE job_id = ?`) should use the new index. We don't assert
+// EXPLAIN QUERY PLAN here (SQLite version-dependent output); just
+// confirm the query returns the right rows.
+func TestSQLiteRecorder_QueryByJobID(t *testing.T) {
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	r := NewSQLiteRecorder(db)
+	ctx := context.Background()
+	// Three calls under the same job + one unrelated call.
+	for i := 0; i < 3; i++ {
+		if err := r.Record(ctx, CallRecord{
+			Provider: "anthropic", Model: "claude-sonnet", Status: "success",
+			LatencyMS: int64(100 + i), JobID: "target-job",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.Record(ctx, CallRecord{
+		Provider: "openai", Model: "gpt-4o", Status: "success",
+		LatencyMS: 999, JobID: "other-job",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM provider_calls WHERE job_id = ?`, "target-job").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Errorf("expected 3 rows for target-job, got %d", n)
+	}
+}

@@ -43,6 +43,22 @@ builds:
     goos:    [linux, darwin, windows]
     goarch:  [amd64, arm64]
 
+  # Operator CLI (#30 / T812). Wraps the marketplace REST endpoints
+  # for `helmdeck pack install/uninstall/list` from a terminal. Same
+  # cross-platform matrix as helmdeck-mcp.
+  - id: helmdeck
+    main: ./cmd/helmdeck
+    binary: helmdeck
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+    goos:    [linux, darwin, windows]
+    goarch:  [amd64, arm64]
+
 archives:
   - id: control-plane
     ids: [control-plane]
@@ -55,6 +71,14 @@ archives:
   - id: helmdeck-mcp
     ids: [helmdeck-mcp]
     name_template: "helmdeck-mcp_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+  - id: helmdeck
+    ids: [helmdeck]
+    name_template: "helmdeck_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     format_overrides:
       - goos: windows

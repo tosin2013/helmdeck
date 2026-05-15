@@ -18,6 +18,7 @@ Problem-solving recipes. Each guide assumes you already have helmdeck installed 
 - **[Configure LLM providers](./configure-llm-providers.md)** — register provider keys (Anthropic, OpenAI, Gemini, OpenRouter, Ollama, Groq, Mistral, Deepseek), list/rotate/test/delete via REST, configure fallback chains with the three closed-set triggers (`rate_limit`, `timeout`, `error`), and read the T607 success-rate panel.
 - **[Inspect audit logs](./inspect-audit-logs.md)** — query patterns for the three audit tables (`audit_log`, `provider_calls`, `credential_usage_log`) with SQL examples for compliance exports, failure-pattern analysis, fallback-rate monitoring, and cost approximation.
 - **[Build a subprocess pack](./build-subprocess-pack.md)** — drop an executable + YAML manifest into `$HELMDECK_COMMAND_PACKS_DIR` to expose a typed pack in any language. Covers the subprocess protocol, manifest field reference, and security notes.
+- **[Use the helmdeck CLI](./use-the-helmdeck-cli.md)** — `helmdeck pack list/install/uninstall/marketplace/installed`. Wraps the marketplace REST endpoints with `HELMDECK_URL` + `HELMDECK_TOKEN` env-var auth, mirrors the Management UI's `/marketplace` panel for terminal use.
 
 ## Client integrations
 

@@ -4,7 +4,7 @@ description: Use helmdeck's 41 capability packs (browser, web scraping, content 
 metadata:
   openclaw:
     skillKey: helmdeck
-    helmdeckVersion: "v0.12.0"
+    helmdeckVersion: "v0.13.0"
     source: https://github.com/tosin2013/helmdeck/blob/main/skills/helmdeck/SKILL.md
 ---
 

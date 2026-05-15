@@ -18,6 +18,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/inject"
 	"github.com/tosin2013/helmdeck/internal/keystore"
+	"github.com/tosin2013/helmdeck/internal/marketplace"
 	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/session"
@@ -54,6 +55,7 @@ type Deps struct {
 	MCPRegistry  *mcp.Registry   // optional; nil disables /api/v1/mcp/servers
 	Vault        *vault.Store    // optional; nil disables /api/v1/vault/*
 	Injector     *inject.Injector // optional; nil disables vault injection on /api/v1/browser/navigate
+	Marketplace  *marketplace.Service // optional; nil disables /api/v1/marketplace/* (T810)
 }
 
 // IsProtectedPath returns true for paths the auth middleware must guard.
@@ -125,6 +127,7 @@ func NewRouter(deps Deps) http.Handler {
 	registerProviderStatsRoutes(mux, deps)
 	registerArtifactRoutes(mux, deps)
 	registerGitHubWebhookRoute(mux, deps)
+	registerMarketplaceRoutes(mux, deps)
 
 	var handler http.Handler = mux
 	// Innermost: auth attaches claims (or rejects with 401).

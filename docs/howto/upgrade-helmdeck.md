@@ -259,7 +259,11 @@ Helm tracks revisions; a rollback runs the previous chart version's `Job` (which
 | `### Breaking` | Schema or contract changes that will break existing integrations. Operator action required. RARE in helmdeck — we try to keep input/output schemas additive. |
 | `### Removed` | Features dropped. Will break callers that used them. Should be preceded by a deprecation notice in a prior release. |
 
-**For the v0.9.0 → v0.10.0 hop specifically:** non-breaking. Adds `blog.publish` + `podcast.generate` packs, fixes `vision.click_anywhere` per #102 (improvement; existing callers see better behavior), bumps pack count 36 → 38. No schema-removal, no input-shape change to existing packs.
+### Per-hop notes (most recent first)
+
+**v0.12.x → v0.13.0** (this is the headline release as of the May 2026 cycle): non-breaking. Introduces the **community pack marketplace** as a new opt-in surface — three REST endpoints (`/api/v1/marketplace/{catalog,install,uninstall}`), a `/marketplace` UI panel, and a new `helmdeck` CLI binary that wraps the install loop from a terminal. Two new sidecar images you'll want pulled before first marketplace install: `ghcr.io/tosin2013/helmdeck-sidecar-marketplace:0.13.0` (the default execution sandbox for installed marketplace packs — bash + jq + curl + python3 + Node 20; see ADR 038 for why) and `ghcr.io/tosin2013/helmdeck-sidecar-hyperframes:0.13.0` (for the new `hyperframes.render` HTML→MP4 pack — Node 22 + ffmpeg). Catalog fetching is on by default; disable with `HELMDECK_MARKETPLACE_DISABLE=1` in `.env.local` if you don't want the control plane reaching out to GitHub on boot. Two new built-in packs (`hyperframes.render`, `stock.search`) bumping count 39 → 41. SQLite migration `0005_provider_calls_diagnostics.sql` adds three columns to `provider_calls` (`job_id`, `finish_reason`, `raw_content_len`) via `ALTER TABLE ADD COLUMN` — O(1) metadata-only, safe even on multi-million-row tables. `blog.publish`'s `destination` is now optional (defaults to `"artifact"`); previously-passing `destination="ghost"` callers gain `artifact_key`/`artifact_url` in the response and now return a partial-success envelope on Ghost failures instead of erroring out. No removed fields, no closed-set value changes.
+
+**v0.9.0 → v0.10.0:** non-breaking. Adds `blog.publish` + `podcast.generate` packs, fixes `vision.click_anywhere` per #102 (improvement; existing callers see better behavior), bumps pack count 36 → 38. No schema-removal, no input-shape change to existing packs.
 
 ---
 

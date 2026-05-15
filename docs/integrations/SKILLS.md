@@ -1,6 +1,6 @@
 ---
 title: Agent skills (load into your MCP client prompt)
-description: Drop-in agent guidance for helmdeck's 38 capability packs. Teaches the LLM how to call each pack, retry transient errors, chain workflows, and file bug reports. Load this into your MCP client's system prompt.
+description: Drop-in agent guidance for helmdeck's 41 capability packs. Teaches the LLM how to call each pack, retry transient errors, chain workflows, and file bug reports. Load this into your MCP client's system prompt.
 keywords: [helmdeck, agent skills, MCP, system prompt, OpenClaw, Claude Code, Claude Desktop, Gemini CLI, capability packs, weak models]
 priority: 0.9
 changefreq: weekly
@@ -8,7 +8,7 @@ changefreq: weekly
 
 # Helmdeck Agent Skills
 
-**Load this file into your MCP client's system prompt or agent config.** It teaches the LLM how to use helmdeck's 38 capability packs correctly, retry transient errors, diagnose failures, chain multi-step workflows, and file bug reports.
+**Load this file into your MCP client's system prompt or agent config.** It teaches the LLM how to use helmdeck's 41 capability packs correctly, retry transient errors, diagnose failures, chain multi-step workflows, and file bug reports.
 
 The intent is the same across every client: this file's content must be in the model's context **before** it sees the user's first prompt. The mechanism varies — pick the subsection that matches your client.
 
@@ -83,7 +83,7 @@ Find the client's "system prompt" / "custom instructions" / "agent context" fiel
 
 ## You are connected to helmdeck
 
-Helmdeck is a browser automation and AI capability platform. You have access to 38 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
+Helmdeck is a browser automation and AI capability platform. You have access to 41 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
 
 ## Pack catalog
 
@@ -129,6 +129,12 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 ### Image
 - `image.generate` — Text → image via fal.ai (`fal-ai/flux/schnell` default, ~$0.003/image, 1-3s). Vault `fal-key` or `HELMDECK_FAL_KEY`. 1-4 images per call. Use for podcast covers, slide shields, blog hero images. The `engine` field is `"fal"` only day 1; Replicate is reserved for a community PR. Pair with `podcast.generate`'s `generate_cover_prompt: true` to chain prompt → cover art in two pack calls.
 
+### Stock photos
+- `stock.search` — Search Pexels for real (non-AI) stock photos matching a query and download 1-4 results into the artifact store. Returns `photos: [{artifact_key, photographer, photographer_url, source_url, width, height, alt_text}]`. **Use `stock.search` for real photography; `image.generate` for AI-generated art** — the choice is editorial, not technical. Output uses the **same chained-input contract as `image.generate`**, so a stock photo's `artifact_key` drops straight into `slides.render`/`slides.narrate` (`hero_image_artifact_key`), `blog.publish` (`feature_image_artifact_key`), `podcast.generate` (`cover_image_artifact_key`), and `hyperframes.render` (embed as `<img src>`). Filters: `orientation` (`landscape`/`portrait`/`square`), `size` (`large`/`medium`/`small` min-size), `color` (hex or named). Vault `pexels-key` (or `HELMDECK_PEXELS_API_KEY`). Free tier 200 req/hr.
+
+### Video
+- `hyperframes.render` — Render an HTML/CSS/JS composition into a deterministic MP4. Composition is a self-contained HTML doc; the pack runs it in headless Chromium under BeginFrame + ffmpeg for frame-accurate output. **Sizing is composable**: `resolution: "1080p"|"4k"` × `aspect_ratio: "16:9"|"9:16"|"1:1"` selects one of six upstream CLI presets — `16:9` for YouTube standard, `9:16` for Shorts/TikTok/Reels, `1:1` for Instagram feed. **The composition must be authored at the matching aspect ratio** — `resolution` is an integer-multiple upscale, NOT a dimension setter. **Audio is mode-free**: a composition with no `<audio>` tag produces a silent MP4; one with an inline `<audio src>` produces a narrated MP4. To chain `podcast.generate` → `hyperframes.render`, embed the podcast's presigned audio URL in the composition's `<audio src>` and the audio flows through automatically. **Short-form only**: ≤12 min at 1080p, 512 MiB artifact cap; oversize requests reject with a pointer to issue #201 (long-form streaming, v1.x). Pack is `Async: true` — call it through `pack.start` or rely on a SEP-1686-aware SDK; 60-minute server timeout, 4 GiB session memory.
+
 ### Repository
 - `repo.fetch` — Clone a git repo into a session. Returns `clone_path`, `session_id`, **and a context envelope** (`tree`, `readme`, `entrypoints`, `signals`) so you can orient immediately without follow-up calls. See "Repo discovery pattern" below.
 - `repo.map` — Return a symbol-level structural map (functions, types, classes) of a cloned repo, budgeted to a token target. Opt-in follow-on for code-understanding tasks; inspired by Aider's repo-map.
@@ -171,8 +177,11 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 - `pack.status` — Poll the state of a `pack.start` job. Returns `{state, progress, message}`. Poll every 2-5 seconds. State transitions: `running` → `done` or `failed`.
 - `pack.result` — Retrieve the final result of a completed async job. Errors with `not_ready` if the job is still running. Job results are kept for 1 hour after completion.
 
-### Operator-supplied subprocess packs (`cmd.*`, v0.12.0)
-Operators can drop executables into `$HELMDECK_COMMAND_PACKS_DIR` to register additional packs under the `cmd.*` namespace. Protocol: stdin = your input JSON, stdout = the response JSON, non-zero exit = `handler_failed` with stderr surfaced. The catalog above lists only built-in packs; check `tools/list` (or `helmdeck://packs`) at runtime for the operator's custom ones.
+### Operator-supplied subprocess packs (`cmd.*`, v0.12.0; manifest format v0.13.0)
+Operators can drop executables into `$HELMDECK_COMMAND_PACKS_DIR` to register additional packs under the `cmd.*` namespace. Protocol: stdin = your input JSON, stdout = the response JSON, non-zero exit = `handler_failed` with stderr surfaced. **Since v0.13.0 (#173)** a sibling `<basename>.helmdeck-pack.yaml` manifest can declare typed `input_schema`/`output_schema`, `timeout_s`, `max_output_bytes`, and an `env` allowlist — the manifest is optional and missing-manifest still falls back to passthrough (v0.12.0 MVP behavior). The catalog above lists only built-in packs; check `tools/list` (or `helmdeck://packs`) at runtime for the operator's custom ones.
+
+### Marketplace packs (v0.13.0 beta)
+Beyond built-ins and operator-supplied `cmd.*` packs, helmdeck v0.13.0 introduced a **community pack marketplace**: operators install packs from a signed catalog (default `tosin2013/helmdeck-marketplace`) via the REST surface (`POST /api/v1/marketplace/install`) or the new `helmdeck` CLI (`helmdeck pack install <name>`). Installed marketplace packs run inside a dedicated `helmdeck-sidecar-marketplace` sidecar image rather than the distroless control plane (ADR 038) and appear in `tools/list` immediately — no restart. Trust verification ships as stage A (deterministic SHA256 content hash, hard-rejects install on mismatch); stage B (full sigstore keyless cosign-verify) is a v1.0 hardening item. The agent doesn't need to know whether a `tools/list` entry came from a built-in, a subprocess pack, or the marketplace — call it the same way; the catalog's tool description carries the schema.
 
 ---
 

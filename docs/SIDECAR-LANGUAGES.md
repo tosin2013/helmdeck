@@ -12,10 +12,11 @@ exactly the toolchain it needs at session-acquire time.
 
 ## Currently supported
 
-| Language | Pack         | Image                                              | Override env var          |
-| :------- | :----------- | :------------------------------------------------- | :------------------------ |
-| Python 3 | `python.run` | `ghcr.io/tosin2013/helmdeck-sidecar-python:latest` | `HELMDECK_SIDECAR_PYTHON` |
-| Node.js  | `node.run`   | `ghcr.io/tosin2013/helmdeck-sidecar-node:latest`   | `HELMDECK_SIDECAR_NODE`   |
+| Language    | Pack                 | Image                                                    | Override env var              |
+| :---------- | :------------------- | :------------------------------------------------------- | :---------------------------- |
+| Python 3    | `python.run`         | `ghcr.io/tosin2013/helmdeck-sidecar-python:latest`       | `HELMDECK_SIDECAR_PYTHON`     |
+| Node.js     | `node.run`           | `ghcr.io/tosin2013/helmdeck-sidecar-node:latest`         | `HELMDECK_SIDECAR_NODE`       |
+| HyperFrames | `hyperframes.render` | `ghcr.io/tosin2013/helmdeck-sidecar-hyperframes:latest`  | `HELMDECK_SIDECAR_HYPERFRAMES` |
 
 Both images are built from the canonical helmdeck base sidecar and
 inherit every browser/desktop/scrot/git capability the base ships.
@@ -36,6 +37,15 @@ A Python or Node session is a strict superset of a base session.
 - npm, pnpm, yarn (via corepack)
 - Pre-installed globally: `typescript`, `ts-node`, `eslint`, `prettier`, `vitest`
 - Everything in the base sidecar
+
+**HyperFrames sidecar** (`deploy/docker/sidecar-hyperframes.Dockerfile`):
+
+- FFmpeg (system) + libavcodec-extra + libx264 for the deterministic encode pass
+- `@hyperframes/cli` (pinned; Chromium-BeginFrame composition renderer)
+- Producer-pipeline env contract pre-applied (`PRODUCER_DISABLE_GPU=true`, `PRODUCER_FORCE_SCREENSHOT=true`, `PRODUCER_PUPPETEER_LAUNCH_TIMEOUT_MS=120000`)
+- Everything in the base sidecar (Chromium, Node 20, Marp, Playwright MCP)
+
+HyperFrames isn't a "language" sidecar — it's a media-pipeline sidecar — but it ships through the same per-pack-image mechanism because the encode toolchain is heavy enough that pulling it on every deployment would be wasteful for operators who don't render video.
 
 ## Building locally
 

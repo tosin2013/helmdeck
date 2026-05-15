@@ -1,0 +1,93 @@
+name: Sidecar Hyperframes Image
+
+# Publishes the helmdeck-sidecar-hyperframes image (HTML composition →
+# MP4 via Chromium BeginFrame + ffmpeg). Backs the hyperframes.render
+# pack (#200).
+#
+# Mirrors sidecar.yml's shape — same triggers, same multi-arch
+# expectation. The base helmdeck-sidecar image is the prerequisite;
+# this image FROMs it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/docker/sidecar-hyperframes.Dockerfile'
+      - '.github/workflows/sidecar-hyperframes.yml'
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'deploy/docker/sidecar-hyperframes.Dockerfile'
+      - '.github/workflows/sidecar-hyperframes.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: sidecar-hyperframes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/tosin2013/helmdeck-sidecar-hyperframes
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: sigstore/cosign-installer@v3
+        if: github.event_name != 'pull_request'
+
+      # amd64 only for the first cut. The base sidecar publishes amd64
+      # only today (see sidecar.yml comment); once that goes multi-arch
+      # the FROM here will pull arm64 automatically and this can switch
+      # to linux/amd64,linux/arm64.
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/sidecar-hyperframes.Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=sidecar-hyperframes
+          cache-to: type=gha,scope=sidecar-hyperframes,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Sign image
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          echo "$TAGS" | xargs -I {} cosign sign --yes {}@$DIGEST

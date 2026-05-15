@@ -519,6 +519,15 @@ func main() {
 		logger.Warn("register podcast.generate pack failed", "err", err)
 	}
 
+	// hyperframes.render (#200): HTML/CSS/JS composition → MP4 via
+	// the helmdeck-sidecar-hyperframes image. No dispatcher / vault /
+	// egress dependency — the render runs entirely inside the sidecar
+	// and the composition supplies its own assets (or embeds a
+	// presigned podcast.generate audio URL for chained workflows).
+	if err := packReg.Register(builtin.HyperframesRender()); err != nil {
+		logger.Warn("register hyperframes.render pack failed", "err", err)
+	}
+
 	// Operator-supplied command packs (T811 MVP). Drop executables
 	// into $HELMDECK_COMMAND_PACKS_DIR and the control plane
 	// registers each as `cmd.<basename>`. Schemas are passthrough

@@ -93,8 +93,14 @@ sidecar-node-build: sidecar-build ## Build the Node.js language sidecar (depends
 		--build-arg BASE_IMAGE=helmdeck-sidecar:dev \
 		-t helmdeck-sidecar-node:dev .
 
+.PHONY: sidecar-hyperframes-build
+sidecar-hyperframes-build: sidecar-build ## Build the HyperFrames sidecar (HTML→MP4 via Chromium BeginFrame + ffmpeg)
+	docker build -f deploy/docker/sidecar-hyperframes.Dockerfile \
+		--build-arg BASE_IMAGE=helmdeck-sidecar:dev \
+		-t helmdeck-sidecar-hyperframes:dev .
+
 .PHONY: sidecars
-sidecars: sidecar-build sidecar-python-build sidecar-node-build ## Build every sidecar image (base + every language)
+sidecars: sidecar-build sidecar-python-build sidecar-node-build sidecar-hyperframes-build ## Build every sidecar image (base + every language + hyperframes)
 
 .PHONY: sidecar-smoke
 sidecar-smoke: sidecar-build ## Run the sidecar headless and curl /json/version

@@ -1,6 +1,6 @@
 ---
 name: helmdeck
-description: Use helmdeck's 40 capability packs (browser, web scraping, content grounding, podcast/slide/blog/video production, image generation, repo orientation, filesystem, git, GitHub, HTTP, vision, document OCR/parse, Python/Node execution) via MCP — all prefixed `helmdeck__*` in the tool catalog.
+description: Use helmdeck's 41 capability packs (browser, web scraping, content grounding, podcast/slide/blog/video production, image generation, stock photo search, repo orientation, filesystem, git, GitHub, HTTP, vision, document OCR/parse, Python/Node execution) via MCP — all prefixed `helmdeck__*` in the tool catalog.
 metadata:
   openclaw:
     skillKey: helmdeck
@@ -10,13 +10,13 @@ metadata:
 
 <!-- This SKILL.md is the canonical helmdeck agent skill. Stamped at
      helmdeck v0.13.0 (#200 added hyperframes.render, bringing the
-     in-tree catalog to 40 packs). Re-run scripts/configure-openclaw.sh
+     in-tree catalog to 41 packs, with #217 adding stock.search). Re-run scripts/configure-openclaw.sh
      after any helmdeck release so your OpenClaw agent picks up new
      packs and updated decision tables. -->
 
 ## You are connected to helmdeck
 
-Helmdeck is a browser automation and AI capability platform. You have access to 40 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
+Helmdeck is a browser automation and AI capability platform. You have access to 41 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
 
 ## Pack catalog
 
@@ -61,6 +61,9 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 
 ### Image
 - `image.generate` — Text → image via fal.ai (`fal-ai/flux/schnell` default, ~$0.003/image, 1-3s). Vault `fal-key` or `HELMDECK_FAL_KEY`. 1-4 images per call. Use for podcast covers, slide shields, blog hero images. The `engine` field is `"fal"` only day 1; Replicate is reserved for a community PR. Pair with `podcast.generate`'s `generate_cover_prompt: true` to chain prompt → cover art in two pack calls — or use the v0.12.0 chained inputs (`cover_image`, `hero_image_prompt`, `feature_image_artifact_key`) on the content packs to skip the intermediate step entirely.
+
+### Stock photography
+- `stock.search` (#217) — Search Pexels for stock photos matching a query and download the top 1-4 results into the artifact store. Vault credential `pexels-key` or `HELMDECK_PEXELS_API_KEY` (free tier 200 req/hr; get a key at <https://www.pexels.com/api/>). Output is `artifact_keys: [...]` plus per-photo `results: [{photographer, photographer_url, source_url, width, height, alt_text, artifact_key}]` — **same chained-input contract as `image.generate`**, so the downloaded photos drop straight into `slides.render` (hero), `slides.narrate` (hero), `blog.publish` (`feature_image_artifact_key`), `podcast.generate` (`cover_image_artifact_key`), `hyperframes.render` (embed presigned URL in composition HTML). Use **stock.search** when the user wants real photography (corporate decks, customer-facing blog feature images); use **image.generate** when they want generated art. Filter knobs: `orientation` (landscape/portrait/square), `size` (large/medium/small min-size), `color` (hex or name). `engine: "pexels"` only day 1; Unsplash/Pixabay land later. `media_type: "video"` reserved for follow-up PR. Free for commercial use; surface `photographer` + `source_url` in any customer-facing output as the polite default (Pexels doesn't legally require attribution).
 
 ### Video
 - `hyperframes.render` — HTML/CSS/JS composition → deterministic MP4 via Chromium BeginFrame + ffmpeg (upstream [hyperframes CLI](https://github.com/heygen-com/hyperframes)). Sizing is composable: `resolution` (1080p / 4k) × `aspect_ratio` (`16:9` standard, `9:16` Shorts/TikTok/Reels, `1:1` IG feed). Six supported tuples map to the upstream CLI's `--resolution` presets (`landscape` / `portrait` / `square` ± `-4k`). **Author the composition at the target aspect ratio** — upstream's resolution flag is an integer-multiple upscale knob, not a dimension setter. Two modes with NO handler branching: composition has no `<audio>` tag → silent animation; composition has an inline `<audio src>` → MP4 carries audio. **Chained workflow**: call `podcast.generate` first, embed the returned presigned audio URL as the composition's `<audio src>`, then `hyperframes.render` produces a narrated video. **Short-form only** (≤12 min, 512 MiB cap); larger compositions return CodeHandlerFailed pointing at #201 for the long-form streaming track. Runs inside the `helmdeck-sidecar-hyperframes` image (env override `HELMDECK_SIDECAR_HYPERFRAMES`).

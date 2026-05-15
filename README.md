@@ -44,7 +44,7 @@ plus three reliability bugs: firecrawl-rabbitmq cold-boot race (#181 — `start_
 and `content.ground` silent degradation when Firecrawl is unreachable (#182 — fails loud with
 `handler_failed` instead of returning empty-success).
 
-v0.12.0's headline features remain: 40 capability packs with **end-to-end content chaining**
+v0.12.0's headline features remain: 41 capability packs with **end-to-end content chaining**
 (image.generate auto-feeds podcast/slides/blog covers and hero images), the **`helmdeck://image-models`
 MCP resource** for agent discoverability, **image-mode install** (`./scripts/install.sh --image-mode`
 pulls from ghcr.io with no Go toolchain — the v1.0 Helm chart unblocker), the **Pack Test Runner UI**
@@ -186,7 +186,7 @@ roadmap.
 
 ## Built-in Capability Packs
 
-40 packs ship in the box. Each one hides a multi-step workflow
+41 packs ship in the box. Each one hides a multi-step workflow
 behind a single typed JSON-Schema call so weak open-weight models
 can drive it as reliably as frontier models. The full input/output
 contract for every pack lives in [`docs/PACKS.md`](docs/PACKS.md).

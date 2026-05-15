@@ -391,6 +391,14 @@ func main() {
 	if err := packReg.Register(builtin.ImageGenerate(vaultStore, egressGuard)); err != nil {
 		logger.Warn("register image.generate pack failed", "err", err)
 	}
+	// stock.search (#217): Pexels-backed stock photo search. Same
+	// pattern as image.generate — pack-registered unconditionally;
+	// the handler hard-fails with a typed missing_credential error
+	// when neither HELMDECK_PEXELS_API_KEY nor a `pexels-key` vault
+	// entry is configured. Engine-pluggable (Unsplash/Pixabay follow).
+	if err := packReg.Register(builtin.StockSearch(vaultStore, egressGuard)); err != nil {
+		logger.Warn("register stock.search pack failed", "err", err)
+	}
 	// T807b (ADR 035): web.scrape is Firecrawl-backed. The pack is
 	// registered unconditionally so agents discovering the catalog
 	// see it — the handler itself gates on HELMDECK_FIRECRAWL_ENABLED

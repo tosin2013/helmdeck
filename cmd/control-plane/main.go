@@ -26,6 +26,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/inject"
 	"github.com/tosin2013/helmdeck/internal/keystore"
+	"github.com/tosin2013/helmdeck/internal/marketplace"
 	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/packs/builtin"
@@ -266,6 +267,30 @@ func main() {
 		logger.Warn("initial gateway hydrate failed; /v1/* will be partial or empty", "err", err)
 	}
 
+	// T810 (#28): marketplace catalog service. Reads
+	// HELMDECK_MARKETPLACE_URL (default per ADR 034) and exposes
+	// /api/v1/marketplace/catalog + /refresh. Setting
+	// HELMDECK_MARKETPLACE_DISABLE=1 turns the endpoints off
+	// entirely (returns 503) for air-gapped deployments. The
+	// startup refresh is async + best-effort — a slow upstream
+	// shouldn't block control-plane boot.
+	var marketplaceSvc *marketplace.Service
+	if os.Getenv("HELMDECK_MARKETPLACE_DISABLE") != "1" {
+		mpURL := os.Getenv("HELMDECK_MARKETPLACE_URL")
+		if mpURL == "" {
+			mpURL = marketplace.DefaultMarketplaceURL
+		}
+		marketplaceSvc = marketplace.NewService(mpURL, logger.With("subsystem", "marketplace"))
+		go func() {
+			refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := marketplaceSvc.Refresh(refreshCtx); err != nil {
+				logger.Warn("initial marketplace refresh failed; catalog will be empty until /refresh succeeds",
+					"err", err)
+			}
+		}()
+	}
+
 	deps := api.Deps{
 		Logger:           logger,
 		Version:          version,
@@ -278,6 +303,7 @@ func main() {
 		MCPRegistry: mcp.NewRegistry(db),
 		Vault:       vaultStore,
 		Injector:    inject.New(vaultStore, logger.With("subsystem", "inject")),
+		Marketplace: marketplaceSvc,
 		// T607: expose the SQLite handle so the providers/stats
 		// endpoint can run aggregation queries against
 		// provider_calls. Other DB-backed endpoints land here

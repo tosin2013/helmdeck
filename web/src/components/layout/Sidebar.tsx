@@ -11,6 +11,7 @@ import {
   Package,
   Server,
   Shield,
+  Store,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -23,6 +24,7 @@ const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/sessions', label: 'Sessions', icon: Server },
   { to: '/packs', label: 'Capability Packs', icon: Package },
+  { to: '/marketplace', label: 'Marketplace', icon: Store },
   { to: '/mcp', label: 'MCP Registry', icon: Boxes },
   { to: '/providers', label: 'AI Providers', icon: Activity },
   { to: '/vault', label: 'Credential Vault', icon: KeyRound },

@@ -5,6 +5,7 @@ package marketplace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,7 +18,25 @@ import (
 	"time"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
+	"github.com/tosin2013/helmdeck/internal/session"
 )
+
+// DefaultMarketplaceSidecarImage is the published image the installer
+// uses when a pack manifest doesn't declare its own handler.sidecar.
+// Per ADR 038. Operators override via HELMDECK_SIDECAR_MARKETPLACE.
+const DefaultMarketplaceSidecarImage = "ghcr.io/tosin2013/helmdeck-sidecar-marketplace:latest"
+
+// MarketplaceSidecarImage returns the image the installer uses by
+// default. Reads HELMDECK_SIDECAR_MARKETPLACE; falls back to the
+// published default. Exposed as a package var (not a func) so tests
+// can redirect to a local-built helmdeck-sidecar-marketplace:dev
+// without env-var manipulation.
+func MarketplaceSidecarImage() string {
+	if v := os.Getenv("HELMDECK_SIDECAR_MARKETPLACE"); v != "" {
+		return v
+	}
+	return DefaultMarketplaceSidecarImage
+}
 
 // Installer materializes a marketplace pack to disk and registers it
 // with the live pack registry — the hot-load path that lets new packs
@@ -331,19 +350,35 @@ func (i *Installer) verifyTrust(packDir string, manifest *Manifest) (bool, strin
 // buildPackFromManifest turns a marketplace.Manifest + an on-disk
 // pack dir into a packs.Pack ready to register. Only command-type
 // handlers; the caller has already validated that.
+//
+// Per ADR 038, the constructed pack:
+//   - declares NeedsSession=true so the engine acquires a sidecar
+//   - uses SessionSpec.Image = manifest.handler.sidecar.image, or
+//     the default MarketplaceSidecarImage when not overridden
+//   - executes the handler INSIDE the sidecar via ec.Exec rather
+//     than spawning in-process (which would fail in distroless)
+//
+// The on-disk packDir holds the handler files copied during install;
+// the handler closure reads them from disk and uploads to the sidecar
+// on each call. Per-call upload matches the slides.narrate / hyperframes
+// pattern and is microsecond-scale overhead for kB-sized handler scripts.
 func buildPackFromManifest(m *Manifest, packDir string) (*packs.Pack, error) {
-	// Resolve the handler entrypoint path. The first argv element is
-	// either relative (./upper) or absolute — we resolve relative
-	// paths against the install dir so the spawned process finds them.
 	handlerArgv := append([]string{}, m.Handler.Command...)
 	if len(handlerArgv) == 0 {
 		return nil, fmt.Errorf("handler.command is empty")
 	}
-	if !filepath.IsAbs(handlerArgv[0]) {
-		handlerArgv[0] = filepath.Join(packDir, handlerArgv[0])
+	// argv[0] is the handler script's path *as the manifest declares it*
+	// (typically "./handler.py"). The on-disk file exists at
+	// packDir/<basename>; the in-sidecar path is
+	// /tmp/helmdeck-pack-<name>/<basename>. The handler closure does the
+	// translation; we just validate the file exists on disk here.
+	entrypoint := handlerArgv[0]
+	if filepath.IsAbs(entrypoint) {
+		return nil, fmt.Errorf("handler.command[0] (%q) must be a path relative to the pack directory, not absolute", entrypoint)
 	}
-	if _, err := os.Stat(handlerArgv[0]); err != nil {
-		return nil, fmt.Errorf("handler entrypoint %s not found: %w", handlerArgv[0], err)
+	entrypointOnDisk := filepath.Join(packDir, filepath.Clean(entrypoint))
+	if _, err := os.Stat(entrypointOnDisk); err != nil {
+		return nil, fmt.Errorf("handler entrypoint %s not found: %w", entrypointOnDisk, err)
 	}
 
 	timeout := time.Duration(m.Handler.TimeoutSec) * time.Second
@@ -351,23 +386,175 @@ func buildPackFromManifest(m *Manifest, packDir string) (*packs.Pack, error) {
 		timeout = 60 * time.Second
 	}
 
+	sidecarImage := MarketplaceSidecarImage()
+	if m.Handler.Sidecar != nil && m.Handler.Sidecar.Image != "" {
+		sidecarImage = m.Handler.Sidecar.Image
+	}
+
 	inSchema := manifestSchemaToBasic(m.InputSchema)
 	outSchema := manifestSchemaToBasic(m.OutputSchema)
 
-	pack := packs.NewCommandPack(
-		m.Name,
-		m.Version,
-		m.Description,
-		inSchema, outSchema,
-		packs.CommandSpec{
-			Path:           handlerArgv[0],
-			Args:           handlerArgv[1:],
-			Env:            m.Handler.Env,
-			Timeout:        timeout,
-			MaxOutputBytes: m.Handler.MaxOutputBytes,
+	pack := &packs.Pack{
+		Name:         m.Name,
+		Version:      m.Version,
+		Description:  m.Description,
+		InputSchema:  inSchema,
+		OutputSchema: outSchema,
+		NeedsSession: true,
+		SessionSpec: session.Spec{
+			Image:   sidecarImage,
+			Timeout: timeout,
 		},
-	)
+		Handler: marketplaceCommandHandler(m.Name, packDir, handlerArgv, m.Handler.Env, timeout),
+	}
 	return pack, nil
+}
+
+// marketplaceCommandHandler builds the HandlerFunc closure that
+// uploads the pack's on-disk handler files into the spawned sidecar
+// and executes the entrypoint with stdin = ec.Input. Per ADR 038.
+//
+// Flow per call:
+//   1. recreate /tmp/helmdeck-pack-<name>/ inside the sidecar
+//   2. upload every file from packDir via execWithStdin (recursive)
+//   3. chmod +x the entrypoint
+//   4. exec the entrypoint with ec.Input piped to stdin
+//   5. return stdout as the pack output
+func marketplaceCommandHandler(packName, packDir string, argv []string, env []string, timeout time.Duration) packs.HandlerFunc {
+	return func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+		if ec.Exec == nil {
+			return nil, &packs.PackError{Code: packs.CodeSessionUnavailable,
+				Message: "marketplace pack requires a session executor"}
+		}
+
+		remoteDir := "/tmp/helmdeck-pack-" + sanitizeForPath(packName)
+
+		// Step 1 — wipe + recreate the per-call upload dir.
+		mk, err := ec.Exec(ctx, session.ExecRequest{
+			Cmd: []string{"sh", "-c", "rm -rf " + remoteDir + " && mkdir -p " + remoteDir},
+		})
+		if err != nil || mk.ExitCode != 0 {
+			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+				Message: fmt.Sprintf("prepare remote pack dir: %v (exit %d)", err, mk.ExitCode)}
+		}
+
+		// Step 2 — upload every file under packDir, preserving
+		// directory structure inside remoteDir.
+		if err := uploadDirToSidecar(ctx, ec, packDir, remoteDir); err != nil {
+			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+				Message: fmt.Sprintf("upload pack files: %v", err)}
+		}
+
+		// Step 3 — chmod +x the entrypoint. uploadDirToSidecar writes
+		// with mode 0644 from the bash redirect; we don't get to set
+		// per-file modes via execWithStdin. Explicit chmod here.
+		remoteEntrypoint := filepath.Join(remoteDir, filepath.Clean(argv[0]))
+		chmod, err := ec.Exec(ctx, session.ExecRequest{
+			Cmd: []string{"chmod", "+x", remoteEntrypoint},
+		})
+		if err != nil || chmod.ExitCode != 0 {
+			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+				Message: fmt.Sprintf("chmod handler: %v (exit %d)", err, chmod.ExitCode)}
+		}
+
+		// Step 4 — execute. The handler reads ec.Input from stdin,
+		// writes JSON to stdout. Non-zero exit → handler_failed.
+		runArgv := append([]string{remoteEntrypoint}, argv[1:]...)
+		res, err := ec.Exec(ctx, session.ExecRequest{
+			Cmd:   runArgv,
+			Stdin: ec.Input,
+			Env:   env,
+		})
+		if err != nil {
+			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+				Message: fmt.Sprintf("execute handler: %v", err)}
+		}
+		if res.ExitCode != 0 {
+			stderr := strings.TrimSpace(string(res.Stderr))
+			if len(stderr) > 4096 {
+				stderr = stderr[:4096] + "...(truncated)"
+			}
+			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+				Message: fmt.Sprintf("handler exit %d: %s", res.ExitCode, stderr)}
+		}
+		if len(res.Stdout) == 0 {
+			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+				Message: "handler produced empty stdout (expected JSON)"}
+		}
+		// We don't validate stdout is JSON here — the engine validates
+		// it against OutputSchema via packs.Engine.Execute after the
+		// handler returns. Match the slides.narrate / hyperframes
+		// pattern: return whatever bytes the handler emitted.
+		return json.RawMessage(res.Stdout), nil
+	}
+}
+
+// uploadDirToSidecar walks localDir and replays every file at the
+// matching path under remoteDir via execWithStdin. Directory
+// structure is preserved (so packs that ship multiple files — handler
+// + a python module + a config — all land in the right relative
+// positions for the entrypoint to resolve them).
+func uploadDirToSidecar(ctx context.Context, ec *packs.ExecutionContext, localDir, remoteDir string) error {
+	return filepath.Walk(localDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(localDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		remotePath := filepath.Join(remoteDir, rel)
+		if info.IsDir() {
+			res, err := ec.Exec(ctx, session.ExecRequest{
+				Cmd: []string{"mkdir", "-p", remotePath},
+			})
+			if err != nil || res.ExitCode != 0 {
+				return fmt.Errorf("mkdir %s: %v (exit %d)", remotePath, err, res.ExitCode)
+			}
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		// Match the existing pattern from slides_narrate.go +
+		// hyperframes_render.go: `sh -c "cat > <path>"` with stdin
+		// bytes. Works in any POSIX shell; doesn't require scp / docker cp.
+		res, err := ec.Exec(ctx, session.ExecRequest{
+			Cmd:   []string{"sh", "-c", "cat > " + shellQuote(remotePath)},
+			Stdin: body,
+		})
+		if err != nil || res.ExitCode != 0 {
+			return fmt.Errorf("write %s: %v (exit %d)", remotePath, err, res.ExitCode)
+		}
+		return nil
+	})
+}
+
+// shellQuote single-quotes a path for safe use in `sh -c`. The pack
+// name + the per-call temp dir guarantee no single quotes appear in
+// the path; this is belt-and-suspenders for future paths that might.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// sanitizeForPath strips characters that would be awkward in a tmp
+// path. Pack names follow the <family>.<verb> form per the manifest
+// schema, so we just keep alphanumerics + the dot.
+func sanitizeForPath(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	return b.String()
 }
 
 // manifestSchemaToBasic converts the marketplace's schema shape to

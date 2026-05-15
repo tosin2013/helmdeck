@@ -163,8 +163,34 @@ Lists every pack the operator has installed via this marketplace surface (NOT bu
 | Env var | Default | Effect |
 |---|---|---|
 | `HELMDECK_PACKS_DIR` | `~/.helmdeck/packs` | Root directory for installed packs. Each pack lands in `<dir>/<name>/`. |
+| `HELMDECK_SIDECAR_MARKETPLACE` | `ghcr.io/tosin2013/helmdeck-sidecar-marketplace:latest` | Default sidecar image marketplace command-handler packs route through. Per [ADR 038](../../adrs/038-marketplace-pack-execution-via-sidecar.md). |
 
-The installer creates this directory at startup if it doesn't exist. If neither `HELMDECK_PACKS_DIR` nor `~/.helmdeck/packs` resolves, install endpoints return `503 marketplace_install_disabled` while the catalog endpoint keeps working.
+The installer creates `HELMDECK_PACKS_DIR` at startup if it doesn't exist. If neither it nor `~/.helmdeck/packs` resolves, install endpoints return `503 marketplace_install_disabled` while the catalog endpoint keeps working.
+
+## Execution model (ADR 038)
+
+Marketplace command-handler packs **do not** run in the control-plane container — that runs `gcr.io/distroless/static:nonroot` and ships no shell, no jq, no Python, no Node. Per [ADR 038](../../adrs/038-marketplace-pack-execution-via-sidecar.md), packs route their handler execution through a dedicated `helmdeck-sidecar-marketplace` sidecar that bundles the common toolchain.
+
+| Element | Where it lives |
+|---|---|
+| Manifest + handler files | `HELMDECK_PACKS_DIR/<name>/` on the control-plane filesystem |
+| Sidecar runtime | `helmdeck-sidecar-marketplace` container, spawned per call |
+| Handler invocation | uploaded to the sidecar via `sh -c "cat > /tmp/.../handler"`, chmod +x, then executed with the pack input piped to stdin |
+| Output | stdout from the sidecar handler, returned as the pack response (validated against `output_schema` by the engine) |
+
+The sidecar image ships `bash` 5.x, `jq`, `curl`, `python3` 3.11+, `nodejs` 20 LTS, and standard Unix utilities (`sha256sum`, `sed`, `awk`, `grep`, `tr`, `cut`, `head`, `tail`, `wc`).
+
+Packs that need a heavier toolchain (image processing, video, ML inference) **can override the sidecar image** via the manifest's `handler.sidecar.image` field:
+
+```yaml
+handler:
+  type: command
+  command: ["./handler.py"]
+  sidecar:
+    image: ghcr.io/some-author/helmdeck-sidecar-pillow:v1
+```
+
+When `handler.sidecar` is absent, the installer uses the default `HELMDECK_SIDECAR_MARKETPLACE` image. The registered pack's `SessionSpec.Image` is observable via `GET /api/v1/packs`.
 
 ## Trust model (v0.13.0 beta status)
 

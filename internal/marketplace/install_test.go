@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
+	"github.com/tosin2013/helmdeck/internal/session"
 )
 
 // scaffoldMarketplace builds a file:// marketplace at `dir` with one
@@ -152,44 +153,170 @@ func TestInstall_PackNotInCatalog_ErrPackNotInCatalog(t *testing.T) {
 
 // --- hot-load: registered pack callable from registry ----------------
 
-func TestInstall_HotLoad_PackAppearsInRegistryAndDispatches(t *testing.T) {
+// fakeSidecarExec captures every ec.Exec call so tests can assert
+// on the upload + chmod + run sequence the marketplace handler
+// performs. Tracks "files written to the sidecar" by inspecting
+// `sh -c "cat > <path>"` requests, so the test can read back what
+// the handler uploaded.
+//
+// When the entrypoint is invoked (a non-sh command), the fake returns
+// the configured fakeStdout — simulating the handler's response.
+type fakeSidecarExec struct {
+	calls       []session.ExecRequest
+	files       map[string][]byte
+	fakeStdout  []byte
+	fakeExitCode int
+}
+
+func newFakeSidecarExec(stdout []byte) *fakeSidecarExec {
+	return &fakeSidecarExec{files: map[string][]byte{}, fakeStdout: stdout}
+}
+
+func (f *fakeSidecarExec) Exec(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+	f.calls = append(f.calls, req)
+	// `sh -c "cat > <path>"` with stdin → record the file content.
+	if len(req.Cmd) == 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" &&
+		strings.HasPrefix(req.Cmd[2], "cat > ") {
+		path := strings.TrimSpace(strings.TrimPrefix(req.Cmd[2], "cat > "))
+		path = strings.Trim(path, `'`)
+		f.files[path] = append([]byte{}, req.Stdin...)
+		return session.ExecResult{ExitCode: 0}, nil
+	}
+	// `sh -c "rm -rf X && mkdir -p X"` — accept.
+	if len(req.Cmd) == 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" {
+		return session.ExecResult{ExitCode: 0}, nil
+	}
+	// mkdir / chmod — accept.
+	if len(req.Cmd) > 0 && (req.Cmd[0] == "mkdir" || req.Cmd[0] == "chmod") {
+		return session.ExecResult{ExitCode: 0}, nil
+	}
+	// Anything else is the handler entrypoint — return canned output.
+	return session.ExecResult{
+		Stdout:   f.fakeStdout,
+		ExitCode: f.fakeExitCode,
+	}, nil
+}
+
+func TestInstall_HotLoad_PackBuildsAsSidecarRoutedAndExecutesViaSession(t *testing.T) {
 	mktDir := t.TempDir()
-	handler := `#!/usr/bin/env bash
-read -r line
-echo '{"text":"HOT-LOADED"}'
-`
-	_ = scaffoldMarketplace(t, mktDir, map[string]string{"cmd.hot": handler})
+	// Handler body content doesn't matter for this test — the fake
+	// sidecar returns canned stdout for the entrypoint invocation.
+	// We just need the install to materialize a non-empty handler file.
+	_ = scaffoldMarketplace(t, mktDir, map[string]string{"cmd.hot": "#!/usr/bin/env bash\necho '{}'\n"})
 	inst := quietInstaller(t, mktDir)
 	if _, err := inst.Install(context.Background(), "cmd.hot"); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	// The pack should now be in the registry; calling its handler
-	// returns the canned JSON output.
+
+	// Per ADR 038: the registered pack routes through a sidecar.
 	pack, err := inst.packReg.Get("cmd.hot", "")
 	if err != nil {
 		t.Fatalf("registry Get: %v", err)
 	}
-	if pack.Name != "cmd.hot" || pack.Version != "v1" {
-		t.Errorf("got %s@%s, want cmd.hot@v1", pack.Name, pack.Version)
+	if !pack.NeedsSession {
+		t.Errorf("expected NeedsSession=true on marketplace pack")
 	}
-	// Invoke the handler against a minimal ExecutionContext.
+	if pack.SessionSpec.Image == "" {
+		t.Errorf("expected SessionSpec.Image to be set")
+	}
+	// Default sidecar image when manifest has no override.
+	if !strings.Contains(pack.SessionSpec.Image, "marketplace") {
+		t.Errorf("default sidecar should be marketplace image, got %q", pack.SessionSpec.Image)
+	}
+
+	// Invoke the handler against a fake sidecar — should follow the
+	// upload + chmod + run sequence per ADR 038.
+	fake := newFakeSidecarExec([]byte(`{"text":"HOT-LOADED"}`))
 	ec := &packs.ExecutionContext{
 		Pack:   pack,
 		Input:  json.RawMessage(`{"text":"any"}`),
+		Exec:   fake.Exec,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	out, err := pack.Handler(context.Background(), ec)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
-	var parsed struct {
-		Text string `json:"text"`
+
+	// Assert the sequence: at least one mkdir / cleanup, at least one
+	// cat > (handler upload), at least one chmod +x, then run.
+	sawMkdir, sawCat, sawChmod, sawRun := false, false, false, false
+	for _, c := range fake.calls {
+		switch {
+		case len(c.Cmd) == 3 && c.Cmd[0] == "sh" && c.Cmd[1] == "-c" && strings.Contains(c.Cmd[2], "mkdir -p"):
+			sawMkdir = true
+		case len(c.Cmd) == 3 && c.Cmd[0] == "sh" && c.Cmd[1] == "-c" && strings.Contains(c.Cmd[2], "cat > "):
+			sawCat = true
+		case len(c.Cmd) > 0 && c.Cmd[0] == "chmod":
+			sawChmod = true
+		case len(c.Cmd) > 0 && strings.Contains(c.Cmd[0], "helmdeck-pack-"):
+			sawRun = true
+			if string(c.Stdin) != `{"text":"any"}` {
+				t.Errorf("run stdin = %q, want pack input", c.Stdin)
+			}
+		}
 	}
-	if err := json.Unmarshal(out, &parsed); err != nil {
-		t.Fatalf("parse handler output: %v", err)
+	if !sawMkdir {
+		t.Errorf("expected mkdir for remote pack dir")
 	}
-	if parsed.Text != "HOT-LOADED" {
-		t.Errorf("handler output text = %q, want HOT-LOADED", parsed.Text)
+	if !sawCat {
+		t.Errorf("expected cat > to upload handler bytes")
+	}
+	if !sawChmod {
+		t.Errorf("expected chmod +x on the entrypoint")
+	}
+	if !sawRun {
+		t.Errorf("expected handler entrypoint invocation in sidecar")
+	}
+
+	// Handler's output should be the fake stdout passed through verbatim.
+	if string(out) != `{"text":"HOT-LOADED"}` {
+		t.Errorf("handler output = %q, want %q", out, `{"text":"HOT-LOADED"}`)
+	}
+}
+
+func TestInstall_SidecarOverride_HonorsManifestImage(t *testing.T) {
+	// Hand-write a manifest with handler.sidecar.image set.
+	mktDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(mktDir, "packs/cmd.custom"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `name: cmd.custom
+version: v1
+author: tester
+description: A pack that needs a custom sidecar image
+input_schema: {}
+output_schema: {}
+handler:
+  type: command
+  command: ["./handler"]
+  sidecar:
+    image: ghcr.io/some-author/special-toolchain:v1
+`
+	if err := os.WriteFile(filepath.Join(mktDir, "packs/cmd.custom/helmdeck-pack.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mktDir, "packs/cmd.custom/handler"), []byte("#!/bin/bash\necho '{}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	idx := `catalog_version: v1
+packs:
+  - name: cmd.custom
+    version: v1
+    path: packs/cmd.custom
+    description: custom sidecar pack
+    author: tester
+`
+	if err := os.WriteFile(filepath.Join(mktDir, "index.yaml"), []byte(idx), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inst := quietInstaller(t, mktDir)
+	if _, err := inst.Install(context.Background(), "cmd.custom"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	pack, _ := inst.packReg.Get("cmd.custom", "")
+	if pack.SessionSpec.Image != "ghcr.io/some-author/special-toolchain:v1" {
+		t.Errorf("manifest-declared sidecar not honored: got %q", pack.SessionSpec.Image)
 	}
 }
 

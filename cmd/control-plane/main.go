@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -313,6 +314,31 @@ func main() {
 	}
 	packReg := packs.NewPackRegistry()
 	deps.PackRegistry = packReg
+
+	// T812 (#30): install/uninstall plumbing. Defaults the install
+	// dir to ~/.helmdeck/packs (per ADR 034) but operators can
+	// override via HELMDECK_PACKS_DIR. The installer needs both the
+	// marketplace service (for catalog lookups) and the pack
+	// registry (for hot-load), so it's constructed AFTER packReg.
+	if marketplaceSvc != nil {
+		installDir := os.Getenv("HELMDECK_PACKS_DIR")
+		if installDir == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				installDir = filepath.Join(home, ".helmdeck", "packs")
+			}
+		}
+		if installDir != "" {
+			if err := os.MkdirAll(installDir, 0o755); err == nil {
+				deps.MarketplaceInstaller = marketplace.NewInstaller(
+					marketplaceSvc, packReg, installDir,
+					logger.With("subsystem", "marketplace.install"))
+				logger.Info("marketplace installer ready", "install_dir", installDir)
+			} else {
+				logger.Warn("marketplace install dir not creatable; install endpoints disabled",
+					"install_dir", installDir, "err", err)
+			}
+		}
+	}
 
 	engineOpts := []packs.Option{packs.WithRuntime(rt), packs.WithLogger(logger)}
 	var artifactStore packs.ArtifactStore

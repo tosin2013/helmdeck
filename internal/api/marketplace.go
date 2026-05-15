@@ -4,6 +4,8 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/tosin2013/helmdeck/internal/marketplace"
@@ -62,6 +64,78 @@ func registerMarketplaceRoutes(mux *http.ServeMux, deps Deps) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"index": idx,
 			"meta":  meta,
+		})
+	})
+
+	// --- install / uninstall / list-installed (T812 / #30) --------------
+
+	mux.HandleFunc("POST /api/v1/marketplace/install", func(w http.ResponseWriter, r *http.Request) {
+		if deps.MarketplaceInstaller == nil {
+			writeError(w, http.StatusServiceUnavailable, "marketplace_install_disabled",
+				"marketplace install is not configured. Requires HELMDECK_PACKS_DIR to be set.")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_input", err.Error())
+			return
+		}
+		if body.Name == "" {
+			writeError(w, http.StatusBadRequest, "invalid_input",
+				"`name` is required")
+			return
+		}
+		result, err := deps.MarketplaceInstaller.Install(r.Context(), body.Name)
+		if err != nil {
+			if errors.Is(err, marketplace.ErrPackNotInCatalog) {
+				writeError(w, http.StatusNotFound, "pack_not_in_catalog", err.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "install_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("POST /api/v1/marketplace/uninstall", func(w http.ResponseWriter, r *http.Request) {
+		if deps.MarketplaceInstaller == nil {
+			writeError(w, http.StatusServiceUnavailable, "marketplace_install_disabled",
+				"marketplace install is not configured. Requires HELMDECK_PACKS_DIR to be set.")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_input", err.Error())
+			return
+		}
+		if body.Name == "" {
+			writeError(w, http.StatusBadRequest, "invalid_input",
+				"`name` is required")
+			return
+		}
+		if err := deps.MarketplaceInstaller.Uninstall(r.Context(), body.Name); err != nil {
+			if errors.Is(err, marketplace.ErrPackNotInstalled) {
+				writeError(w, http.StatusNotFound, "pack_not_installed", err.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "uninstall_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "uninstalled", "name": body.Name})
+	})
+
+	mux.HandleFunc("GET /api/v1/marketplace/installed", func(w http.ResponseWriter, r *http.Request) {
+		if deps.MarketplaceInstaller == nil {
+			writeError(w, http.StatusServiceUnavailable, "marketplace_install_disabled",
+				"marketplace install is not configured. Requires HELMDECK_PACKS_DIR to be set.")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"installed": deps.MarketplaceInstaller.Installed(),
 		})
 	})
 }

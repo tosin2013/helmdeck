@@ -49,6 +49,7 @@ func LoadCustomOpenAIProviders(reg *Registry, logger *slog.Logger) {
 	loadOpenRouter(reg, logger)
 	LoadGroqProvider(reg, logger)
 	loadMistral(reg, logger)
+	loadFireworks(reg, logger)
 }
 
 func loadOpenRouter(reg *Registry, logger *slog.Logger) {

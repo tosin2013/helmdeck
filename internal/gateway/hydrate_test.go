@@ -16,10 +16,10 @@ import (
 // list it returns and the decrypt outcomes by id, so tests can
 // stage exactly the rows they need without booting a real database.
 type stubKeystore struct {
-	rows     []KeystoreRecord
-	plain    map[string]string // id → plaintext
-	decErr   map[string]error  // id → decrypt error
-	listErr  error
+	rows    []KeystoreRecord
+	plain   map[string]string // id → plaintext
+	decErr  map[string]error  // id → decrypt error
+	listErr error
 }
 
 func (s *stubKeystore) List(ctx context.Context, provider string) ([]KeystoreRecord, error) {
@@ -187,10 +187,19 @@ func TestLoadCustomOpenAIProviders_NoEnvIsNoop(t *testing.T) {
 	// Make sure no env vars are set in this subtest's environment.
 	t.Setenv("HELMDECK_OPENROUTER_API_KEY", "")
 	t.Setenv("HELMDECK_OPENROUTER_API_KEY_FILE", "")
+	t.Setenv("HELMDECK_GROQ_API_KEY", "")
+	t.Setenv("HELMDECK_GROQ_API_KEY_FILE", "")
+	t.Setenv("HELMDECK_MISTRAL_API_KEY", "")
+	t.Setenv("HELMDECK_MISTRAL_API_KEY_FILE", "")
+	t.Setenv("HELMDECK_FIREWORKS_API_KEY", "")
+	t.Setenv("HELMDECK_FIREWORKS_API_KEY_FILE", "")
 	reg := NewRegistry()
 	LoadCustomOpenAIProviders(reg, silentLogger())
 	if _, ok := reg.Get("openrouter"); ok {
 		t.Error("openrouter should not be registered with no env var")
+	}
+	if _, ok := reg.Get("fireworks"); ok {
+		t.Error("fireworks should not be registered with no env var")
 	}
 }
 

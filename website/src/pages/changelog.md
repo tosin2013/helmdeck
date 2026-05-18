@@ -22,6 +22,9 @@ and the hard exit gates for each — see
 - `HELMDECK_PEXELS_API_KEY` now auto-hydrates into the credential vault under `pexels-key` on startup — the v0.13.0 `stock.search` CHANGELOG advertised this behavior but the entry in `internal/vault/hydrate.go` was missed. Operators who set the env var no longer have to POST a credential by hand to get the vault rotation/audit story working, and `stock.search`'s `credential:` input override now resolves through the vault path as documented. (#230)
 - `compose.firecrawl.yml` healthcheck for the `firecrawl` service now probes via `node -e` instead of `wget`. The upstream `ghcr.io/firecrawl/firecrawl:latest` image ships only `node` (no `wget`, no `curl`), so every prior healthcheck invocation hit `exit 127` and the container reported `unhealthy` indefinitely despite serving traffic correctly. Real Firecrawl outages were invisible because the steady-state false negative looked identical to a real failure. (#231)
 
+### Changed
+- Every npm/corepack package installed globally in `deploy/docker/sidecar*.Dockerfile` is now pinned to an exact `ARG <NAME>_VERSION=x.y.z` (no `@latest`, `@stable`, `^x.y`, `~x.y`). Affects `@playwright/mcp`, `@mermaid-js/mermaid-cli`, `pnpm`, `yarn`, `typescript`, `ts-node`, `eslint`, `prettier`, `vitest`, and the previously-caret-pinned `hyperframes` (now exact `0.6.7`). T-2 of ADR 037's migration plan; together with the Dependabot config from #240, every pinned dep now has a delivery mechanism for proposed upgrades that runs the full CI matrix. No functional change — same versions, just declared explicitly so a typosquat or yanked release fails the build instead of shipping silently. (#213)
+
 ## [0.13.0] - 2026-05-15
 
 **Theme:** Marketplace beta — discover, install, and run community packs from a signed catalog.

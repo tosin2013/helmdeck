@@ -13,6 +13,19 @@
 ARG BASE_IMAGE=ghcr.io/tosin2013/helmdeck-sidecar:latest
 FROM ${BASE_IMAGE}
 
+# Pinned tool versions (ADR 037 #213). Every package manager and npm
+# tool installed globally in this Dockerfile has its own ARG so
+# Dependabot can target the pin and so the build fails loud if the
+# upstream rename-squats or yanks. Do NOT replace any of these with
+# `@latest` / `@stable` / `^x` / `~x`.
+ARG PNPM_VERSION=11.1.2
+ARG YARN_VERSION=4.14.1
+ARG TYPESCRIPT_VERSION=6.0.3
+ARG TS_NODE_VERSION=10.9.2
+ARG ESLINT_VERSION=10.4.0
+ARG PRETTIER_VERSION=3.8.3
+ARG VITEST_VERSION=4.1.6
+
 USER root
 
 # Node 20 LTS via NodeSource. Debian's packaged node is several
@@ -27,19 +40,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # pnpm + yarn alongside the bundled npm so package.json scripts work
 # regardless of which package manager the cloned repo uses. corepack
 # ships with node and is the official path for managing pnpm/yarn
-# without polluting the global npm namespace.
+# without polluting the global npm namespace. Pin yarn to its 4.x
+# Berry stream — Yarn 1.x (legacy) is npm-distributed and not what
+# corepack prepares.
 RUN corepack enable \
- && corepack prepare pnpm@latest --activate \
- && corepack prepare yarn@stable --activate
+ && corepack prepare "pnpm@${PNPM_VERSION}" --activate \
+ && corepack prepare "yarn@${YARN_VERSION}" --activate
 
 # Common dev tools installed globally so the LLM doesn't have to
 # install them per session.
 RUN npm install -g --no-fund --no-audit \
-      typescript \
-      ts-node \
-      eslint \
-      prettier \
-      vitest
+      "typescript@${TYPESCRIPT_VERSION}" \
+      "ts-node@${TS_NODE_VERSION}" \
+      "eslint@${ESLINT_VERSION}" \
+      "prettier@${PRETTIER_VERSION}" \
+      "vitest@${VITEST_VERSION}"
 
 USER helmdeck
 WORKDIR /home/helmdeck

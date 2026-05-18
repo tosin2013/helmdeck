@@ -21,10 +21,12 @@ FROM ${BASE_IMAGE}
 
 USER root
 
-# HyperFrames pinned via npm semver. ^0.6 floats patch within the
-# current minor; bump to a fresh major deliberately so the CLI surface
-# (flag names, project layout) doesn't shift under us silently.
-ARG HYPERFRAMES_VERSION=^0.6.7
+# HyperFrames pinned exactly per ADR 037 #213 (no `^` / `~` / `@latest`).
+# Caret-pinning floats patch-within-minor, which is exactly what bit
+# us in the upstream-rename incident this ADR was written to prevent.
+# Dependabot proposes patch bumps as PRs that exercise the full build
+# (the sentinel below is the second line of defense).
+ARG HYPERFRAMES_VERSION=0.6.7
 
 # Layer 1 — Node 22.
 #

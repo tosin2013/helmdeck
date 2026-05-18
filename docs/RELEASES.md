@@ -474,6 +474,47 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 ---
 
+## v0.13.1 — Post-v0.13.0 cleanup (target: 2026-05-25) {#v0131}
+
+**Theme:** Bug-cleanup release. No feature changes.
+
+**Ships:**
+
+- [#229](https://github.com/tosin2013/helmdeck/issues/229) — `deploy/compose/.env.example` missing `HELMDECK_FAL_KEY` and `HELMDECK_PEXELS_API_KEY`
+- [#230](https://github.com/tosin2013/helmdeck/issues/230) — pexels-key vault auto-hydration missing (CHANGELOG advertises it, `internal/vault/hydrate.go` doesn't register it)
+- [#231](https://github.com/tosin2013/helmdeck/issues/231) — `compose.firecrawl.yml` healthcheck uses `wget` against an image with neither `wget` nor `curl`
+- [#232](https://github.com/tosin2013/helmdeck/issues/232) — `repo.fetch`'s `clone_path` invisible to subsequent `fs.*` / `cmd.run` / `repo.map` calls
+
+**Out:**
+
+- Anything feature-level. Patch-release discipline — same shape as [v0.12.1](#v0121).
+
+**Discipline call:** [#231](https://github.com/tosin2013/helmdeck/issues/231) is the first to defer if v0.13.1 needs to ship faster than expected — it affects health UI only, not request serving.
+
+---
+
+## v0.14.0 — Autonomous code-fix + ADR 037 fully enforced (target: TBD) {#v0140}
+
+**Theme:** `swe.solve` headline + close out [ADR 037](adrs/037-upstream-package-version-management.md) across every sidecar Dockerfile.
+
+**Ships:**
+
+- `swe.solve` epic — Phase 1 (`HelmdeckEnvironment` adapter) + Phase 3 (`swe.solve` Go pack handler) only
+- [#212](https://github.com/tosin2013/helmdeck/issues/212) — T-1 (ADR 037): add `.github/dependabot.yml`
+- [#213](https://github.com/tosin2013/helmdeck/issues/213) — T-2 (ADR 037): replace remaining `@latest` / unpinned tools in sidecar Dockerfiles
+- [#214](https://github.com/tosin2013/helmdeck/issues/214) — T-3 (ADR 037): add CLI-surface sentinels to every sidecar Dockerfile
+- [#215](https://github.com/tosin2013/helmdeck/issues/215) — T-4 (ADR 037): document pin + sentinel requirement for new sidecars
+
+**Out:**
+
+- `swe.solve` Phases 4–8 (trajectory storage in Garage S3, OTel spans per agent step, GitHub-webhook auto-trigger via ADR 033, A2A skill exposure via ADR 026, procedural-memory pack promotion via ADR 029). Each opens as its own follow-up issue after Phase 3 lands. Phases 4–8 lean on ADRs currently `Status: Proposed` — premature to commit.
+
+**Discipline call:** the four ADR 037 followups form a quad. Landing only 2 of 4 leaves the discipline half-enforced. If one slips, slip all four to v0.14.1.
+
+**Blocked by:** [#232](https://github.com/tosin2013/helmdeck/issues/232) — Phase 3 of `swe.solve` requires `repo.fetch → fs.*` working in a session.
+
+---
+
 ## v1.0.0-rc1 — Kubernetes preview (planned) {#v100rc1}
 
 **Theme:** "Helm install works; production hardening pending."

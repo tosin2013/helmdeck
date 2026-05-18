@@ -37,8 +37,17 @@ import (
 //	  "commit":      "abc1234...",
 //	  "credential":  "github-token",
 //	  "files":       42,
-//	  "clone_path":  "/tmp/helmdeck-clone-<rand>"
+//	  "clone_path":  "/tmp/helmdeck-clone-<rand>",
+//	  "session_id":  "abcdef-1234-..."
 //	}
+//
+// The `session_id` field is the same value the engine surfaces on the
+// Result envelope (`Result.SessionID`). It is duplicated into the
+// pack output so callers reading `clone_path` cannot miss it — the
+// follow-on packs (`fs.*`, `cmd.run`, `git.commit`, `repo.push`) MUST
+// pass it back as `_session_id` in their input or the engine will
+// spin up a fresh session whose `/tmp` does not contain this clone.
+// See issue #232 for the failure mode.
 //
 // URL forms accepted:
 //
@@ -69,7 +78,7 @@ func RepoFetch(v *vault.Store, eg *security.EgressGuard) *packs.Pack {
 			},
 		},
 		OutputSchema: packs.BasicSchema{
-			Required: []string{"url", "commit", "clone_path"},
+			Required: []string{"url", "commit", "clone_path", "session_id"},
 			Properties: map[string]string{
 				"url":            "string",
 				"ref":            "string",
@@ -77,6 +86,7 @@ func RepoFetch(v *vault.Store, eg *security.EgressGuard) *packs.Pack {
 				"credential":     "string",
 				"files":          "number",
 				"clone_path":     "string",
+				"session_id":     "string",
 				"tree":           "array",
 				"tree_total":     "number",
 				"tree_truncated": "boolean",
@@ -225,13 +235,21 @@ func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFun
 		// script does not) on top of the script's envelope. Script
 		// fields win for anything it computed; handler fields fill
 		// in only what the script could not know.
-		out := make(map[string]any, len(envelope)+3)
+		out := make(map[string]any, len(envelope)+4)
 		for k, v := range envelope {
 			out[k] = v
 		}
 		out["url"] = in.URL
 		out["ref"] = ref
 		out["credential"] = credentialName
+		// Issue #232: surface session_id alongside clone_path. The same
+		// value is on Result.SessionID (the engine envelope), but agents
+		// that read only `output` miss it there. Putting it next to
+		// clone_path inside `output` makes the trap impossible: anything
+		// that consumes clone_path sees session_id in the same object.
+		if ec.Session != nil {
+			out["session_id"] = ec.Session.ID
+		}
 		return json.Marshal(out)
 	}
 }

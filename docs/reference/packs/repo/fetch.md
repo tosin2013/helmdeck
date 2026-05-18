@@ -27,6 +27,7 @@ What sets `repo.fetch` apart from a plain `git clone` shell call is the **contex
 | `ref` | `string` | Resolved ref. |
 | `commit` | `string` | HEAD SHA after the clone (and post-checkout if `ref` was set). |
 | `clone_path` | `string` | `/tmp/helmdeck-clone-<rand>`. Pass this back as `clone_path` to every follow-up `fs.*` / `cmd.run` / `git.*` / `repo.push` call, **plus** propagate `_session_id` (see Session chaining). |
+| `session_id` | `string` | **Issue #232.** The session container the clone lives in. Pass this as `_session_id` in every follow-up pack call — otherwise the engine spins up a fresh session whose `/tmp` does not contain this clone, and `fs.read` / `cmd.run` will see "No such file" errors. This value also appears on the response envelope as `session_id`; it's duplicated here so it can't be missed by callers reading only `output`. |
 | `credential` | `string` | Vault record name actually used (or `""` for public clones). |
 | `files` | `number` | Total `git ls-files` count. |
 | `tree` | `array` | Up to 300 relative paths. Sorted. |

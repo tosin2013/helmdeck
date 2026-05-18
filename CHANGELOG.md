@@ -11,6 +11,9 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Fixed
+- `repo.fetch` now surfaces `session_id` inside its `output` (not only on the response envelope), so follow-on packs (`fs.*`, `cmd.run`, `git.*`, `repo.push`) can find the value adjacent to `clone_path`. Without this, callers reading only `output.clone_path` missed the session_id on the envelope, then issued follow-up calls without `_session_id`, which made the engine spin up a fresh session whose `/tmp` did not contain the clone — surfacing as silent empty results (`fs.list`, `repo.map`) or `cannot open` errors (`fs.read`, `cmd.run`). New `internal/packs/builtin/session_reuse_integration_test.go` (build-tagged `integration`) pins the cross-pack session reuse contract against a real Docker daemon so this can't silently regress. (#232)
+
 ## [0.13.0] - 2026-05-15
 
 **Theme:** Marketplace beta — discover, install, and run community packs from a signed catalog.

@@ -25,7 +25,7 @@ jobs:
     name: gitleaks secret scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # gitleaks scans commit history, not just the working tree,
           # so the default shallow clone would miss historical leaks.

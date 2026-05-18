@@ -1,0 +1,125 @@
+# Dependabot configuration — T-1 of ADR 037's migration plan (#212).
+#
+# Wires Dependabot for every dependency surface helmdeck exposes:
+#
+#   - gomod          — Go modules in go.mod / go.sum
+#   - docker         — base-image FROM bumps in deploy/docker/*.Dockerfile
+#   - npm (root)     — top-level package.json (Node toolchain in CI / scripts)
+#   - npm (web)      — Management UI Vite/React app
+#   - npm (website)  — Docusaurus site
+#   - npm (npm/)     — published @helmdeck/* tool wrappers
+#   - github-actions — workflow `uses:` pins
+#
+# What this does NOT cover: per-Dockerfile `ARG TOOL_VERSION=x.y.z` patterns
+# (e.g. `npm install -g hyperframes@0.6.7` inside a Dockerfile RUN). Dependabot's
+# npm parser reads package.json, not Dockerfile ARGs. T-3 (#214, CLI-surface
+# sentinels) catches the case where one of those pins is wrong or unpinned —
+# the build fails loud before the image ships. If T-3's coverage is later judged
+# insufficient, the follow-up is a `tools/versions.json` companion file
+# Dependabot can target (tracked as T-1b if needed).
+#
+# Schedule: weekly Monday 09:00 UTC. Groups per ecosystem so a quiet week
+# generates one PR per surface rather than many isolated PRs. No auto-merge —
+# every Dependabot PR runs the full CI matrix (including T-3 sentinels) so
+# breaking changes surface as a failed build and the maintainer's review focuses
+# on intent, not mechanical bumps.
+
+version: 2
+updates:
+  # Go modules
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      go-deps:
+        patterns:
+          - "*"
+
+  # Container base images (sidecar + control-plane + helmdeck-mcp Dockerfiles)
+  - package-ecosystem: docker
+    directory: "/deploy/docker"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      docker-images:
+        patterns:
+          - "*"
+
+  # Root package.json — Node toolchain used by repo scripts / CI helpers
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      root-npm:
+        patterns:
+          - "*"
+
+  # Management UI (Vite/React app)
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      web-npm:
+        patterns:
+          - "*"
+
+  # Docusaurus site
+  - package-ecosystem: npm
+    directory: "/website"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      website-npm:
+        patterns:
+          - "*"
+
+  # @helmdeck/* npm wrappers
+  - package-ecosystem: npm
+    directory: "/npm"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      npm-wrappers:
+        patterns:
+          - "*"
+
+  # GitHub Actions — workflow `uses:` SHA / version pins
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"

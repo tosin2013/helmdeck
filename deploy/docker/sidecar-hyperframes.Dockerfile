@@ -50,17 +50,16 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 RUN npm install -g --no-fund --no-audit "hyperframes@${HYPERFRAMES_VERSION}" \
  && npm cache clean --force
 
-# CLI-surface sentinels (ADR 037 #214). The flag-greps below track the
-# names internal/packs/builtin/hyperframes_render.go passes to
-# `hyperframes render` by name (--resolution, --fps, --quality,
-# --output). A flag rename in an upstream release fails the image
-# build, not the first render call — which is exactly the failure
-# mode this ADR was written to prevent.
-RUN hyperframes --version \
- && hyperframes render --help 2>&1 | grep -q -- '--resolution' \
- && hyperframes render --help 2>&1 | grep -q -- '--fps' \
- && hyperframes render --help 2>&1 | grep -q -- '--quality' \
- && hyperframes render --help 2>&1 | grep -q -- '--output'
+# Install smoke (ADR 037 #214). Cheap `--version` check that catches
+# a yanked release, a typo-squat, or a flat-out missing install at
+# `docker build` time. The richer flag-by-flag CLI-surface assertion
+# — does `hyperframes render --help` document every flag
+# hyperframes_render.go passes by name (--resolution, --fps, --quality,
+# --output)? — runs in the Go test at
+# internal/packs/builtin/cli_surface_invariant_test.go against the
+# built image. See the equivalent comment in sidecar.Dockerfile for
+# the rationale.
+RUN hyperframes --version
 
 USER helmdeck
 WORKDIR /home/helmdeck

@@ -200,3 +200,67 @@ func TestHydrateFromEnv_NoEnvVarIsNoOp(t *testing.T) {
 		t.Errorf("expected ErrNotFound for elevenlabs-key, got %v", err)
 	}
 }
+
+// TestWellKnownEnvCredentials_PexelsRegistered guards against the
+// v0.13.0 cycle's #230 regression: stock.search's CHANGELOG advertised
+// HELMDECK_PEXELS_API_KEY auto-hydration, but the entry was missed in
+// internal/vault/hydrate.go. This test reads the registry directly so
+// even if HydrateFromEnv's iteration logic changes, the contract that
+// pexels-key is a recognized credential stays pinned.
+func TestWellKnownEnvCredentials_PexelsRegistered(t *testing.T) {
+	var got *EnvCredential
+	for i := range WellKnownEnvCredentials {
+		if WellKnownEnvCredentials[i].EnvVar == "HELMDECK_PEXELS_API_KEY" {
+			got = &WellKnownEnvCredentials[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("HELMDECK_PEXELS_API_KEY not registered in WellKnownEnvCredentials (#230 regression)")
+	}
+	if got.Name != "pexels-key" {
+		t.Errorf("Name = %q, want %q", got.Name, "pexels-key")
+	}
+	if got.HostPattern != "api.pexels.com" {
+		t.Errorf("HostPattern = %q, want %q", got.HostPattern, "api.pexels.com")
+	}
+	if got.Type != TypeAPIKey {
+		t.Errorf("Type = %q, want TypeAPIKey", got.Type)
+	}
+	if got.EnvVarFile != "HELMDECK_PEXELS_API_KEY_FILE" {
+		t.Errorf("EnvVarFile = %q, want HELMDECK_PEXELS_API_KEY_FILE", got.EnvVarFile)
+	}
+}
+
+// TestHydrateFromEnv_PexelsKey is the end-to-end version of the
+// registry test above: with HELMDECK_PEXELS_API_KEY set, the env-hydrate
+// pass creates a pexels-key credential under the documented host
+// pattern with env-hydrate provenance.
+func TestHydrateFromEnv_PexelsKey(t *testing.T) {
+	v := newTestStore(t)
+	ctx := context.Background()
+	c, _, _ := v.HydrateFromEnv(ctx, quietLogger(), stubLookup(map[string]string{
+		"HELMDECK_PEXELS_API_KEY": "pexels-fake-token",
+	}))
+	if c == 0 {
+		t.Fatalf("created counter = %d, want ≥1 (pexels-key should be a fresh insert)", c)
+	}
+	rec, err := v.GetByName(ctx, "pexels-key")
+	if err != nil {
+		t.Fatalf("get pexels-key: %v", err)
+	}
+	if rec.HostPattern != "api.pexels.com" {
+		t.Errorf("host_pattern = %q, want api.pexels.com", rec.HostPattern)
+	}
+	if got, _ := rec.Metadata["source"].(string); got != "env-hydrate" {
+		t.Errorf("metadata.source = %q, want env-hydrate", got)
+	}
+	// Wildcard grant: any caller can resolve, matching the elevenlabs/fal pattern.
+	res, err := v.ResolveByName(ctx, Actor{Subject: "any-caller"}, "pexels-key")
+	if err != nil {
+		t.Fatalf("resolve pexels-key: %v", err)
+	}
+	if string(res.Plaintext) != "pexels-fake-token" {
+		t.Errorf("plaintext = %q, want pexels-fake-token", string(res.Plaintext))
+	}
+}

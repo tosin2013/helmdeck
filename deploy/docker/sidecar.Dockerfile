@@ -143,6 +143,32 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && npm cache clean --force \
  && rm -rf /var/lib/apt/lists/* /root/.npm
 
+# Layer 4c — CLI-surface sentinels (ADR 037 #214). Each grep -q below
+# tracks a flag helmdeck packs pass by name to the corresponding
+# binary. A flag rename in an upstream release fails THIS layer of
+# the image build, surfacing the breakage at docker build time
+# instead of at first pack invocation. Keep in sync with:
+#   internal/packs/builtin/slides_render.go   (marp argv)
+#   internal/packs/builtin/slides_narrate.go  (marp + ffmpeg argv)
+#
+# @playwright/mcp is invoked from sidecar-entrypoint.sh via npx and
+# uses --cdp-endpoint / --host / --port / --allowed-hosts / --headless.
+# The npx invocation currently pulls @latest at runtime (separate
+# bug; ADR 037 violation in the entrypoint script); fixing that
+# entrypoint and adding the corresponding flag-greps is a follow-up.
+# Here we just verify the pinned global install resolved.
+RUN marp --version \
+ && marp --help 2>&1 | grep -q -- '--stdin' \
+ && marp --help 2>&1 | grep -q -- '--allow-local-files' \
+ && marp --help 2>&1 | grep -q -- '--theme-set' \
+ && marp --help 2>&1 | grep -q -- '--images' \
+ && marp --help 2>&1 | grep -q -- '--pdf' \
+ && marp --help 2>&1 | grep -q -- '--pptx' \
+ && marp --help 2>&1 | grep -q -- '--html' \
+ && mmdc --version \
+ && ffmpeg -version >/dev/null \
+ && node -e "require.resolve('@playwright/mcp/package.json')"
+
 # Layer 5 — non-root user, runtime dirs, entrypoint
 RUN groupadd --system --gid 1000 helmdeck \
  && useradd  --system --uid 1000 --gid helmdeck --shell /bin/bash --create-home helmdeck \

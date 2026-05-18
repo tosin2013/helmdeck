@@ -50,9 +50,17 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 RUN npm install -g --no-fund --no-audit "hyperframes@${HYPERFRAMES_VERSION}" \
  && npm cache clean --force
 
-# Sanity check: hyperframes resolves and reports a version. Fails the
-# image build (not container startup) if the install didn't land.
-RUN hyperframes --version
+# CLI-surface sentinels (ADR 037 #214). The flag-greps below track the
+# names internal/packs/builtin/hyperframes_render.go passes to
+# `hyperframes render` by name (--resolution, --fps, --quality,
+# --output). A flag rename in an upstream release fails the image
+# build, not the first render call — which is exactly the failure
+# mode this ADR was written to prevent.
+RUN hyperframes --version \
+ && hyperframes render --help 2>&1 | grep -q -- '--resolution' \
+ && hyperframes render --help 2>&1 | grep -q -- '--fps' \
+ && hyperframes render --help 2>&1 | grep -q -- '--quality' \
+ && hyperframes render --help 2>&1 | grep -q -- '--output'
 
 USER helmdeck
 WORKDIR /home/helmdeck

@@ -42,6 +42,17 @@ RUN pip3 install --break-system-packages --no-cache-dir \
       pyyaml \
       rich
 
+# CLI-surface sentinels (ADR 037 #214). The python-sidecar tools are
+# invoked by users via the python.run pack, not by helmdeck Go pack
+# argv, so the sentinel just verifies each pinned tool resolves and
+# reports its version. A bad install or a yanked upstream fails the
+# image build, not the first python.run call.
+RUN python3 --version \
+ && pip3 --version \
+ && pytest --version \
+ && ruff --version \
+ && mypy --version
+
 USER helmdeck
 WORKDIR /home/helmdeck
 

@@ -56,6 +56,19 @@ RUN npm install -g --no-fund --no-audit \
       "prettier@${PRETTIER_VERSION}" \
       "vitest@${VITEST_VERSION}"
 
+# CLI-surface sentinels (ADR 037 #214). The node-sidecar tools are
+# invoked by users via the node.run pack, not by helmdeck Go pack
+# argv, so the sentinel just verifies each pinned tool resolves and
+# reports its version. A bad install or a yanked upstream fails the
+# image build, not the first node.run call.
+RUN pnpm --version \
+ && yarn --version \
+ && tsc --version \
+ && ts-node --version \
+ && eslint --version \
+ && prettier --version \
+ && vitest --version
+
 USER helmdeck
 WORKDIR /home/helmdeck
 

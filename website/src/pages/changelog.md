@@ -18,6 +18,7 @@ and the hard exit gates for each — see
 
 ### Fixed
 - `repo.fetch` now surfaces `session_id` inside its `output` (not only on the response envelope), so follow-on packs (`fs.*`, `cmd.run`, `git.*`, `repo.push`) can find the value adjacent to `clone_path`. Without this, callers reading only `output.clone_path` missed the session_id on the envelope, then issued follow-up calls without `_session_id`, which made the engine spin up a fresh session whose `/tmp` did not contain the clone — surfacing as silent empty results (`fs.list`, `repo.map`) or `cannot open` errors (`fs.read`, `cmd.run`). New `internal/packs/builtin/session_reuse_integration_test.go` (build-tagged `integration`) pins the cross-pack session reuse contract against a real Docker daemon so this can't silently regress. (#232)
+- `deploy/compose/.env.example` now documents `HELMDECK_ELEVENLABS_API_KEY`, `HELMDECK_FAL_KEY`, and `HELMDECK_PEXELS_API_KEY`. These keys have first-class vault auto-hydration (or will once #230 lands for pexels) but were absent from the example file an operator copies on first install, so the only way to discover them was via a CHANGELOG entry or a pack's "key not found" error message. (#229)
 
 ## [0.13.0] - 2026-05-15
 

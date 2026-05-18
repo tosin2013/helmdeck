@@ -69,6 +69,21 @@ var WellKnownEnvCredentials = []EnvCredential{
 		Type:        TypeAPIKey,
 		HostPattern: "fal.run",
 	},
+	{
+		// Pexels key — stock.search (#217, v0.13.0). The CHANGELOG
+		// advertised "auto-hydrates as pexels-key" but the entry was
+		// missed in the v0.13.0 cycle (#230). Without it, an operator
+		// who sets HELMDECK_PEXELS_API_KEY in .env.local never sees a
+		// pexels-key in the vault — stock.search still works via the
+		// env-fallback path inside resolvePexelsKey(), but the vault
+		// rotation/audit story is broken and the credential: input
+		// override silently falls through to env.
+		EnvVar:      "HELMDECK_PEXELS_API_KEY",
+		EnvVarFile:  "HELMDECK_PEXELS_API_KEY_FILE",
+		Name:        "pexels-key",
+		Type:        TypeAPIKey,
+		HostPattern: "api.pexels.com",
+	},
 }
 
 // EnvLookup is the function shape HydrateFromEnv calls to resolve an

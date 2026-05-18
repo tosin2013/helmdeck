@@ -103,7 +103,7 @@ normal pack outcome and the LLM can branch on `exit_code` directly.
 
 ## Adding a new language
 
-Adding Rust, Go, Ruby, Java, or anything else is a four-file change:
+Adding Rust, Go, Ruby, Java, or anything else is a six-step change:
 
 1. **Dockerfile** — `deploy/docker/sidecar-<lang>.Dockerfile`. Copy
    one of the existing two and replace the apt/install lines. The
@@ -117,10 +117,38 @@ Adding Rust, Go, Ruby, Java, or anything else is a four-file change:
    and the `<lang>SidecarImage()` helper.
 4. **Registration** — register the new pack in
    `cmd/control-plane/main.go` next to `PythonRun()`/`NodeRun()`.
+5. **Pin every upstream tool exactly** per
+   [ADR 037](adrs/037-upstream-package-version-management.md).
+   Floating refs (`@latest`, `@stable`, `^x.y.z`, `~x.y.z`) are
+   forbidden in production Dockerfiles. Use the
+   `ARG <NAME>_VERSION=x.y.z` convention so Dependabot's regex can
+   target the pin. See `deploy/docker/sidecar-node.Dockerfile` for
+   a worked example covering both `corepack prepare` (`pnpm`,
+   `yarn`) and `npm install -g` (`typescript`, `eslint`, etc.).
+6. **Sentinel every CLI flag the Go pack passes by name** at the
+   bottom of the Dockerfile, per ADR 037 T-3. Pattern:
+   ```dockerfile
+   RUN <tool> --version \
+    && <tool> <subcommand> --help 2>&1 | grep -q -- '--<flag>' \
+    && ...
+   ```
+   Add a comment naming the Go file each sentinel tracks so future
+   readers can update both together. See
+   `deploy/docker/sidecar-hyperframes.Dockerfile` (`--resolution`,
+   `--fps`, `--quality`, `--output` for `hyperframes render`) for
+   the canonical example — that's the exact pattern that would
+   have caught the hyperframes-npm-pin incident at `docker build`
+   time instead of the first render call.
 
 The shared helpers (`runWithCwd`, `validateLangRunInput`,
 `marshalLangRunResult`) are reusable across every language pack — you
 shouldn't have to copy any of them.
+
+Once steps 5 and 6 are in place, Dependabot (configured in
+`.github/dependabot.yml`) opens weekly PRs proposing version bumps
+that exercise the full CI matrix — including your sentinels. A
+rename-squat or yanked release fails the build instead of shipping
+silently.
 
 If you'd rather **request** a language than build one yourself, file
 an issue using the **"Sidecar language request"** template at

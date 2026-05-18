@@ -210,6 +210,45 @@ To wire `make check` into `git push`, run `make install-hooks` once in
 your clone. This is opt-in — it sets `core.hooksPath` to the project's
 `.githooks/` directory and only affects your local copy.
 
+### Building a new sidecar or adding a CLI dependency
+
+Every Dockerfile under `deploy/docker/` follows two rules from
+[ADR 037](docs/adrs/037-upstream-package-version-management.md). They
+came out of the v0.13.0-cycle incident where `@hyperframes/cli@1.4.0`
+(a package that has never existed) almost shipped — the rules turn
+that class of bug from "production incident" into "`docker build`
+failure":
+
+1. **Pin every upstream tool exactly.** No `@latest`, `@stable`,
+   `^x.y.z`, or `~x.y.z` in production Dockerfiles. Use the
+   `ARG <NAME>_VERSION=x.y.z` convention at the top of the file so
+   `.github/dependabot.yml` can target the pin and propose updates as
+   PRs that exercise the full CI matrix. Example:
+   ```dockerfile
+   ARG HYPERFRAMES_VERSION=0.6.7
+   ...
+   RUN npm install -g "hyperframes@${HYPERFRAMES_VERSION}"
+   ```
+
+2. **Sentinel every CLI flag the Go pack passes by name.** At the
+   bottom of the Dockerfile, add a `RUN` layer that asserts the
+   binary resolves *and* that the flags helmdeck passes to it still
+   exist in the installed version's `--help` output. Example:
+   ```dockerfile
+   RUN hyperframes --version \
+    && hyperframes render --help 2>&1 | grep -q -- '--resolution' \
+    && hyperframes render --help 2>&1 | grep -q -- '--fps'
+   # Keep in sync with: internal/packs/builtin/hyperframes_render.go
+   ```
+   A renamed or removed flag fails `docker build`, not the first
+   real-world pack invocation. The keep-in-sync comment names the Go
+   file the sentinel tracks so a future flag-rename refactor knows
+   to update both.
+
+The full pattern for a new language sidecar (Dockerfile structure,
+pack code, Makefile target) is in
+[`docs/SIDECAR-LANGUAGES.md` §"Adding a new language"](docs/SIDECAR-LANGUAGES.md#adding-a-new-language).
+
 ## Reporting security issues
 
 Security-relevant bugs (auth bypass, sandbox escape, vault leak,

@@ -167,9 +167,26 @@ services:
       firecrawl-playwright:
         condition: service_started
     healthcheck:
-      # /v1/health is Firecrawl's liveness endpoint; on older builds
-      # `/` returns 200 with "SCRAPERS-JS: Hello, world!" as a fallback.
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3002/v1/health >/dev/null 2>&1 || wget -qO- http://localhost:3002/ >/dev/null 2>&1 || exit 1"]
+      # NOTE: the upstream firecrawl image ships only `node` — no `wget`, no
+      # `curl`, no `nc`. A wget/curl-shaped healthcheck exits 127 ("command
+      # not found") and the service is permanently marked `unhealthy` even
+      # though `/` serves traffic correctly (issue #231). Probe via node
+      # since it's the runtime and is guaranteed to be present.
+      #
+      # /v1/health is Firecrawl's liveness endpoint on newer builds; older
+      # builds return 200 on `/` with "SCRAPERS-JS: Hello, world!". Accept
+      # any 2xx–4xx on either path: a routing layer responding at all is
+      # enough to count the service as up.
+      #
+      # Same caveat applies to any future firecrawl-* services in this
+      # overlay (firecrawl-playwright doesn't have a healthcheck today,
+      # but if you add one, do NOT use wget/curl).
+      test:
+        - CMD-SHELL
+        - |
+          node -e "const http=require('http');
+          const probe=p=>new Promise(r=>{const q=http.get({host:'localhost',port:3002,path:p,timeout:3000},x=>r(x.statusCode>=200&&x.statusCode<500));q.on('error',()=>r(false));q.on('timeout',()=>{q.destroy();r(false);});});
+          (async()=>{process.exit((await probe('/v1/health')||await probe('/'))?0:1);})();"
       interval: 10s
       timeout: 5s
       retries: 6

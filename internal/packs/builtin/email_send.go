@@ -15,9 +15,34 @@ import (
 	"github.com/tosin2013/helmdeck/internal/vault"
 )
 
-const (
-	resendAPIBase = "https://api.resend.com"
-)
+type emailSender interface {
+	SendEmail(ctx context.Context, req *resend.SendEmailRequest) (*resend.SendEmailResponse, error)
+	ListDomains(ctx context.Context) (resend.ListDomainsResponse, error)
+}
+
+type resendService struct {
+	client *resend.Client
+}
+
+func (r *resendService) SendEmail(ctx context.Context, req *resend.SendEmailRequest) (*resend.SendEmailResponse, error) {
+	return r.client.Emails.SendWithContext(ctx, req)
+}
+
+func (r *resendService) ListDomains(ctx context.Context) (resend.ListDomainsResponse, error) {
+	return r.client.Domains.ListWithContext(ctx)
+}
+
+type emailSenderFactory interface {
+	New(apiKey string) emailSender
+}
+
+type resendFactory struct{}
+
+func (f *resendFactory) New(apiKey string) emailSender {
+	return &resendService{
+		client: resend.NewClient(apiKey),
+	}
+}
 
 func EmailSend(v *vault.Store) *packs.Pack {
 	return &packs.Pack{
@@ -42,7 +67,7 @@ func EmailSend(v *vault.Store) *packs.Pack {
 				"message_id": "string",
 			},
 		},
-		Handler: emailSendHandler(v),
+		Handler: emailSendHandler(v, &resendFactory{}),
 	}
 }
 
@@ -56,11 +81,11 @@ type emailSendInput struct {
 	Html    string  `json:"html"`
 }
 
-/// Handles email sending via Resend with Vault-supplied API key.
-func emailSendHandler(v *vault.Store) packs.HandlerFunc {
+// emailSendHandler handles email sending via Resend with Vault-supplied API key.
+func emailSendHandler(v *vault.Store, factory emailSenderFactory) packs.HandlerFunc {
 	return func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
 		var in emailSendInput
-		var credName = "RESEND_API_KEY"
+		var credName = "resend-api-key"
 
 		if err := json.Unmarshal(ec.Input, &in); err != nil {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
@@ -71,17 +96,19 @@ func emailSendHandler(v *vault.Store) packs.HandlerFunc {
 		if in.Subject == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "subject is required"}
 		}
-		actor := vault.Actor{Subject: "*"} // I still don't know what this means
+
+		actor := vault.Actor{Subject: "*"}
 		res, err := v.ResolveByName(ctx, actor, credName)
 		if err != nil {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: fmt.Sprintf("vault credential %q not found (Configure a valid Resend API key to send emails)", credName)}
 		}
-		resendClient := resend.NewClient(string(res.Plaintext))
+
+		svc := factory.New(string(res.Plaintext))
 
 		// Verify that the sender's email is verified on Resend
 		if in.From == "" {
 			fromDomain := extractDomain(in.From)
-			domains, err := resendClient.Domains.ListWithContext(ctx)
+			domains, err := svc.ListDomains(ctx)
 			if err != nil {
 				return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: err.Error(), Cause: err}
 			}
@@ -99,7 +126,7 @@ func emailSendHandler(v *vault.Store) packs.HandlerFunc {
 			ReplyTo: *in.ReplyTo,
 		}
 
-		sent, err := resendClient.Emails.SendWithContext(ctx, emailRequest)
+		sent, err := svc.SendEmail(ctx, emailRequest)
 		if err != nil {
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: err.Error(), Cause: err}
 		}
@@ -107,12 +134,12 @@ func emailSendHandler(v *vault.Store) packs.HandlerFunc {
 	}
 }
 
-/// Extracts domain portion after '@' from an email address string.
+// extractDomain extracts domain portion after '@' from an email address string.
 func extractDomain(from string) string {
 	return strings.Split(from, "@")[1]
 }
 
-/// Checks if a given sender domain is verified by Resend.
+// isVerifiedSenderDomain checks if a given sender domain is verified by Resend.
 func isVerifiedSenderDomain(domains []resend.Domain, fromDomain string) bool {
 	for _, domain := range domains {
 		// TODO:  Check domain.capabilities.sending too

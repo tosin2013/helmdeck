@@ -12,7 +12,6 @@ import (
 	"github.com/resend/resend-go/v3"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
-	"github.com/tosin2013/helmdeck/internal/security"
 	"github.com/tosin2013/helmdeck/internal/vault"
 )
 
@@ -20,7 +19,7 @@ const (
 	resendAPIBase = "https://api.resend.com"
 )
 
-func EmailSend(c *vault.Store, eg *security.EgressGuard) *packs.Pack {
+func EmailSend(v *vault.Store) *packs.Pack {
 	return &packs.Pack{
 		Name:        "email.send",
 		Version:     "v1", // where does version come from?
@@ -43,7 +42,7 @@ func EmailSend(c *vault.Store, eg *security.EgressGuard) *packs.Pack {
 				"message_id": "string",
 			},
 		},
-		// Handler: emailSendHandler(v, eg),
+		Handler: emailSendHandler(v),
 	}
 }
 
@@ -57,7 +56,7 @@ type emailSendInput struct {
 	Html    string  `json:"html"`
 }
 
-// TODO: I am not sure that I will need the EgressHandler
+/// Handles email sending via Resend with Vault-supplied API key.
 func emailSendHandler(v *vault.Store) packs.HandlerFunc {
 	return func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
 		var in emailSendInput
@@ -68,6 +67,9 @@ func emailSendHandler(v *vault.Store) packs.HandlerFunc {
 		}
 		if in.To == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "recipient is required"}
+		}
+		if in.Subject == "" {
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "subject is required"}
 		}
 		actor := vault.Actor{Subject: "*"} // I still don't know what this means
 		res, err := v.ResolveByName(ctx, actor, credName)
@@ -87,19 +89,30 @@ func emailSendHandler(v *vault.Store) packs.HandlerFunc {
 				return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: fmt.Sprintf("cannot send email from %q (Sender domain is not verified on Resend)", in.From)}
 			}
 		}
-	
-		emailRequuest := &resend.SendEmailRequest{
-			From: in.From,
-			To: []string{in.To}, // TODO: Expand to accept slice of recipients
 
+		emailRequest := &resend.SendEmailRequest{
+			From:    in.From,
+			To:      []string{in.To}, // TODO: Expand to accept slice of recipients
+			Subject: in.Subject,
+			Cc:      []string{*in.Cc},
+			Bcc:     []string{*in.Bcc},
+			ReplyTo: *in.ReplyTo,
 		}
+
+		sent, err := resendClient.Emails.SendWithContext(ctx, emailRequest)
+		if err != nil {
+			return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: err.Error(), Cause: err}
+		}
+		return json.Marshal(sent)
 	}
 }
 
+/// Extracts domain portion after '@' from an email address string.
 func extractDomain(from string) string {
 	return strings.Split(from, "@")[1]
 }
 
+/// Checks if a given sender domain is verified by Resend.
 func isVerifiedSenderDomain(domains []resend.Domain, fromDomain string) bool {
 	for _, domain := range domains {
 		// TODO:  Check domain.capabilities.sending too

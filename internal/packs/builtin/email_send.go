@@ -15,11 +15,17 @@ import (
 	"github.com/tosin2013/helmdeck/internal/vault"
 )
 
+// emailSender defines the minima email operations requied by the
+// pack handler. The handler depends on this interface instead of
+// the concrete Resend SDK client so the implementation can be swapped
+// out during tests without making real network calls
 type emailSender interface {
 	SendEmail(ctx context.Context, req *resend.SendEmailRequest) (*resend.SendEmailResponse, error)
 	ListDomains(ctx context.Context) (resend.ListDomainsResponse, error)
 }
 
+// resendService is the production implementation of emailSender backed
+// by the Resend SDK client.
 type resendService struct {
 	client *resend.Client
 }
@@ -32,10 +38,15 @@ func (r *resendService) ListDomains(ctx context.Context) (resend.ListDomainsResp
 	return r.client.Domains.ListWithContext(ctx)
 }
 
+// emailSenderFactory constructs emailSender implementation at runtime.
+// A factory is used becasue the Resend API key is resolved dynamically
+// from Vault per request, not during pack registration.
 type emailSenderFactory interface {
 	New(apiKey string) emailSender
 }
 
+// resendFactory creates Resend-backed emailSender instances using the
+// Vault-resolved API key for the current request
 type resendFactory struct{}
 
 func (f *resendFactory) New(apiKey string) emailSender {
@@ -117,13 +128,31 @@ func emailSendHandler(v *vault.Store, factory emailSenderFactory) packs.HandlerF
 			}
 		}
 
+
+		// nil check before dereferencing
+		var cc []string
+		if in.Cc != nil {
+			cc = []string{*in.Cc}
+		}
+
+		var bcc []string
+		if in.Bcc != nil {
+			bcc = []string{*in.Bcc}
+		}
+
+		var replyTo string
+		if in.ReplyTo != nil {
+			replyTo = *in.ReplyTo
+
+		}
+
 		emailRequest := &resend.SendEmailRequest{
 			From:    in.From,
 			To:      []string{in.To}, // TODO: Expand to accept slice of recipients
 			Subject: in.Subject,
-			Cc:      []string{*in.Cc},
-			Bcc:     []string{*in.Bcc},
-			ReplyTo: *in.ReplyTo,
+			Cc:      cc,
+			Bcc:     bcc,
+			ReplyTo: replyTo,
 		}
 
 		sent, err := svc.SendEmail(ctx, emailRequest)

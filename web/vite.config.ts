@@ -39,9 +39,11 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ['react', 'react-dom', 'react-router-dom'],
-          query: ['@tanstack/react-query'],
+        codeSplitting: {
+          groups: [
+            { name: 'react', test: /node_modules\/(react|react-dom|react-router-dom)\// },
+            { name: 'query', test: /node_modules\/@tanstack\/react-query\// },
+          ],
         },
       },
     },

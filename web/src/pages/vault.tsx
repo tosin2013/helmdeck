@@ -1,4 +1,4 @@
-import { Cookie, Github, Globe, Key, KeyRound, Lock, Plus, ShieldCheck, Terminal } from 'lucide-react';
+import { Cookie, GitBranch, Globe, Key, KeyRound, Lock, Plus, ShieldCheck, Terminal } from 'lucide-react';
 import { useState } from 'react';
 
 import { Badge } from '@/components/ui/badge';
@@ -58,7 +58,7 @@ const PRESETS = [
   {
     id: 'github-pat',
     label: 'GitHub PAT',
-    icon: Github,
+    icon: GitBranch,
     defaults: { name: 'github-token', type: 'api_key', host_pattern: 'github.com' },
     description: 'Personal access token for cloning/pushing private repos via HTTPS. Required scopes: repo.',
     placeholder: 'ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',

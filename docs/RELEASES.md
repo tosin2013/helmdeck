@@ -474,7 +474,7 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 ---
 
-## v0.13.1 — Post-v0.13.0 cleanup (target: 2026-05-25) {#v0131}
+## v0.13.1 — Post-v0.13.0 cleanup — ✅ Shipped 2026-05-18 {#v0131}
 
 **Theme:** Bug-cleanup release. No feature changes.
 

@@ -493,6 +493,25 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 ---
 
+## v0.13.2 — Hot-patch for v0.13.1 missing control-plane image — ✅ Shipped 2026-05-23 {#v0132}
+
+**Theme:** v0.13.1 shipped without `ghcr.io/tosin2013/helmdeck:0.13.1` because the `Publish control-plane image` job in the Release workflow failed at `cd web && npm run build`. Dependabot [#247](https://github.com/tosin2013/helmdeck/pull/247) had landed three breaking majors (Vite 6 → 8, TypeScript 5 → 6, lucide-react 0 → 1) between the release branch cut and the tag push, and the `CI` workflow never builds `web/` — only `Release` does. Goreleaser binaries, the bridge image, and `@helmdeck/mcp-bridge@0.13.1` on npm shipped fine; this release closes the asymmetry.
+
+**Ships:**
+
+- [#250](https://github.com/tosin2013/helmdeck/pull/250) — Vite 8 / TS 6 / lucide-react 1 web build unblock. `manualChunks` (Rollup) → `codeSplitting.groups` (Rolldown); `baseUrl` dropped, new `web/src/vite-env.d.ts`; `Github` icon → `GitBranch`.
+
+**Out:**
+
+- Anything else. Strict hot-patch discipline — same shape as [v0.12.1's release-image regression patch](#v0121).
+
+**Follow-ups discovered (not in v0.13.2, will file separately):**
+
+- **CI gap**: the `CI` workflow doesn't build `web/`. Only the `Release` workflow does, so any breaking change to the web toolchain ships silently until the next tag. Fix: gate every PR to `main` on a `web build` step.
+- **Dependabot ergonomics**: #247 grouped 14 deps including three majors and auto-merged. Three majors should not land in one group — re-bucket `web-npm` so majors land one-at-a-time.
+
+---
+
 ## v0.14.0 — Autonomous code-fix + ADR 037 fully enforced (target: TBD) {#v0140}
 
 **Theme:** `swe.solve` headline + close out [ADR 037](adrs/037-upstream-package-version-management.md) across every sidecar Dockerfile.

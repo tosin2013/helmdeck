@@ -11,6 +11,14 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-05-23
+
+**Theme:** Hot-patch for the v0.13.1 release that shipped without a control-plane image. No code-behavior changes, only the build pipeline that produces the image is unblocked.
+
+### Fixed
+
+- `web/` build now succeeds under Vite 8 + TypeScript 6 + lucide-react 1, restoring the `Publish control-plane image` step that failed silently on the v0.13.1 tag push. Dependabot PR #247 carried three breaking major bumps in one auto-merged group (Vite 6 → 8, TypeScript 5 → 6, lucide-react 0 → 1), each of which broke the web build. CI never exercised the failure because the `CI` workflow only builds the Go binary — only the `Release` workflow builds `web/`, so the regression was invisible until the v0.13.1 tag fired the release pipeline. Goreleaser binaries, `helmdeck-bridge:0.13.1`, and `@helmdeck/mcp-bridge@0.13.1` on npm shipped fine; only `ghcr.io/tosin2013/helmdeck:0.13.1` (the control-plane image) was missing. Three concrete fixes: (a) **Vite 8 swapped Rollup for Rolldown**, whose `manualChunks` only accepts the function form, so the declarative chunk-grouping moves to `codeSplitting.groups` — same two-chunk layout (`react` + `query`) preserved; (b) **TypeScript 6 removed `baseUrl`**, so paths are relative under `./src/*` and a new `web/src/vite-env.d.ts` (`/// <reference types="vite/client" />`) restores side-effect CSS module resolution under TS 6's stricter rules; (c) **lucide-react 1 dropped brand icons**, so the GitHub-PAT preset swaps `Github` for `GitBranch` — purely visual, the preset label still names the system. (#250)
+
 ## [0.13.1] - 2026-05-18
 
 **Theme:** Post-v0.13.0 cleanup. No feature changes. Four post-release bugs found during v0.13.0 → v0.13.1 upgrade verification, each documented per-issue with a reproducer.

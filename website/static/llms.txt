@@ -1,0 +1,62 @@
+# Helmdeck
+
+> Self-hosted MCP server that runs sandboxed browser, desktop, vision, and code-edit packs against cheap or local LLMs — designed to make agentic workloads viable on ~10× cheaper inference than frontier-model APIs.
+
+Helmdeck exposes 41+ capability "packs" — typed, JSON-schema-described primitives like `web.scrape`, `desktop.run_app_and_screenshot`, `repo.fetch`, `slides.render`, `vision.click_anywhere` — to any MCP-compatible agent (Claude Code, Claude Desktop, Gemini CLI, Hermes, custom) via a single bearer-authed REST + MCP API. Each pack runs inside a session-scoped sidecar container (Docker today, gVisor/Firecracker on the roadmap) with credentials injected from an in-process vault using `${vault:NAME}` placeholders, so the agent never sees the secret. The whole point is to keep agents on the cheap-tier model side of the cost curve by combining structured tools, explicit credentials, tiered isolation, and observability — not by waiting for the model to get better.
+
+A companion full-content corpus is available at [/llms-full.txt](https://helmdeck.dev/llms-full.txt) for direct ingestion.
+
+## Start here
+
+- [Why helmdeck](https://helmdeck.dev/explanation/why-helmdeck): cost rationale + the architecture choices that make cheap-LLM agentic workloads viable.
+- [Architecture](https://helmdeck.dev/reference/architecture): end-to-end request flow through control plane → session sidecar → pack handler.
+- [Install via UI walkthrough](https://helmdeck.dev/tutorials/install-ui-walkthrough): first deploy + first pack call from the Management UI.
+- [Install via CLI](https://helmdeck.dev/tutorials/install-cli): same path from a terminal.
+- [Pack demo playbook](https://helmdeck.dev/integrations/pack-demo-playbook): example prompts and expected outputs across the catalog.
+
+## How-to (operations)
+
+- [Troubleshoot install](https://helmdeck.dev/howto/troubleshoot-install): symptom → cause → fix matrix for the most common first-deploy failures.
+- [Upgrade helmdeck](https://helmdeck.dev/howto/upgrade-helmdeck): cross-version steps, schema migrations, sidecar image bumps.
+- [Register with MCP clients](https://helmdeck.dev/howto/register-with-mcp-clients): wiring helmdeck into Claude Code, Claude Desktop, Gemini CLI, Hermes, and the generic stdio/http transports.
+- [Manage vault credentials](https://helmdeck.dev/howto/manage-vault-credentials): env-var auto-hydration, UI-driven creation, placeholder substitution semantics.
+- [Configure LLM providers](https://helmdeck.dev/howto/configure-llm-providers): OpenAI-compatible gateway, multi-provider fallback, per-pack provider pinning.
+- [Inspect audit logs](https://helmdeck.dev/howto/inspect-audit-logs): every pack call, every gateway request, every credential touch.
+- [Watch an agent via VNC](https://helmdeck.dev/howto/watch-agent-via-vnc): live screen of the desktop sidecar while a vision pack is running.
+- [Build a subprocess pack](https://helmdeck.dev/howto/build-subprocess-pack): operator-supplied command-line packs with typed I/O schemas.
+- [Use the helmdeck CLI](https://helmdeck.dev/howto/use-the-helmdeck-cli): pack list/install/uninstall + marketplace operations from a terminal.
+
+## How-to (client integrations)
+
+- [Claude Code](https://helmdeck.dev/integrations/claude-code)
+- [Claude Desktop](https://helmdeck.dev/integrations/claude-desktop)
+- [Gemini CLI](https://helmdeck.dev/integrations/gemini-cli)
+- [Hermes Agent](https://helmdeck.dev/integrations/hermes-agent)
+- [OpenClaw](https://helmdeck.dev/integrations/openclaw): NVIDIA's open agent runtime.
+- [Webhooks](https://helmdeck.dev/integrations/webhooks)
+
+## Reference
+
+- [Pack reference index](https://helmdeck.dev/reference/packs/): per-pack input/output schemas, examples, error envelopes for all 41+ built-in packs (browser, web, vision, github, http, doc, fs, cmd, git, language, repo, slides, desktop, research, content, blog, podcast, image, stock, hyperframes).
+- [All packs at a glance](https://helmdeck.dev/PACKS): high-level catalog with one-line descriptions of every pack.
+- [SKILLS for agents](https://helmdeck.dev/integrations/SKILLS): per-pack agent-side prompting hints (the helmdeck-specific guidance you'd inject into an agent's system prompt).
+- [Marketplace catalog](https://helmdeck.dev/reference/marketplace/catalog): community pack discovery, trust model (stage A content-hash verification), install/uninstall flow.
+
+## Architecture decisions
+
+- [ADR index](https://helmdeck.dev/adrs): 38 ADRs covering every load-bearing architecture decision. Each one carries Status + Context + Decision + Consequences. Read these to understand *why* helmdeck is built the way it is — they cite incidents, tradeoffs ruled out, and what would invalidate the decision.
+
+## Project tracking
+
+- [Release plan](https://helmdeck.dev/RELEASES): targeted upcoming versions, hard exit gates, deferral discipline.
+- [Changelog](https://helmdeck.dev/changelog): per-release fixed/added/changed entries with issue links.
+- [Milestones](https://helmdeck.dev/MILESTONES)
+- [Tasks](https://helmdeck.dev/TASKS)
+
+## Optional
+
+- [Security hardening](https://helmdeck.dev/SECURITY-HARDENING): threat model, seccomp profiles, NetworkPolicy templates, gVisor/Firecracker isolation tiers.
+- [Sidecar languages](https://helmdeck.dev/SIDECAR-LANGUAGES): which sidecar image carries which runtime (Node, Python, ffmpeg, etc.).
+- [Sidecar extending](https://helmdeck.dev/SIDECAR-EXTENDING): how to add a new sidecar image for a pack with bespoke runtime needs.
+- [Engineering blog](https://helmdeck.dev/blog): design rationale, field reports, post-mortems — the format `_template.md` describes.
+- [GitHub repository](https://github.com/tosin2013/helmdeck): source, issues, PRs, releases.

@@ -47,7 +47,7 @@ package builtin
 //	  "base_branch":  "main",                               // optional PR base (default = cloned ref/HEAD)
 //	  "credential":   "github-token",                       // optional vault name (HTTPS PAT)
 //	  "model":        "gpt-4o",                             // optional litellm model id
-//	  "gateway_base": "http://control-plane:8080/v1",       // optional gateway base URL
+//	  "gateway_base": "http://helmdeck-control-plane:3000/v1", // optional gateway base URL
 //	  "max_steps":    30,                                   // optional agent step cap
 //	  "mode":         "patch"                               // patch | branch | pull_request
 //	}
@@ -725,12 +725,14 @@ func miniSweSidecarImage() string {
 // `gateway_base` pack input and fall back to HELMDECK_GATEWAY_BASE, then
 // a localhost default. Operators MUST set HELMDECK_GATEWAY_BASE to the
 // in-cluster control-plane URL (e.g. http://control-plane:8080/v1) for
-// the agent loop to reach the gateway from the sidecar network.
+// the agent loop to reach the gateway from the sidecar network. The
+// default matches the Compose service name (helmdeck-control-plane:3000)
+// so a stock single-host deployment works without extra config.
 func sweGatewayBase() string {
 	if v := os.Getenv("HELMDECK_GATEWAY_BASE"); v != "" {
 		return v
 	}
-	return "http://localhost:8080/v1"
+	return "http://helmdeck-control-plane:3000/v1"
 }
 
 // sweModel returns the default litellm model id for the agent loop.

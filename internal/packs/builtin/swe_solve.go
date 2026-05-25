@@ -67,12 +67,15 @@ package builtin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/security"
 	"github.com/tosin2013/helmdeck/internal/session"
@@ -391,6 +394,7 @@ func sweSolveHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFunc
 		// ── Step 6: mode branching ─────────────────────────────────────
 		// patch mode stops here — safe default, no push.
 		if mode == sweModePatch {
+			storeSolveNote(ec, in.RepoURL, summary, art.Key, "")
 			ec.Report(100, "done (patch mode)")
 			return json.Marshal(out)
 		}
@@ -443,6 +447,7 @@ func sweSolveHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFunc
 		}
 
 		if mode == sweModeBranch {
+			storeSolveNote(ec, in.RepoURL, summary, art.Key, newBranch)
 			ec.Report(100, "done (branch mode)")
 			return json.Marshal(out)
 		}
@@ -478,6 +483,7 @@ func sweSolveHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFunc
 		}
 		_ = json.Unmarshal(prOut, &pr)
 		out["pr_url"] = pr.HTMLURL
+		storeSolveNote(ec, in.RepoURL, summary, art.Key, newBranch)
 		ec.Report(100, "done (pull_request mode)")
 		return json.Marshal(out)
 	}
@@ -656,15 +662,51 @@ func numField(m map[string]any, keys ...string) (int, bool) {
 	return 0, false
 }
 
-// priorContext is the memory-layer recall hook. #257 (Universal Memory
-// Delivery Layer) will plug repo/solve recall in here — fetch prior
-// solves for this repo, relevant ADRs, past failures — and fold them
-// into the task before the agent loop runs. Until then it is a no-op
-// that returns the task unchanged.
-func priorContext(_ context.Context, _ *packs.ExecutionContext, in sweSolveInput) string {
-	// TODO(#257): query the memory layer for prior context keyed on
-	// in.RepoURL + in.Task and prepend it. No-op today.
-	return in.Task
+// sweSolveNotesKey is the memory key under which swe.solve stores and
+// recalls its per-repo solve note. Keyed on a hash of the repo URL so
+// the note survives across tasks against the same repo without leaking
+// the URL into the key.
+func sweSolveNotesKey(repoURL string) string {
+	sum := sha256.Sum256([]byte(repoURL))
+	return "swe.solve/" + hex.EncodeToString(sum[:])[:16] + "/notes"
+}
+
+// priorContext is the memory-layer recall hook (#257, ADR 039). When a
+// memory store is wired (ec.Memory != nil), it recalls the prior-solve
+// note for this repo and prepends it to the task so the agent benefits
+// from earlier runs ("smarter than vanilla mini-swe-agent"). Nil-safe:
+// when no memory is configured it returns the task unchanged, exactly
+// as before the memory layer landed.
+func priorContext(_ context.Context, ec *packs.ExecutionContext, in sweSolveInput) string {
+	if ec == nil || ec.Memory == nil {
+		return in.Task
+	}
+	ent, err := ec.Memory.Recall(sweSolveNotesKey(in.RepoURL))
+	if err != nil || ent == nil || len(ent.Value) == 0 {
+		return in.Task
+	}
+	return "Prior context from earlier work on this repository (use it to avoid repeating mistakes):\n" +
+		string(ent.Value) + "\n\n---\nTask:\n" + in.Task
+}
+
+// storeSolveNote persists a short note about a completed solve so the
+// next run on the same repo can recall it via priorContext. Best-effort
+// and nil-safe — a store failure (or no memory wired) never fails the
+// solve. The note is intentionally compact (summary + trajectory key +
+// branch) and carries a long TTL since solve knowledge ages slowly.
+func storeSolveNote(ec *packs.ExecutionContext, repoURL, summary, trajectoryKey, branch string) {
+	if ec == nil || ec.Memory == nil {
+		return
+	}
+	note := "summary: " + summary
+	if trajectoryKey != "" {
+		note += "\ntrajectory: " + trajectoryKey
+	}
+	if branch != "" {
+		note += "\nbranch: " + branch
+	}
+	_ = ec.Memory.Store(sweSolveNotesKey(repoURL), []byte(note),
+		memory.WithTTL(30*24*time.Hour), memory.WithCategory("solve"))
 }
 
 // deriveRef returns the PR base branch when none was supplied. Falls

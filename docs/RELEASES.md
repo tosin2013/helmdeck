@@ -522,11 +522,11 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 - [#253](https://github.com/tosin2013/helmdeck/issues/253) — post-install/upgrade integration smoke check via OpenClaw round-trip (✅ shipped #263)
 - [#212](https://github.com/tosin2013/helmdeck/issues/212)–[#215](https://github.com/tosin2013/helmdeck/issues/215) — ADR 037 fully enforced: dependabot, exact pins, CLI-surface sentinels, docs (✅ shipped #240–#243)
 - [#248](https://github.com/tosin2013/helmdeck/issues/248) — ADR 037 follow-up cleanups: drop `marp --stdin`, fix `--html` format spec, pinned global `playwright-mcp` bin in the sidecar entrypoint (✅ shipped #264)
-- [ADR 039](adrs/039-universal-memory-delivery-layer.md) — Universal Memory delivery layer (refines [ADR 029](adrs/029-four-tier-agent-memory-api.md)). **Doc-only this release**; implementation tracked in epic [#254](https://github.com/tosin2013/helmdeck/issues/254).
+- [ADR 039](adrs/039-universal-memory-delivery-layer.md) — Universal Memory delivery layer (refines [ADR 029](adrs/029-four-tier-agent-memory-api.md)): **first implementation shipped** — pluggable `MemoryStore` (SQLite default, AES-256-GCM at rest), the `ec.Memory` engine seam + namespace model, `Context()` aggregation (#260), and the `github.list_issues` read-through cache exemplar (#258). Default-OFF and additive: packs without opt-in and deployments without `HELMDECK_MEMORY_KEY` behave exactly as before. Tracked in epic [#254](https://github.com/tosin2013/helmdeck/issues/254) (#255/#256/#257/#258/#260).
 
 **Out:**
 
-- Universal memory **implementation** (`ec.Memory`, the engine middleware seam, the namespace model, the storage backend) — post-v0.14.0 per epic [#254](https://github.com/tosin2013/helmdeck/issues/254). Redis-backed Episodic and the pgvector/Semantic tier remain deferred per ADR 039.
+- Universal memory **deferred tiers**: Redis-backed Episodic and the pgvector/Semantic tier remain out per ADR 039 (the pluggable `MemoryStore` interface keeps the door open). The community validation middleware (#268) is the next seam consumer.
 - `swe.solve` Phases 4–8 (trajectory storage in Garage S3, OTel spans per agent step, GitHub-webhook auto-trigger via ADR 033, A2A skill exposure via ADR 026, procedural-memory pack promotion via ADR 029). Each opens as its own follow-up issue after Phase 3 lands. Phases 4–8 lean on ADRs currently `Status: Proposed` — premature to commit.
 
 **Status:** the ADR 037 quad (#212–#215) shipped together as planned, with the #248 cleanups completing the enforcement. `swe.solve` Phase 1 + the smoke check are in. The remaining open headline item is `swe.solve` Phase 3.

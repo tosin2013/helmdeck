@@ -4,6 +4,8 @@
 **Date**: 2026-05-25
 **Domain**: pack-engine, distributed-systems, api-design
 
+> **First implementation: v0.14.0** — pluggable `MemoryStore` (SQLite default, AES-256-GCM at rest), the `ExecutionContext.Memory` engine seam + per-caller namespace, `Context()` aggregation, and the `github.list_issues` read-through cache exemplar landed default-OFF and additive (epic #254: #255/#256/#257/#258/#260). Redis-backed Episodic and the pgvector/Semantic tier remain deferred.
+
 ## Context
 
 [ADR 029](029-four-tier-agent-memory-api.md) defines a four-tier agent memory model (Working / Episodic / Semantic / Procedural) exposed as an **explicit, agent-addressable API** (`GET/POST/DELETE /api/v1/memory/{agent_id}`). It answers *what* memory is and *who* may address it, but it leaves a gap: nothing makes memory available to the **pack handlers themselves**. Today a pack cannot cheaply remember anything — not a cached GitHub listing, not a parsed document structure — without the calling agent explicitly orchestrating the memory API around it.

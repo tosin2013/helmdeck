@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/telemetry"
 )
@@ -504,6 +505,18 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 				_ = writeFrame(progressNotification(tok, pct, message))
 			})
 		}
+		// Thread the authenticated caller into the engine for the memory
+		// layer (ADR 039). MCP is single-session/stdio today, so JWT
+		// claims are present on ctx only when the transport attached them
+		// (the WebSocket bridge in the api package forwards the request
+		// ctx); when absent, callerFromContext defaults to "unknown". We
+		// capture the subject here so both the sync Execute below and the
+		// async start (which detaches to a background ctx) carry it.
+		callerSubject := ""
+		if c := auth.FromContext(ctx); c != nil {
+			callerSubject = c.Subject
+		}
+		ctx = packs.WithCaller(ctx, callerSubject)
 		// SEP-1686 task envelope path: packs that declare Async=true
 		// route through the job registry so the JSON-RPC response
 		// returns in milliseconds. The client either polls tasks/get
@@ -518,6 +531,7 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			j := s.startAsync(pack, cleanInput, asyncOptions{
 				WebhookURL:    webhookURL,
 				WebhookSecret: webhookSecret,
+				Caller:        callerSubject,
 			})
 			// Notify subscribed clients that a task was created.
 			// Clients that don't speak SEP-1686 ignore the

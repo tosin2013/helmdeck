@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/vault"
@@ -257,6 +258,12 @@ func GitHubListIssues(v *vault.Store) *packs.Pack {
 		Name:        "github.list_issues",
 		Version:     "v1",
 		Description: "List issues on a GitHub repository (filter by state, labels, assignee).",
+		// Read-through cache exemplar (ADR 039, #258). Identical
+		// list_issues calls within 5 minutes are served from memory
+		// instead of re-hitting the GitHub API (rate-limit relief). The
+		// engine seam does the caching declaratively — the handler is
+		// untouched. No-op when no memory store is wired.
+		Memory: &packs.MemoryConfig{Cache: true, TTL: 5 * time.Minute, Category: "cache"},
 		InputSchema: packs.BasicSchema{
 			Required: []string{"repo"},
 			Properties: map[string]string{

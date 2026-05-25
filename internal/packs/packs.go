@@ -598,10 +598,23 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 		return nil, wrap(err)
 	}
 
+	// Step 4: output schema. Refuse to surface a payload the schema
+	// doesn't accept — the agent contract is "you get exactly what
+	// the pack declared", and a silent drift is worse than a loud
+	// failure.
+	if pack.OutputSchema != nil {
+		if err := pack.OutputSchema.Validate(output); err != nil {
+			return nil, &PackError{Code: CodeInvalidOutput, Message: err.Error(), Cause: err}
+		}
+	}
+
 	// Memory cache seam (POST). Store the successful output under the
 	// cache key with the pack's TTL/category so the next identical call
-	// within TTL hits the cache. A store failure must not fail the pack
-	// — it only forfeits the cache for this call.
+	// within TTL hits the cache. Deliberately runs AFTER output-schema
+	// validation so a schema-invalid output is never cached (otherwise a
+	// rejected payload would be served as success on the next call,
+	// bypassing validation). A store failure must not fail the pack — it
+	// only forfeits the cache for this call.
 	if cacheEnabled {
 		cat := pack.Memory.Category
 		if cat == "" {
@@ -610,16 +623,6 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 		if serr := ec.Memory.Store(cacheKey, []byte(output),
 			memory.WithTTL(pack.Memory.TTL), memory.WithCategory(cat)); serr != nil {
 			logger.Warn("memory cache store failed", "pack", pack.Name, "err", serr)
-		}
-	}
-
-	// Step 4: output schema. Refuse to surface a payload the schema
-	// doesn't accept — the agent contract is "you get exactly what
-	// the pack declared", and a silent drift is worse than a loud
-	// failure.
-	if pack.OutputSchema != nil {
-		if err := pack.OutputSchema.Validate(output); err != nil {
-			return nil, &PackError{Code: CodeInvalidOutput, Message: err.Error(), Cause: err}
 		}
 	}
 

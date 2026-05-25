@@ -82,7 +82,13 @@ start_playwright_mcp() {
         return 0
     fi
     echo "helmdeck-entrypoint: starting Playwright MCP on 0.0.0.0:${PLAYWRIGHT_MCP_PORT} attached to CDP 127.0.0.1:${CHROMIUM_PORT}" >&2
-    npx --yes @playwright/mcp@latest \
+    # ADR 037 (#248): do NOT pin @latest here — that would re-fetch the
+    # newest @playwright/mcp at every container start, defeating the exact
+    # version pin from the Dockerfile (`npm install -g
+    # @playwright/mcp@${PLAYWRIGHT_MCP_VERSION}`, sidecar.Dockerfile L138).
+    # Bare `npx @playwright/mcp` resolves the globally-installed pinned
+    # version from the npm global module dir; no network fetch.
+    npx --yes @playwright/mcp \
         --cdp-endpoint "http://127.0.0.1:${CHROMIUM_PORT}" \
         --host 0.0.0.0 \
         --port "${PLAYWRIGHT_MCP_PORT}" \

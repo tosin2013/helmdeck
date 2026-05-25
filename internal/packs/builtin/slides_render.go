@@ -108,7 +108,13 @@ func formatSpec(format string) (marpFlag, ext, mime string, err error) {
 	case "pptx":
 		return "--pptx", "pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", nil
 	case "html":
-		return "--html", "html", "text/html", nil
+		// No output-format flag for HTML: HTML is marp's default output
+		// when no --pdf/--pptx/--image flag is given. (marp's `--html`
+		// is the markdown-HTML-extension toggle — "Enable or disable
+		// HTML tags" — NOT an output-format selector; passing it here
+		// was a semantic mismatch, see #248.) With `-o -` and a piped
+		// stdin, the default codec streams HTML to stdout.
+		return "", "html", "text/html", nil
 	default:
 		return "", "", "", fmt.Errorf("unsupported format %q (want pdf, pptx, or html)", format)
 	}
@@ -202,11 +208,15 @@ func slidesRenderHandler(v *vault.Store, eg *security.EgressGuard) packs.Handler
 		curatedThemeUsed := ""
 		marpArgs := []string{
 			"marp",
-			"--stdin",
 			"--allow-local-files",
-			flag,
-			"-o", "-",
 		}
+		// flag is empty for the HTML format (marp's default output codec
+		// needs no output-format flag); only append it when non-empty so
+		// we never pass an empty-string arg to marp.
+		if flag != "" {
+			marpArgs = append(marpArgs, flag)
+		}
+		marpArgs = append(marpArgs, "-o", "-")
 		if markdownReferencesCuratedTheme(markdown) {
 			themeDir, terr := uploadCuratedThemes(ctx, ec)
 			if terr != nil {
@@ -216,11 +226,11 @@ func slidesRenderHandler(v *vault.Store, eg *security.EgressGuard) packs.Handler
 			curatedThemeUsed = extractCuratedThemeName(markdown)
 		}
 
-		// Marp reads markdown from stdin when given `-` as the input
-		// path. We use `--stdin -o -` so the binary output streams back
-		// over our captured stdout — no temp files inside the container,
-		// no path management. The format flag (pdf/pptx/html) selects
-		// the output codec.
+		// Marp reads markdown from stdin automatically when input is
+		// piped (no input-path arg), and `-o -` streams the binary
+		// output back over our captured stdout — no temp files inside
+		// the container, no path management. The format flag
+		// (pdf/pptx/html) selects the output codec.
 		//
 		// `--allow-local-files` is required for any deck that references
 		// local images; harmless when the markdown has none. We do NOT

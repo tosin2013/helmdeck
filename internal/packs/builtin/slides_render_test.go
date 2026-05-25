@@ -96,14 +96,21 @@ func TestSlidesRenderHappyPathPDF(t *testing.T) {
 
 func TestSlidesRenderFormatSelection(t *testing.T) {
 	cases := map[string]struct {
+		// flag is the marp output-format flag the pack must pass for this
+		// format. Empty means NO format flag — marp's default codec emits
+		// HTML, and `--html` is marp's HTML-tag toggle, not a format
+		// selector (#248).
 		flag string
 		ext  string
 		mime string
 	}{
 		"pdf":  {"--pdf", "pdf", "application/pdf"},
 		"pptx": {"--pptx", "pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
-		"html": {"--html", "html", "text/html"},
+		"html": {"", "html", "text/html"},
 	}
+	// formatFlags are the marp output-format flags; for the HTML case we
+	// assert none of them appears (HTML is the default, flagless output).
+	formatFlags := []string{"--pdf", "--pptx", "--html", "--image", "--images", "--notes"}
 	for format, want := range cases {
 		t.Run(format, func(t *testing.T) {
 			ex := &fakeExecutor{result: session.ExecResult{Stdout: []byte("data")}}
@@ -113,14 +120,29 @@ func TestSlidesRenderFormatSelection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Execute: %v", err)
 			}
-			found := false
-			for _, a := range ex.last.Cmd {
-				if a == want.flag {
-					found = true
+			if want.flag != "" {
+				found := false
+				for _, a := range ex.last.Cmd {
+					if a == want.flag {
+						found = true
+					}
 				}
-			}
-			if !found {
-				t.Errorf("flag %q not in cmd %v", want.flag, ex.last.Cmd)
+				if !found {
+					t.Errorf("flag %q not in cmd %v", want.flag, ex.last.Cmd)
+				}
+			} else {
+				// HTML: no output-format flag may be present, and there
+				// must be no empty-string arg in the argv.
+				for _, a := range ex.last.Cmd {
+					if a == "" {
+						t.Errorf("argv carries empty-string arg: %v", ex.last.Cmd)
+					}
+					for _, ff := range formatFlags {
+						if a == ff {
+							t.Errorf("html format must pass no format flag, found %q in %v", ff, ex.last.Cmd)
+						}
+					}
+				}
 			}
 			if res.Artifacts[0].ContentType != want.mime {
 				t.Errorf("mime = %q want %q", res.Artifacts[0].ContentType, want.mime)

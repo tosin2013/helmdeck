@@ -72,6 +72,7 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 - `repo.fetch` — Clone a git repo into a session. Returns `clone_path`, `session_id`, **and a context envelope** (`tree`, `readme`, `entrypoints`, `signals`) so you can orient immediately without follow-up calls. See "Repo discovery pattern" below.
 - `repo.map` — Return a symbol-level structural map (functions, types, classes) of a cloned repo, budgeted to a token target. Opt-in follow-on for code-understanding tasks; inspired by Aider's repo-map.
 - `repo.push` — Push changes from a session-local clone.
+- `swe.solve` — Give it a `repo_url` + a `task` and it runs a mini-swe-agent loop **inside a sidecar** to produce a reviewable code change. The agent never sees git or gateway credentials (vault-injected). `mode` picks the output: `patch` (default, safe — diff + trajectory, no push), `branch` (push a NEW `helmdeck/swe-solve-*` branch), or `pull_request` (push the branch + open a PR). It **never pushes to the default branch**, and a human always reviews the PR. Async — poll for the result.
 
 ### Filesystem (session-scoped)
 - `fs.read` — Read a file from a session-local clone.

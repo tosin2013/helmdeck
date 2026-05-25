@@ -24,6 +24,14 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${REPO_ROOT}/deploy/compose/compose.yaml"
+# Build the control-plane from THIS commit instead of pulling the published
+# :latest image. Without this overlay the smoke ran a freshly-built bridge +
+# sidecar against whatever release :latest points at (a moving target), so it
+# never exercised the PR's own control-plane / MCP-WS code, and any wire drift
+# between main and the last release surfaced as a confusing "no response" hang
+# in the bridge leg. Layering compose.build.yaml keeps bridge, sidecar, and
+# server all on the same commit.
+BUILD_OVERLAY="${REPO_ROOT}/deploy/compose/compose.build.yaml"
 ENV_FILE="${REPO_ROOT}/deploy/compose/.env.clients-smoke"
 RUNTIME_ENV_FILE="${REPO_ROOT}/deploy/compose/.env.local"
 SIDECAR_IMAGE="${SIDECAR_IMAGE:-helmdeck-sidecar:dev}"
@@ -42,9 +50,9 @@ cleanup() {
   local rc=$?
   if [[ $rc -ne 0 ]]; then
     echo "--- clients-smoke FAILED, dumping control-plane logs ---" >&2
-    docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" logs control-plane 2>&1 | tail -80 >&2 || true
+    docker compose -f "${COMPOSE_FILE}" -f "${BUILD_OVERLAY}" --env-file "${ENV_FILE}" logs control-plane 2>&1 | tail -80 >&2 || true
   fi
-  docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
+  docker compose -f "${COMPOSE_FILE}" -f "${BUILD_OVERLAY}" --env-file "${ENV_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
   rm -f "${ENV_FILE}"
   if [[ "${CREATED_RUNTIME_ENV}" == "1" ]]; then
     rm -f "${RUNTIME_ENV_FILE}"
@@ -101,8 +109,8 @@ EOF
   CREATED_RUNTIME_ENV=1
 fi
 
-echo "--- booting compose stack ---"
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d --wait
+echo "--- booting compose stack (control-plane built from source) ---"
+docker compose -f "${COMPOSE_FILE}" -f "${BUILD_OVERLAY}" --env-file "${ENV_FILE}" up -d --wait --build
 
 URL="http://localhost:${PORT}"
 # Mint a JWT via the control-plane binary's -mint-token flag, exec'd
@@ -147,15 +155,32 @@ for client in "${CLIENTS[@]}"; do
 
   echo "--- ${client}: invoking browser.screenshot_url via bridge ---"
   out="$(call_bridge)"
-  # Find the tools/call response (id=3) and pull out the first base64
-  # image content block, then check the magic bytes.
-  png_b64="$(echo "${out}" | jq -rs '
-    map(select(.id == 3)) | .[0].result.content
+
+  # Diagnosability first. The bridge leg has three distinct failure modes
+  # and they used to collapse into one misleading `jq: Cannot iterate over
+  # null` (jq exit 5) because the happy-path filter assumed `.result.content`
+  # was always present. Distinguish them explicitly and always dump `out`.
+  if [[ -z "${out//[$'\n\t ']/}" ]]; then
+    echo "clients-smoke: ${client} bridge returned NO response frames (MCP round-trip stalled — connected but no JSON-RPC reply)" >&2
+    exit 1
+  fi
+  # A JSON-RPC error envelope (id=3 with .error) means the call reached the
+  # server and was rejected — surface code+message instead of "no image".
+  rpc_err="$(printf '%s\n' "${out}" | jq -rs 'map(select(.id == 3)) | .[0].error // empty | select(. != null) | "code=\(.code) message=\(.message)"' 2>/dev/null || true)"
+  if [[ -n "${rpc_err}" ]]; then
+    echo "clients-smoke: ${client} tools/call returned a JSON-RPC error: ${rpc_err}" >&2
+    printf '%s\n' "${out}" >&2
+    exit 1
+  fi
+  # Happy path. `.result.content // []` guards the null-iterate so a result
+  # without a content array fails the [[ -z ]] check below, not jq.
+  png_b64="$(printf '%s\n' "${out}" | jq -rs '
+    map(select(.id == 3)) | .[0].result.content // []
     | map(select(.type == "image")) | .[0].data // empty
-  ')"
+  ' 2>/dev/null || true)"
   if [[ -z "${png_b64}" ]]; then
-    echo "clients-smoke: ${client} got no image content" >&2
-    echo "${out}" >&2
+    echo "clients-smoke: ${client} got no image content in the tools/call result" >&2
+    printf '%s\n' "${out}" >&2
     exit 1
   fi
   magic="$(echo "${png_b64}" | base64 -d 2>/dev/null | head -c 8 | xxd -p || true)"

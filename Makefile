@@ -145,6 +145,10 @@ compose-logs: ## tail control-plane logs
 smoke: ## End-to-end Phase 1 exit gate: compose up -> session -> CDP -> screenshot -> tear down
 	bash scripts/smoke.sh
 
+.PHONY: smoke-integration
+smoke-integration: ## Fast NON-destructive OpenClaw agent round-trip against the already-running stack (no teardown)
+	bash scripts/smoke-integration.sh
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)

@@ -24,9 +24,12 @@ package builtin_test
 //   2. Named failures — a missing flag shows as "flag --foo passed
 //      by Go pack but not in <bin> --help", not as a buildkit exit
 //      code on a 40-line concatenated shell command.
-//   3. Allowlisting deliberately-undocumented flags (marp --stdin
-//      is silently accepted but isn't in --help) gets a structured
-//      exception with a reason string, not a buried comment.
+//   3. Allowlisting a deliberately-undocumented flag (one a tool
+//      silently accepts but never lists in --help) gets a structured
+//      exception with a reason string, not a buried comment. The Skip
+//      list below is the mechanism; it is empty today because every
+//      flag the packs pass is documented (see #248, which removed the
+//      last undocumented one — marp --stdin).
 //
 // Run with:
 //
@@ -82,10 +85,6 @@ var cliSurfaceCases = []cliSurfaceCase{
 		Binary:   "marp",
 		Image:    sidecarImage("HELMDECK_SIDECAR_IMAGE", "helmdeck-sidecar:dev"),
 		HelpArgs: []string{"--help"},
-		Skip:     []string{"--stdin"},
-		SkipReasons: []string{
-			"marp v4.x reads stdin automatically when piped; --stdin is silently accepted but not documented in --help. Follow-up: drop from slides_render.go.",
-		},
 	},
 	{
 		Binary:   "hyperframes",

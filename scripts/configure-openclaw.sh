@@ -22,6 +22,7 @@
 #   ./scripts/configure-openclaw.sh --model <id>              # pin a different primary model
 #   ./scripts/configure-openclaw.sh --fallbacks a,b,c         # comma-separated fallback chain
 #   ./scripts/configure-openclaw.sh --skip-mcp --skip-skills  # only refresh identity
+#   ./scripts/configure-openclaw.sh --smoke                   # also run the integration smoke check
 #
 # Exits 0 on success. Prints the verification probe commands at
 # the end so the operator can sanity-check the outcome.
@@ -43,6 +44,7 @@ SEED_IDENTITY="false"
 ROTATE_JWT="false"
 SKIP_MCP="false"
 SKIP_SKILLS="false"
+DO_SMOKE="false"
 
 HELMDECK_ROOT="${HELMDECK_ROOT:-/root/helmdeck}"
 HELMDECK_ENV_FILE="${HELMDECK_ENV_FILE:-${HELMDECK_ROOT}/deploy/compose/.env.local}"
@@ -85,6 +87,7 @@ while [[ $# -gt 0 ]]; do
 		--rotate-jwt)     ROTATE_JWT="true"; shift ;;
 		--skip-mcp)       SKIP_MCP="true"; shift ;;
 		--skip-skills)    SKIP_SKILLS="true"; shift ;;
+		--smoke)          DO_SMOKE="true"; shift ;;
 		-h|--help)        usage ;;
 		*) echo "unknown flag: $1" >&2; exit 2 ;;
 	esac
@@ -458,3 +461,13 @@ cat <<EOF
   python3 -c "import json,base64; t=open('$JWT_CACHE').read().strip().split('.')[1]; \\
     p=t+'='*(4-len(t)%4); print(json.dumps(json.loads(base64.urlsafe_b64decode(p)),indent=2))"
 EOF
+
+# --- 9. optional: integration smoke check --------------------------------
+# Gated behind --smoke so re-running configure non-interactively (CI,
+# release-sync scripts) isn't forced into a full agent round-trip.
+if [[ "$DO_SMOKE" == "true" ]]; then
+	log ""
+	log "running integration smoke check (--smoke) against the live stack"
+	bash "${HELMDECK_ROOT}/scripts/smoke-integration.sh" \
+		|| warn "integration smoke check failed — see output above (configure itself succeeded)"
+fi

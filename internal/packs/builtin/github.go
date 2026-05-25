@@ -30,11 +30,11 @@ import (
 )
 
 const (
-	githubAPIBase       = "https://api.github.com"
-	defaultGitHubCred   = "github-token"
-	githubAcceptHeader  = "application/vnd.github+json"
-	githubAPIVersion    = "2022-11-28"
-	maxGitHubResponse   = 1 << 20 // 1 MiB
+	githubAPIBase      = "https://api.github.com"
+	defaultGitHubCred  = "github-token"
+	githubAcceptHeader = "application/vnd.github+json"
+	githubAPIVersion   = "2022-11-28"
+	maxGitHubResponse  = 1 << 20 // 1 MiB
 )
 
 // ── github.create_issue ──────────────────────────────────────────
@@ -310,6 +310,81 @@ func GitHubListIssues(v *vault.Store) *packs.Pack {
 				return resp, nil
 			}
 			return json.Marshal(map[string]any{"issues": issues, "count": len(issues)})
+		}),
+	}
+}
+
+// ── github.create_pr ─────────────────────────────────────────────
+
+// GitHubCreatePR (swe.solve Phase 3, epic #233) opens a pull request
+// via the GitHub REST API using a vault-stored PAT. It is the final
+// step of swe.solve's `pull_request` output mode: repo.push lands the
+// agent's work on a NEW branch, then this pack opens the PR for a
+// human to review. As with every github.* pack, the token is resolved
+// from the vault by name and never travels through the pack input or
+// the agent-visible surface.
+//
+// Input shape:
+//
+//	{
+//	  "repo":  "owner/name",  // required, "owner/repo"
+//	  "head":  "feature-x",   // required, source branch
+//	  "base":  "main",        // required, target branch
+//	  "title": "Fix the bug", // required
+//	  "body":  "...",         // optional PR description
+//	  "draft": false,         // optional, open as draft
+//	  "credential": "github-token" // optional vault name override
+//	}
+func GitHubCreatePR(v *vault.Store) *packs.Pack {
+	return &packs.Pack{
+		Name:        "github.create_pr",
+		Version:     "v1",
+		Description: "Open a pull request on a GitHub repository using a vault-stored PAT.",
+		InputSchema: packs.BasicSchema{
+			Required: []string{"repo", "head", "base", "title"},
+			Properties: map[string]string{
+				"repo":       "string",
+				"head":       "string",
+				"base":       "string",
+				"title":      "string",
+				"body":       "string",
+				"draft":      "boolean",
+				"credential": "string",
+			},
+		},
+		OutputSchema: packs.BasicSchema{
+			Required: []string{"number", "html_url"},
+			Properties: map[string]string{
+				"number":   "number",
+				"url":      "string",
+				"html_url": "string",
+			},
+		},
+		Handler: githubHandler(v, func(token string, input json.RawMessage) (json.RawMessage, error) {
+			var in struct {
+				Repo  string `json:"repo"`
+				Head  string `json:"head"`
+				Base  string `json:"base"`
+				Title string `json:"title"`
+				Body  string `json:"body"`
+				Draft bool   `json:"draft"`
+			}
+			if err := json.Unmarshal(input, &in); err != nil {
+				return nil, err
+			}
+			if in.Repo == "" || in.Head == "" || in.Base == "" || in.Title == "" {
+				return nil, fmt.Errorf("repo, head, base, and title are required")
+			}
+			body := map[string]any{
+				"title": in.Title,
+				"head":  in.Head,
+				"base":  in.Base,
+				"draft": in.Draft,
+			}
+			if in.Body != "" {
+				body["body"] = in.Body
+			}
+			return githubAPI(token, "POST", "/repos/"+in.Repo+"/pulls", body)
 		}),
 	}
 }

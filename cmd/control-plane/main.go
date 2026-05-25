@@ -301,10 +301,10 @@ func main() {
 		Gateway:          gwReg,
 		RehydrateGateway: rehydrateGateway,
 		Keys:             ks,
-		MCPRegistry: mcp.NewRegistry(db),
-		Vault:       vaultStore,
-		Injector:    inject.New(vaultStore, logger.With("subsystem", "inject")),
-		Marketplace: marketplaceSvc,
+		MCPRegistry:      mcp.NewRegistry(db),
+		Vault:            vaultStore,
+		Injector:         inject.New(vaultStore, logger.With("subsystem", "inject")),
+		Marketplace:      marketplaceSvc,
 		// T607: expose the SQLite handle so the providers/stats
 		// endpoint can run aggregation queries against
 		// provider_calls. Other DB-backed endpoints land here
@@ -433,6 +433,13 @@ func main() {
 	if err := packReg.Register(builtin.RepoPush(vaultStore, egressGuard)); err != nil {
 		logger.Warn("register repo.push pack failed", "err", err)
 	}
+	// swe.solve (epic #233 Phase 3): runs a mini-swe-agent loop inside a
+	// session sidecar to produce a reviewable code change. Same vault +
+	// egress-guard deps as the other repo packs — used for clone/push
+	// credential resolution and SSRF protection on the git host.
+	if err := packReg.Register(builtin.SweSolve(vaultStore, egressGuard)); err != nil {
+		logger.Warn("register swe.solve pack failed", "err", err)
+	}
 	if err := packReg.Register(builtin.HTTPFetch(vaultStore, egressGuard)); err != nil {
 		logger.Warn("register http.fetch pack failed", "err", err)
 	}
@@ -499,6 +506,10 @@ func main() {
 		builtin.GitHubPostComment(vaultStore),
 		builtin.GitHubCreateRelease(vaultStore),
 		builtin.GitHubSearch(vaultStore),
+		// github.create_pr (epic #233 Phase 3): opens the PR that
+		// swe.solve's pull_request mode lands on a new branch. Also
+		// usable standalone for agent-driven PR creation.
+		builtin.GitHubCreatePR(vaultStore),
 	} {
 		if err := packReg.Register(p); err != nil {
 			logger.Warn("register github pack failed", "pack", p.Name, "err", err)

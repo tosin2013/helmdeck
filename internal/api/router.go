@@ -21,6 +21,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/marketplace"
 	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/packs"
+	"github.com/tosin2013/helmdeck/internal/pipelines"
 	"github.com/tosin2013/helmdeck/internal/session"
 	"github.com/tosin2013/helmdeck/internal/vault"
 )
@@ -57,6 +58,8 @@ type Deps struct {
 	Injector     *inject.Injector // optional; nil disables vault injection on /api/v1/browser/navigate
 	Marketplace          *marketplace.Service   // optional; nil disables /api/v1/marketplace/* (T810)
 	MarketplaceInstaller *marketplace.Installer // optional; nil disables install/uninstall/installed (T812)
+	PipelineStore  *pipelines.Store  // optional; nil disables /api/v1/pipelines (ADR 041)
+	PipelineRunner *pipelines.Runner // optional; nil disables pipeline run + MCP pipeline tools
 }
 
 // IsProtectedPath returns true for paths the auth middleware must guard.
@@ -117,6 +120,7 @@ func NewRouter(deps Deps) http.Handler {
 	registerGatewayRoutes(mux, deps)
 	registerKeyRoutes(mux, deps)
 	registerPackRoutes(mux, deps)
+	registerPipelineRoutes(mux, deps)
 	registerA2ARoutes(mux, deps)
 	registerMCPRoutes(mux, deps)
 	registerMCPServerRoute(mux, deps)

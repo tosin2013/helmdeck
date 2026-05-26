@@ -518,7 +518,7 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 **Ships:**
 
-- [#233](https://github.com/tosin2013/helmdeck/issues/233) — `swe.solve` epic: Phase 1 (`HelmdeckEnvironment` adapter, ✅ shipped #265) + Phase 3 (`swe.solve` Go pack handler, blocked by #232)
+- [#233](https://github.com/tosin2013/helmdeck/issues/233) — `swe.solve` epic: Phase 1 (`HelmdeckEnvironment` adapter, ✅ shipped #265) + Phase 3 (`swe.solve` Go pack handler, ✅ shipped #271) + Phase 4 (trajectory artifact in Garage S3, with Phase 3) + Phase 6 (GitHub-issue auto-trigger via ADR 033 — label an issue, get a PR; posts the result back as a comment)
 - [#253](https://github.com/tosin2013/helmdeck/issues/253) — post-install/upgrade integration smoke check via OpenClaw round-trip (✅ shipped #263)
 - [#212](https://github.com/tosin2013/helmdeck/issues/212)–[#215](https://github.com/tosin2013/helmdeck/issues/215) — ADR 037 fully enforced: dependabot, exact pins, CLI-surface sentinels, docs (✅ shipped #240–#243)
 - [#248](https://github.com/tosin2013/helmdeck/issues/248) — ADR 037 follow-up cleanups: drop `marp --stdin`, fix `--html` format spec, pinned global `playwright-mcp` bin in the sidecar entrypoint (✅ shipped #264)
@@ -528,9 +528,9 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 **Out:**
 
 - Universal memory **deferred tiers**: Redis-backed Episodic and the pgvector/Semantic tier remain out per ADR 039 (the pluggable `MemoryStore` interface keeps the door open). The community validation middleware (#268) is the next seam consumer.
-- `swe.solve` Phases 4–8 (trajectory storage in Garage S3, OTel spans per agent step, GitHub-webhook auto-trigger via ADR 033, A2A skill exposure via ADR 026, procedural-memory pack promotion via ADR 029). Each opens as its own follow-up issue after Phase 3 lands. Phases 4–8 lean on ADRs currently `Status: Proposed` — premature to commit.
+- `swe.solve` remaining phases: **Phase 5** (OTel spans per agent step), **Phase 7** (A2A skill exposure via ADR 026), **Phase 8** (procedural-memory pack promotion via ADR 029). Phases 7–8 lean on ADRs currently `Status: Proposed` — premature to commit. (Phase 4 trajectory storage and Phase 6 GitHub-issue auto-trigger landed in this release — ADR 033 was already `Accepted`.)
 
-**Status:** the ADR 037 quad (#212–#215) shipped together as planned, with the #248 cleanups completing the enforcement. `swe.solve` Phase 1 + the smoke check are in. The remaining open headline item is `swe.solve` Phase 3.
+**Status:** the ADR 037 quad (#212–#215) shipped together as planned, with the #248 cleanups completing the enforcement. `swe.solve` Phases 1, 3, 4, and 6 are in (adapter, pack, trajectory artifact, GitHub-issue auto-trigger), alongside the universal-memory layer (ADR 039) and persistent repos (ADR 040). #232 is resolved.
 
 **Blocked by:** [#232](https://github.com/tosin2013/helmdeck/issues/232) — Phase 3 of `swe.solve` requires `repo.fetch → fs.*` working in a session.
 

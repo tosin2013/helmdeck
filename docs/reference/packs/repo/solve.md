@@ -160,6 +160,32 @@ The closed-set codes are defined in
 alive (`PreserveSession`). The returned `session_id` can be reused by follow-on
 `fs.*` / `cmd.run` / `git.*` packs to inspect or extend the clone.
 
+## Auto-trigger from GitHub issues (ADR 033, #233 Phase 6)
+
+`swe.solve` can run automatically when an issue is **labeled** on a connected repo — "label an issue, get a PR." The GitHub webhook receiver (`POST /api/v1/webhooks/github`) verifies the delivery's HMAC-SHA256 signature, then dispatches `swe.solve` on a detached background context (the agent loop takes minutes; it never blocks GitHub's ~10s delivery timeout) and posts the resulting PR + summary back as an issue comment.
+
+Configure it with two env vars on the control plane:
+
+```bash
+HELMDECK_GITHUB_WEBHOOK_SECRET=<the secret you set on the GitHub webhook>
+HELMDECK_GITHUB_WEBHOOK_RULES='[
+  {
+    "event":  "issues",
+    "action": "labeled",
+    "label":  "swe-solve",
+    "pack":   "swe.solve",
+    "args":   { "mode": "pull_request", "credential": "github-token", "model": "gpt-4o" }
+  }
+]'
+```
+
+- The webhook builds the pack input from the event: `repo_url` = the repo clone URL, `task` = the issue title + body (or the comment body for an `issue_comment` rule). Fields in `args` are merged **over** that, so `mode`/`credential`/`model` are operator-controlled.
+- `mode` defaults to `pull_request` for issue events — the headline flow opens a PR.
+- The result comment is posted via `github.post_comment` using the same `credential`; omit it and swe.solve still runs, just without the comment-back.
+- Point the GitHub webhook at `https://<your-host>/api/v1/webhooks/github` with content-type `application/json` and the same secret, subscribed to the **Issues** event.
+
+Guardrails carry over: the `label` filter means only explicitly-labeled issues trigger a run, and `swe.solve` still never pushes to the default branch.
+
 ## Async behavior
 
 **Asynchronous.** `swe.solve` sets `Async: true` — the initial call returns a
@@ -174,3 +200,4 @@ trio) for completion.
 - Companion packs: `repo.fetch`, `repo.map`, `repo.push`, `git.commit`, `github.create_pr`.
 - Adapter: [`contrib/helmdeck-environment`](https://github.com/tosin2013/helmdeck/tree/main/contrib/helmdeck-environment) (Phase 1).
 - Epic #233 — swe.solve. Memory-recall hook for #257 (Universal Memory Delivery Layer).
+- [ADR 033 — GitHub webhook listener](https://github.com/tosin2013/helmdeck/blob/main/docs/adrs/033-github-webhook-listener.md) — the auto-trigger receiver (#233 Phase 6).

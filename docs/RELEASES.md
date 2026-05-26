@@ -536,6 +536,25 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 ---
 
+## v0.15.0 — Pipelines as a first-class resource (target: TBD) {#v0150}
+
+**Theme:** A pipeline — a stored, named, ordered sequence of pack steps — becomes a first-class resource any actor can create, run, and inspect. helmdeck stops being only a tool server and starts owning the workflow.
+
+**Ships:**
+
+- [ADR 041](adrs/041-pipelines-as-first-class-resource.md) — **Pipelines as a first-class resource** (runnable slice): a new `internal/pipelines` package (SQLite-persisted definitions + run history, a sequential runner reusing `Engine.Execute`, `${{ steps.X.output.field }}` / `${{ inputs.* }}` dot-notation templating, automatic `_session_id` threading), REST CRUD + async run + run-history at `/api/v1/pipelines`, and `helmdeck__pipeline-{list,get,create,run,run-status}` MCP tools so any connected agent (OpenClaw, Gemini CLI, Claude Code) can build and run pipelines conversationally.
+- **~13 built-in starter pipelines** auto-seeded at startup and runnable out of the box — including `content.ground → slides.render` (grounded deck), `content.ground → blog.publish` (grounded blog), `research.deep → {slides,podcast,blog}`, `web.scrape → content.ground → blog.publish`, and `repo.fetch → {slides.narrate, podcast.generate}` (clone a repo → media about it). Provider-dependent starters degrade gracefully (stable premade voice + `allow_silent_output`); a starter whose packs aren't registered is skip-and-logged.
+- `podcast.generate` now surfaces a presigned `audio_url` in its output (from the artifact store), unlocking a clean `podcast.generate → hyperframes.render` narrated-video chain (embed the URL in the composition's `<audio src>`).
+- Migration `0007_pipelines.sql` (additive: `pipelines` + `pipeline_runs` tables, auto-applied).
+
+**Out (deferred follow-ups, seams in place):**
+
+- Cron + webhook pipeline triggers (the runner is HTTP-decoupled — ADR 033's receiver and a future scheduler call the same `StartRun`). The Management UI `/pipelines` panel, A2A pipeline-management skill, and "promote a successful run from the audit log into a pipeline" follow per ADR 041's sequencing (v1.0→v1.3).
+
+**Status:** the v0.15.0 slice is the REST + MCP + runner + starters foundation; triggers/UI/audit-promote are explicitly later so the data model lands correct first.
+
+---
+
 ## v1.0.0-rc1 — Kubernetes preview (planned) {#v100rc1}
 
 **Theme:** "Helm install works; production hardening pending."

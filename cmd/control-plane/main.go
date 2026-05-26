@@ -31,6 +31,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
+	"github.com/tosin2013/helmdeck/internal/pipelines"
 	"github.com/tosin2013/helmdeck/internal/repos"
 	"github.com/tosin2013/helmdeck/internal/packs/builtin"
 	"strconv"
@@ -670,6 +671,30 @@ func main() {
 			}
 		}
 	}
+
+	// Pipelines (ADR 041). Built after all packs are registered so seeding
+	// can confirm each starter's packs exist; a starter whose packs aren't
+	// present (e.g. a vision pack with no gateway) is skipped-and-logged so
+	// startup never fails. Runner reuses the pack engine; the run sweeper
+	// evicts terminal in-memory runs (durable history stays in SQLite).
+	pipeStore := pipelines.NewStore(db)
+	pipeRunner := pipelines.NewRunner(pipeStore, packReg.Get, deps.PackEngine, logger.With("subsystem", "pipelines"))
+	pipeRunner.SetHook(func(c context.Context, r *pipelines.Run) {
+		auditWriter.Write(c, audit.Entry{
+			EventType: audit.EventType("pipeline_run"),
+			Payload:   map[string]any{"pipeline_id": r.PipelineID, "run_id": r.ID, "status": string(r.Status)},
+		})
+	})
+	packExists := func(name, ver string) bool { _, e := packReg.Get(name, ver); return e == nil }
+	for _, p := range pipelines.Builtins() {
+		if err := pipeStore.Seed(ctx, p, packExists); err != nil {
+			logger.Warn("seed pipeline skipped", "id", p.ID, "err", err)
+		}
+	}
+	deps.PipelineStore = pipeStore
+	deps.PipelineRunner = pipeRunner
+	go pipeRunner.RunSweeper(ctx)
+	logger.Info("pipelines enabled (ADR 041)", "builtins", len(pipelines.Builtins()))
 
 	if *disableAuth {
 		deps.Issuer = nil

@@ -67,6 +67,9 @@ type PackServer struct {
 	// internal/imagemodels catalog — no caching needed. Future
 	// dynamic-fetch impls slot in here.
 	imageModelLister ImageModelLister
+	// pipelines, when set, backs the helmdeck__pipeline-* tools (ADR 041).
+	// Wired via WithPipelines; nil ⇒ those tools are absent.
+	pipelines PipelineService
 }
 
 // SessionLister is the minimum surface PackServer needs to expose live
@@ -303,6 +306,9 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 		// the same way as regular packs — SKILLS.md tells the LLM
 		// when to prefer the async path.
 		tools = append(tools, asyncPackTools()...)
+		// helmdeck__pipeline-* tools (ADR 041), only when a pipeline
+		// service is wired.
+		tools = append(tools, s.pipelineTools()...)
 		return mk(map[string]any{"tools": tools}, nil)
 
 	case "resources/list":
@@ -474,6 +480,11 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 		// See jobs.go for the rationale.
 		if asyncResult, handled := s.dispatchAsyncTool(params.Name, params.Arguments); handled {
 			return mk(asyncResult, nil)
+		}
+		// helmdeck__pipeline-* tools (ADR 041) intercept before the
+		// registry lookup, same as the async wrapper tools.
+		if pipeResult, handled := s.dispatchPipelineTool(ctx, params.Name, params.Arguments); handled {
+			return mk(pipeResult, nil)
 		}
 		pack, err := s.registry.Get(params.Name, "")
 		if err != nil {

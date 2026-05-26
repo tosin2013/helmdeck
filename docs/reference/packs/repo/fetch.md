@@ -26,8 +26,10 @@ What sets `repo.fetch` apart from a plain `git clone` shell call is the **contex
 | `url` | `string` | Echo of the input. |
 | `ref` | `string` | Resolved ref. |
 | `commit` | `string` | HEAD SHA after the clone (and post-checkout if `ref` was set). |
-| `clone_path` | `string` | `/tmp/helmdeck-clone-<rand>`. Pass this back as `clone_path` to every follow-up `fs.*` / `cmd.run` / `git.*` / `repo.push` call, **plus** propagate `_session_id` (see Session chaining). |
+| `clone_path` | `string` | Where the clone landed. `/tmp/helmdeck-clone-<rand>` for an ephemeral clone, or `/repos/<caller>/<repo-hash>` when the persistent repos volume is enabled (see below). Pass this back as `clone_path` to every follow-up `fs.*` / `cmd.run` / `git.*` / `repo.push` call, **plus** propagate `_session_id` (see Session chaining). |
 | `session_id` | `string` | **Issue #232.** The session container the clone lives in. Pass this as `_session_id` in every follow-up pack call — otherwise the engine spins up a fresh session whose `/tmp` does not contain this clone, and `fs.read` / `cmd.run` will see "No such file" errors. This value also appears on the response envelope as `session_id`; it's duplicated here so it can't be missed by callers reading only `output`. |
+| `persistent` | `boolean` | **ADR 040.** `true` when the clone lives on the persistent repos volume (survives the session); `false` for an ephemeral `/tmp` clone. |
+| `reused` | `boolean` | **ADR 040.** `true` when this call hit an existing on-volume clone and `git fetch`ed it instead of full-cloning. Always `false` for ephemeral clones. |
 | `credential` | `string` | Vault record name actually used (or `""` for public clones). |
 | `files` | `number` | Total `git ls-files` count. |
 | `tree` | `array` | Up to 300 relative paths. Sorted. |
@@ -155,14 +157,33 @@ Captured response shape (truncated):
 
 `PreserveSession: true` — the session persists 5 minutes after the last call (watchdog cleanup) so chained workflows reuse the same Chromium / sidecar instance. Subsequent calls within that window are warm (~1–3s); first call is cold (~10–30s for sidecar boot + clone).
 
+## Persistent clones across sessions (ADR 040)
+
+By default a clone lives in the session container's `/tmp` and dies with the session (ADR 004). When the operator enables the **persistent repos volume**, `repo.fetch` instead clones into a deterministic per-caller path on a shared volume — `/repos/<caller>/<repo-hash>` — that is re-mounted into every session. A later `repo.fetch` for the same repo, even from a brand-new session, finds the existing clone and runs `git fetch` + reset-to-clean instead of a full re-clone (`reused: true`).
+
+The big win is the **per-language dependency cache**: `node.run` / `python.run` running with a `cwd` on the volume get `GOMODCACHE`, `npm_config_cache`, `PIP_CACHE_DIR`, `CARGO_HOME`, etc. pointed at the clone's `.hdcache/`, so `go mod download` / `npm install` populate a cache that survives into the next session. `.hdcache/` is preserved across reuse (`git clean -fdx -e .hdcache`).
+
+Enable it by naming a volume in the control-plane env (the bundled Compose file sets this by default):
+
+| Env | Default | Meaning |
+|---|---|---|
+| `HELMDECK_PERSISTENT_REPOS` | _unset_ | Docker volume mounted into every sidecar at `/repos`. Unset ⇒ ephemeral `/tmp` clones, exactly as before. |
+| `HELMDECK_REPOS_TTL` | `336h` (14d) | Evict a clone untouched for this long. |
+| `HELMDECK_REPOS_MAX_BYTES` | `21474836480` (20 GiB) | Total volume cap; over it, least-recently-used clones are evicted. `-1` disables. |
+| `HELMDECK_REPOS_JANITOR_INTERVAL` | `1h` | How often the repos janitor sweeps. |
+| `HELMDECK_REPOS_ROOT` | `/repos` | Where the volume is mounted inside the control plane (for the janitor). |
+
+Safety: clones are namespaced per caller and guarded by a per-clone `flock` so two sessions can't corrupt one tree; concurrent contention falls back to a private ephemeral clone. The repos janitor never evicts a clone a session currently holds. Isolation is path-based (single-tenant today) — see ADR 040 for the deferred hard-isolation seam.
+
 ## Async behavior
 
-Synchronous. Wall-clock = sidecar boot (~5–15s on cold session) + `git clone` over the network + envelope computation (~1s for a 300-file tree). Heavy repos (Linux kernel, large monorepos) can hit the 5-minute session-creation timeout — pass `depth: 1` to bound the work.
+Synchronous. Wall-clock = sidecar boot (~5–15s on cold session) + `git clone` over the network + envelope computation (~1s for a 300-file tree). Heavy repos (Linux kernel, large monorepos) can hit the 5-minute session-creation timeout — pass `depth: 1` to bound the work. With the persistent repos volume, a **reused** clone skips the clone entirely (`git fetch` only), so warm repeats are markedly faster.
 
 ## See also
 
 - Catalog row: [`PACKS.md`](/PACKS) — `repo.fetch`.
 - Source: [`internal/packs/builtin/repo_fetch.go`](https://github.com/tosin2013/helmdeck/blob/main/internal/packs/builtin/repo_fetch.go).
 - ADR 022 — Repo packs.
+- ADR 040 — Persistent repos volume + cross-session clone reuse.
 - Companion packs: [`repo.map`](./map.md), [`repo.push`](./push.md), [`fs.read`](../fs/read.md), [`git.commit`](../git/commit.md).
 - The Phase 5.5 code-edit loop walkthrough: [`SKILLS.md`](/integrations/SKILLS#worked-example--the-phase-55-code-edit-loop).

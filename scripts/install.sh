@@ -11,7 +11,7 @@
 #      openssl, curl) and prints platform-specific install hints
 #      when something is missing.
 #   2. Generates fresh secrets (HELMDECK_JWT_SECRET, HELMDECK_VAULT_KEY,
-#      HELMDECK_KEYSTORE_KEY, HELMDECK_ADMIN_PASSWORD) into
+#      HELMDECK_KEYSTORE_KEY, HELMDECK_MEMORY_KEY, HELMDECK_ADMIN_PASSWORD) into
 #      deploy/compose/.env.local — or reuses an existing file when
 #      one is already present.
 #   3. Builds the Management UI bundle, the Go binaries, and the
@@ -312,10 +312,11 @@ generate_password() {
 }
 
 write_env_file() {
-  local jwt vault keystore password docker_gid
+  local jwt vault keystore memory password docker_gid
   jwt="$(generate_hex)"
   vault="$(generate_hex)"
   keystore="$(generate_hex)"
+  memory="$(generate_hex)"
   password="$(generate_password)"
   # On Linux the host's docker group GID needs to be passed into the
   # control-plane container so the nonroot user can read the docker
@@ -352,6 +353,15 @@ HELMDECK_VAULT_KEY=${vault}
 # Anthropic / OpenAI / Gemini / Ollama / Deepseek API keys
 # operators add via the AI Providers panel. 32-byte hex.
 HELMDECK_KEYSTORE_KEY=${keystore}
+
+# Universal Memory encryption key (ADR 039). Encrypts agent-memory
+# entries at rest (SQLite, AES-256-GCM) — pack caches, swe.solve
+# prior-solve notes, Context() aggregation. Distinct from the vault
+# and keystore keys so a leak of one domain doesn't expose another.
+# Pinning it here is what makes memory DURABLE: without it the control
+# plane autogenerates an ephemeral key and memory is wiped on every
+# restart. 32-byte hex.
+HELMDECK_MEMORY_KEY=${memory}
 
 # Management UI admin password. The login form at http://localhost:3000
 # accepts (admin, this value) and mints a 12-hour JWT.

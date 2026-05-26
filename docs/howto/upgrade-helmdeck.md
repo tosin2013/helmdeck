@@ -261,6 +261,15 @@ Helm tracks revisions; a rollback runs the previous chart version's `Job` (which
 
 ### Per-hop notes (most recent first)
 
+**v0.13.x → v0.14.0**: non-breaking, but **one recommended `.env.local` addition**. This release ships the Universal Memory layer (ADR 039) and persistent repos (ADR 040). Memory works out of the box, but to make it **durable across restarts** you must pin a key — fresh `scripts/install.sh` runs now generate it, but an in-place upgrade reuses your existing `.env.local`, which predates the key. Add it once:
+
+```bash
+grep -q '^HELMDECK_MEMORY_KEY=' deploy/compose/.env.local || \
+  echo "HELMDECK_MEMORY_KEY=$(openssl rand -hex 32)" >> deploy/compose/.env.local
+```
+
+Without it the control plane autogenerates an ephemeral key (logs a warning) and memory entries are wiped on every restart. The new SQLite migration `0006_memory_entries.sql` is additive (`CREATE TABLE`, auto-applied on boot). Persistent repos is enabled by default in the bundled Compose (new `helmdeck-repos` volume mounted at `/repos`); to opt out, unset `HELMDECK_PERSISTENT_REPOS`. New built-in pack `swe.solve` (`helmdeck__swe.solve`). No removed fields, no closed-set value changes.
+
 **v0.12.x → v0.13.0** (this is the headline release as of the May 2026 cycle): non-breaking. Introduces the **community pack marketplace** as a new opt-in surface — three REST endpoints (`/api/v1/marketplace/{catalog,install,uninstall}`), a `/marketplace` UI panel, and a new `helmdeck` CLI binary that wraps the install loop from a terminal. Two new sidecar images you'll want pulled before first marketplace install: `ghcr.io/tosin2013/helmdeck-sidecar-marketplace:0.13.0` (the default execution sandbox for installed marketplace packs — bash + jq + curl + python3 + Node 20; see ADR 038 for why) and `ghcr.io/tosin2013/helmdeck-sidecar-hyperframes:0.13.0` (for the new `hyperframes.render` HTML→MP4 pack — Node 22 + ffmpeg). Catalog fetching is on by default; disable with `HELMDECK_MARKETPLACE_DISABLE=1` in `.env.local` if you don't want the control plane reaching out to GitHub on boot. Two new built-in packs (`hyperframes.render`, `stock.search`) bumping count 39 → 41. SQLite migration `0005_provider_calls_diagnostics.sql` adds three columns to `provider_calls` (`job_id`, `finish_reason`, `raw_content_len`) via `ALTER TABLE ADD COLUMN` — O(1) metadata-only, safe even on multi-million-row tables. `blog.publish`'s `destination` is now optional (defaults to `"artifact"`); previously-passing `destination="ghost"` callers gain `artifact_key`/`artifact_url` in the response and now return a partial-success envelope on Ghost failures instead of erroring out. No removed fields, no closed-set value changes.
 
 **v0.9.0 → v0.10.0:** non-breaking. Adds `blog.publish` + `podcast.generate` packs, fixes `vision.click_anywhere` per #102 (improvement; existing callers see better behavior), bumps pack count 36 → 38. No schema-removal, no input-shape change to existing packs.

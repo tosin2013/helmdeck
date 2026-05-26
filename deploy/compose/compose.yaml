@@ -41,9 +41,10 @@ services:
     # Forward every secret from the install-script-generated .env.local
     # into the container. The environment: block below names the static,
     # non-secret bits; env_file pulls in HELMDECK_VAULT_KEY,
-    # HELMDECK_KEYSTORE_KEY, HELMDECK_ADMIN_PASSWORD, etc. so the control
-    # plane can decrypt the vault, decrypt the AI provider keystore, and
-    # serve the Management UI login endpoint.
+    # HELMDECK_KEYSTORE_KEY, HELMDECK_MEMORY_KEY, HELMDECK_ADMIN_PASSWORD,
+    # etc. so the control plane can decrypt the vault, decrypt the AI
+    # provider keystore, persist agent memory across restarts (ADR 039),
+    # and serve the Management UI login endpoint.
     env_file:
       - .env.local
     environment:

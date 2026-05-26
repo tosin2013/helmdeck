@@ -6,7 +6,7 @@ tags: [agent-architecture, cost]
 description: Helmdeck sessions are deliberately ephemeral — Chromium leaks, so every session is a fresh container that's torn down after use. That made repo.fetch re-clone and re-`npm install` on every run. The fix wasn't to weaken the ephemerality; it was to notice that a git working tree was never the thing ADR 004 wanted thrown away.
 image: /img/social-card.png
 date: 2026-05-26
-draft: true
+draft: false
 ---
 
 ## Hook

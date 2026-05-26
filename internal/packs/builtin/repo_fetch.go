@@ -440,6 +440,9 @@ func cloneAcquireScript(url, ref string, depth int, cloneDir string) string {
 		// the per-language dependency cache (.hdcache) so installs persist.
 		"  git -C \"$CLONE_DIR\" reset --hard 1>&2 || true",
 		"  git -C \"$CLONE_DIR\" clean -fdx -e .hdcache 1>&2 || true",
+		// Touch the access marker the repos janitor (ADR 040) reads to
+		// decide staleness, so an actively-reused clone isn't GC'd.
+		"  touch \"$CLONE_DIR.hdaccess\" 2>/dev/null || true",
 		") 9>\"$CLONE_DIR.lock\"",
 		"rc=$?",
 		"set -e",

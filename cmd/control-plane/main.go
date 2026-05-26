@@ -31,6 +31,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
+	"github.com/tosin2013/helmdeck/internal/repos"
 	"github.com/tosin2013/helmdeck/internal/packs/builtin"
 	"strconv"
 
@@ -258,6 +259,18 @@ func main() {
 		if img := os.Getenv("HELMDECK_SIDECAR_IMAGE"); img != "" {
 			opts = append(opts, dockerrt.WithImage(img))
 		}
+		// ADR 040: HELMDECK_PERSISTENT_REPOS names a Docker volume that
+		// is mounted into every session sidecar at /repos, enabling
+		// repo.* clones to persist across sessions (`git fetch` instead
+		// of a full re-clone, and a persistent per-language dependency
+		// cache). Unset ⇒ sessions stay fully ephemeral and clones go to
+		// /tmp, exactly as before. The same name must be declared as a
+		// named volume in compose (helmdeck-repos) and mounted into the
+		// control-plane at /repos so the repos janitor can GC it.
+		if vol := os.Getenv("HELMDECK_PERSISTENT_REPOS"); vol != "" {
+			opts = append(opts, dockerrt.WithReposVolume(vol))
+			logger.Info("persistent repos volume enabled (ADR 040)", "volume", vol, "mount", "/repos")
+		}
 		dr, err := dockerrt.New(opts...)
 		if err != nil {
 			logger.Warn("docker runtime unavailable; /api/v1/sessions disabled", "err", err)
@@ -420,6 +433,26 @@ func main() {
 		logger.Info("artifact janitor running",
 			"interval", parseDurationOr("HELMDECK_ARTIFACT_JANITOR_INTERVAL", time.Hour),
 			"default_ttl", parseDurationOr("HELMDECK_ARTIFACT_TTL", 7*24*time.Hour))
+	}
+
+	// Repos janitor (ADR 040). Runs only when the persistent repos volume
+	// is configured; GCs stale clones from the volume mounted into the
+	// control plane at HELMDECK_REPOS_ROOT (/repos in compose). TTL and
+	// size cap are tunable; NewJanitor returns nil for an empty root so
+	// the no-volume deployment starts nothing.
+	if os.Getenv("HELMDECK_PERSISTENT_REPOS") != "" {
+		rj := repos.NewJanitor(repos.Config{
+			Root:     envOr("HELMDECK_REPOS_ROOT", "/repos"),
+			Interval: parseDurationOr("HELMDECK_REPOS_JANITOR_INTERVAL", time.Hour),
+			TTL:      parseDurationOr("HELMDECK_REPOS_TTL", 14*24*time.Hour),
+			MaxBytes: parseBytesOr("HELMDECK_REPOS_MAX_BYTES", 20<<30),
+			Logger:   logger.With("subsystem", "repos-janitor"),
+		})
+		if rj != nil {
+			go rj.Run(ctx)
+			logger.Info("repos janitor running",
+				"root", rj.Root, "interval", rj.Interval, "ttl", rj.TTL, "max_bytes", rj.MaxBytes)
+		}
 	}
 
 	// Register built-in packs (T208–T210, T402–T403). New packs append here.
@@ -764,6 +797,21 @@ func parseDurationOr(envKey string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// parseBytesOr parses a plain byte count from envKey, returning def when
+// unset or unparseable. A negative value is passed through so operators
+// can set e.g. HELMDECK_REPOS_MAX_BYTES=-1 to disable the repos size cap.
+func parseBytesOr(envKey string, def int64) int64 {
+	v := os.Getenv(envKey)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 // envOrFile returns the value of envKey if set; otherwise reads the

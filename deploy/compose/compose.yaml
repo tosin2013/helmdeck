@@ -50,6 +50,14 @@ services:
       HELMDECK_ADDR: ":3000"
       HELMDECK_DB: "/data/helmdeck.db"
       HELMDECK_SESSION_NETWORK: "baas-net"
+      # ADR 040: name the persistent repos volume. The control plane
+      # mounts it into every session sidecar at /repos so repo.* clones
+      # survive across sessions (git fetch instead of a full re-clone,
+      # plus a persistent per-language dependency cache). The same volume
+      # is mounted into the control plane below at /repos so the repos
+      # janitor can GC stale clones. Unset this to revert to fully
+      # ephemeral /tmp clones.
+      HELMDECK_PERSISTENT_REPOS: "helmdeck-repos"
       HELMDECK_JWT_SECRET: "${HELMDECK_JWT_SECRET:?HELMDECK_JWT_SECRET is required; copy .env.example to .env and fill it in}"
       # Object store wiring (ADR 031, T211a). Endpoint, bucket, and the
       # access/secret are populated by the garage-init service into a
@@ -65,6 +73,10 @@ services:
     volumes:
       - helmdeck-data:/data
       - garage-credentials:/garage-credentials:ro
+      # ADR 040: the persistent repos volume, also mounted into every
+      # session sidecar (out-of-band, by the Docker SDK). Mounted here so
+      # the repos janitor can walk /repos and evict stale clones.
+      - helmdeck-repos:/repos
       # Required so the control plane can spawn ephemeral session
       # containers via the SessionRuntime / Docker SDK backend.
       # Read-write because ContainerCreate, Start, Logs, Remove all
@@ -176,6 +188,13 @@ volumes:
     name: helmdeck-garage-data
   garage-credentials:
     name: helmdeck-garage-credentials
+  # ADR 040: persistent git clones + per-language dependency caches,
+  # shared between the control plane and every session sidecar. Bounded
+  # by the repos janitor (TTL + size cap). Explicit name so the control
+  # plane's out-of-band Docker SDK mount (Source: helmdeck-repos) matches
+  # this compose-managed volume rather than a project-prefixed one.
+  helmdeck-repos:
+    name: helmdeck-repos
 
 networks:
   baas-net:

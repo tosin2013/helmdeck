@@ -536,7 +536,7 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 ---
 
-## v0.15.0 — Pipelines as a first-class resource (target: TBD) {#v0150}
+## v0.15.0 — Pipelines as a first-class resource — ✅ Shipped 2026-05-26 {#v0150}
 
 **Theme:** A pipeline — a stored, named, ordered sequence of pack steps — becomes a first-class resource any actor can create, run, and inspect. helmdeck stops being only a tool server and starts owning the workflow.
 

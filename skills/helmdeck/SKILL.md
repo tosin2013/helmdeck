@@ -111,6 +111,14 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 - `pack.status` — Poll the state of a `pack.start` job. Returns `{state, progress, message}`. Poll every 2-5 seconds. State transitions: `running` → `done` or `failed`.
 - `pack.result` — Retrieve the final result of a completed async job. Errors with `not_ready` if the job is still running. Job results are kept for 1 hour after completion.
 
+### Pipelines (v0.15.0, ADR 041)
+A **pipeline** is a saved, named, ordered sequence of pack steps that runs server-side, threading each step's output into the next via `${{ steps.<id>.output.<field> }}` (and run inputs via `${{ inputs.<name> }}`). Use these tools to run a known workflow in one call instead of orchestrating packs by hand — see "Pipelines vs. packs" below for *when*.
+- `helmdeck__pipeline-list` — List all pipelines (built-in starters + ones you/others created). **Call this first** when a user asks for a multi-step workflow — there may already be one (e.g. `builtin.grounded-deck`, `builtin.research-podcast`, `builtin.repo-readme-narrate`).
+- `helmdeck__pipeline-get` — Get one pipeline's full step definition by `id`.
+- `helmdeck__pipeline-run` — Run a pipeline (async). Pass `inputs` for its `${{ inputs.* }}` refs; returns a `run_id` immediately. Then poll `helmdeck__pipeline-run-status`.
+- `helmdeck__pipeline-run-status` — Poll a run by `run_id`: overall status (`pending|running|succeeded|failed`) + per-step outputs/errors.
+- `helmdeck__pipeline-create` — **Codify** a repeatable workflow as a new pipeline. Steps are `[{id, pack, input}]`; reference earlier steps with `${{ steps.<id>.output.<field> }}`. Discover valid voice/model IDs from `helmdeck://voices` / `helmdeck://image-models` *before* referencing podcast/image packs.
+
 ### Operator-supplied subprocess packs (`cmd.*`, v0.12.0)
 Operators can drop executables into `$HELMDECK_COMMAND_PACKS_DIR` to register additional packs under the `cmd.*` namespace. Protocol: stdin = your input JSON, stdout = the response JSON, non-zero exit = `handler_failed` with stderr surfaced. The catalog above lists only built-in packs; check `tools/list` (or `helmdeck://packs`) at runtime for the operator's custom ones.
 
@@ -233,6 +241,25 @@ You are not limited to calling one pack per user request. **You can and should c
 - **"Generate code, test it, commit it"** → call `repo.fetch` → call `fs.write` → call `cmd.run` → call `git.commit` → call `repo.push`
 
 When composing, YOU generate the creative content (slides, blog text, code) and the packs handle the production work (rendering, narration, grounding, committing). Do not ask the user to provide content you can generate yourself.
+
+---
+
+## Pipelines vs. packs — when to save a workflow (v0.15.0)
+
+You now have two ways to run a multi-step workflow. The rule is **explore with packs, exploit with pipelines.**
+
+**Call packs directly** (the composition above) when the work is exploratory or needs your judgment between steps:
+- It's a one-off, or you're still figuring out the right sequence.
+- You need to **branch, retry, or inspect an intermediate result** before deciding the next step (e.g. read the research before deciding how to slide it), or pause for the user.
+- Pipelines are **linear and fail-fast** — they can't branch, loop, or wait for a human. Anything needing control flow stays direct pack calls.
+
+**Run a pipeline** (`helmdeck__pipeline-run`) when the workflow is known and repeatable:
+- A matching one already exists — **always `helmdeck__pipeline-list` first** when the user asks for a familiar chain ("make a grounded deck" → `builtin.grounded-deck`; "podcast about this repo" → `builtin.repo-readme-podcast`).
+- It's one tool call returning a `run_id` (then poll status) instead of N round-trips where you hand-thread each output and `_session_id` — cheaper, more reliable, audited as one unit, and reproducible.
+
+**Create a pipeline** (`helmdeck__pipeline-create`) to *codify* a sequence the user wants to keep — "do this every week", "save this as a pipeline", or any chain you just discovered by calling packs and expect to repeat. That's the payoff: future runs are one call with no re-reasoning, and the saved pipeline can later be scheduled or webhook-triggered.
+
+Quick test: *Does the user want this done once, with my judgment in the loop? → call packs. Done the same way again and again, unattended? → run/create a pipeline.*
 
 ---
 

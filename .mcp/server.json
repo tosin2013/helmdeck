@@ -3,7 +3,7 @@
   "name": "io.github.tosin2013/helmdeck",
   "title": "Helmdeck",
   "description": "Self-hosted MCP server: sandboxed browser, desktop, vision, code-edit packs for any agent.",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "websiteUrl": "https://helmdeck.dev",
   "repository": {
     "url": "https://github.com/tosin2013/helmdeck",
@@ -15,7 +15,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@helmdeck/mcp-bridge",
-      "version": "0.14.0",
+      "version": "0.15.0",
       "transport": {
         "type": "stdio"
       },
@@ -38,7 +38,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/tosin2013/helmdeck-mcp:0.14.0",
+      "identifier": "ghcr.io/tosin2013/helmdeck-mcp:0.15.0",
       "transport": {
         "type": "stdio"
       },

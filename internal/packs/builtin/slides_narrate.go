@@ -297,7 +297,12 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			}
 		}
 
-		// 4. Write markdown to sidecar + export PNGs.
+		// 4. Write markdown to sidecar + export PNGs. Inject the auto-fit
+		// <style> (#280) so oversized diagrams/tables don't clip in the
+		// per-slide PNGs either. Done after parseSlidesAndNotes so the
+		// slide count is unaffected — Marp hoists <style> to global CSS
+		// and renders no slide for it.
+		markdown = injectFitStyle(markdown)
 		if _, err := execWithStdin(ctx, ec, "/tmp/helmdeck-deck.md", []byte(markdown)); err != nil {
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 				Message: fmt.Sprintf("write markdown to sidecar: %v", err)}

@@ -62,9 +62,13 @@ func TestSlidesRenderHappyPathPDF(t *testing.T) {
 	if ex.calls != 1 {
 		t.Errorf("calls = %d", ex.calls)
 	}
-	// stdin must be the markdown verbatim
-	if string(ex.last.Stdin) != "# hi" {
-		t.Errorf("stdin = %q", ex.last.Stdin)
+	// stdin carries the deck markdown plus the always-on auto-fit <style>
+	// (#280) injected ahead of it.
+	if !strings.HasSuffix(string(ex.last.Stdin), "# hi") {
+		t.Errorf("stdin should end with the deck markdown, got %q", ex.last.Stdin)
+	}
+	if !strings.Contains(string(ex.last.Stdin), "auto-fit (#280)") {
+		t.Errorf("stdin should carry the auto-fit style, got %q", ex.last.Stdin)
 	}
 	// command must include marp + the requested format flag
 	cmd := ex.last.Cmd
@@ -245,6 +249,53 @@ func TestSlidesRender_MermaidFencePreprocessed(t *testing.T) {
 	}
 	if !strings.Contains(piped, `<img src="data:image/svg+xml;base64,`) {
 		t.Errorf("markdown piped to marp should contain inline-SVG <img> data-URI:\n%s", piped)
+	}
+}
+
+func TestSlidesRender_FitStyleInjected(t *testing.T) {
+	// Every render must carry the auto-fit <style> (#280) in the markdown
+	// piped to marp, regardless of format — that's what keeps mermaid
+	// diagrams and wide tables inside the fixed slide bounds in PDF/PPTX.
+	for _, format := range []string{"pdf", "pptx", "html"} {
+		t.Run(format, func(t *testing.T) {
+			ex := &fakeExecutor{result: session.ExecResult{Stdout: []byte("OUT")}}
+			eng := newSlidesEngine(t, ex)
+			input, _ := json.Marshal(map[string]any{
+				"markdown": "# Slide\n\n| a | b |\n|---|---|\n| 1 | 2 |", "format": format,
+			})
+			if _, err := eng.Execute(context.Background(), SlidesRender(nil, nil), input); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			piped := string(ex.last.Stdin)
+			for _, want := range []string{
+				"helmdeck slides.render auto-fit (#280)",
+				"section img.mermaid-svg { max-height: 70vh",
+				"section table { max-width: 100%; table-layout: fixed",
+			} {
+				if !strings.Contains(piped, want) {
+					t.Errorf("[%s] markdown piped to marp missing fit rule %q:\n%s", format, want, piped)
+				}
+			}
+		})
+	}
+}
+
+func TestInjectFitStyle(t *testing.T) {
+	// With frontmatter: the <style> lands AFTER the closing --- so it
+	// doesn't get swallowed as slide content or break the theme directive.
+	fm := "---\ntheme: helmdeck-dark\n---\n# Slide"
+	out := injectFitStyle(fm)
+	if !strings.HasPrefix(out, "---\ntheme: helmdeck-dark\n---\n<style>") {
+		t.Errorf("style should be injected right after frontmatter:\n%s", out)
+	}
+	// No frontmatter: prepend.
+	out = injectFitStyle("# Slide")
+	if !strings.HasPrefix(out, "<style>") {
+		t.Errorf("style should be prepended when no frontmatter:\n%s", out)
+	}
+	// Idempotent.
+	if injectFitStyle(out) != out {
+		t.Error("injectFitStyle must be idempotent")
 	}
 }
 

@@ -22,12 +22,12 @@ and the hard exit gates for each — see
 
 ### Added
 
-- **Pipelines** (ADR 041): a pipeline is a stored, named, ordered list of pack steps with `${{ steps.<id>.output.<field> }}` / `${{ inputs.<name> }}` templating and automatic `_session_id` threading. Ships as a runnable slice — SQLite-persisted definitions + run history, a sequential runner reusing the pack engine, REST CRUD + async run + run-history at `/api/v1/pipelines`, the `helmdeck__pipeline-{list,get,create,run,run-status}` MCP tools (so agents create/run pipelines conversationally), **~13 auto-seeded built-in starters** (grounded deck/blog, research→{deck,podcast,blog}, scrape→ground→blog, clone-a-repo→narrated-deck/podcast, …), and a **Management UI `/pipelines` panel** to list, run with JSON inputs, and watch run status/history poll live. Migration `0007_pipelines.sql` (additive). (#283, #284)
-- `podcast.generate` now surfaces a presigned `audio_url` in its output, unlocking a clean `podcast.generate → hyperframes.render` narrated-video chain. (#283)
+- **Pipelines** ([ADR 041](docs/adrs/041-pipelines-as-first-class-resource.md)): a pipeline is a stored, named, ordered list of pack steps with `${{ steps.<id>.output.<field> }}` / `${{ inputs.<name> }}` templating and automatic `_session_id` threading. Ships as a runnable slice — SQLite-persisted definitions + run history, a sequential runner reusing the pack engine, REST CRUD + async run + run-history at `/api/v1/pipelines`, the `helmdeck__pipeline-{list,get,create,run,run-status}` MCP tools (so agents create/run pipelines conversationally), **~13 auto-seeded built-in starters** (grounded deck/blog, research→{deck,podcast,blog}, scrape→ground→blog, clone-a-repo→narrated-deck/podcast, …), and a **Management UI `/pipelines` panel** to list, run with JSON inputs, and watch run status/history poll live. Migration `0007_pipelines.sql` (additive). (#283, #284)
+- `podcast.generate` now surfaces a presigned `audio_url` in its output, unlocking a clean `podcast.generate → hyperframes.render` narrated-video chain (embed the URL in the composition's `<audio src>`). (#283)
 
 ### Fixed
 
-- `slides.render` and `slides.narrate` no longer clip oversized **mermaid diagrams** or **wide tables** off the fixed Marp slide canvas: a theme-independent auto-fit `<style>` scales diagrams/images down and shrinks-to-fit tables. Applies to PDF/PPTX across curated and built-in themes. (#280, #282)
+- `slides.render` and `slides.narrate` no longer clip oversized **mermaid diagrams** or **wide tables** off the fixed Marp slide canvas: a theme-independent auto-fit `<style>` scales diagrams/images down (`max-height`, `object-fit:contain`) and shrinks-to-fit tables (`table-layout:fixed` + wrapping). Applies to PDF/PPTX (which can't scroll) across curated and built-in themes. (#280, #282)
 
 ## [0.14.0] - 2026-05-26
 

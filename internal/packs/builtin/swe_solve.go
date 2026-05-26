@@ -239,6 +239,14 @@ func sweSolveHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFunc
 			}
 		}
 
+		// Persistent repos (ADR 040): reuse the same on-volume clone path
+		// repo.fetch uses, so a repeat swe.solve on the same repo fetches
+		// instead of full-cloning. "" when no repos volume ⇒ ephemeral.
+		var cloneDir string
+		if ec.PersistentReposPath != "" {
+			cloneDir = persistentCloneDir(ec.PersistentReposPath, ec.Caller, in.RepoURL)
+		}
+
 		var cloneScript string
 		var cloneStdin []byte
 		switch scheme {
@@ -255,7 +263,7 @@ func sweSolveHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFunc
 				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 					Message: fmt.Sprintf("vault credential %q is type %q, expected ssh", res.Record.Name, res.Record.Type)}
 			}
-			cloneScript = buildRepoFetchSSHScript(in.RepoURL, in.Ref, 0)
+			cloneScript = buildRepoFetchSSHScript(in.RepoURL, in.Ref, 0, cloneDir)
 			cloneStdin = res.Plaintext
 		case "https":
 			if in.Credential != "" && v != nil {
@@ -263,10 +271,10 @@ func sweSolveHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFunc
 				if rerr != nil {
 					return nil, rerr
 				}
-				cloneScript = buildRepoFetchHTTPSScript(in.RepoURL, in.Ref, 0, true)
+				cloneScript = buildRepoFetchHTTPSScript(in.RepoURL, in.Ref, 0, true, cloneDir)
 				cloneStdin = res.Plaintext
 			} else {
-				cloneScript = buildRepoFetchHTTPSScript(in.RepoURL, in.Ref, 0, false)
+				cloneScript = buildRepoFetchHTTPSScript(in.RepoURL, in.Ref, 0, false, cloneDir)
 			}
 		default:
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput,

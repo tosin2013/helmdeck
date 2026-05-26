@@ -314,6 +314,23 @@ type ExecutionContext struct {
 	// nil-check before use — the default deployment (no memory key)
 	// leaves this nil so behavior is unchanged.
 	Memory MemoryInterface
+
+	// PersistentReposPath is the in-container mount point of the
+	// persistent repos volume (ADR 040), or "" when no repos volume is
+	// configured. Non-empty tells repo.* handlers they may persist a
+	// clone across sessions under PersistentReposPath/<Caller>/<hash>;
+	// empty means clones go to an ephemeral /tmp dir as before. Mirrors
+	// session.Session.ReposPath, surfaced here so handlers don't reach
+	// into the runtime.
+	PersistentReposPath string
+
+	// Caller is the bare authenticated subject (JWT subject, or
+	// "unknown" when unauthenticated) — WITHOUT the per-session suffix
+	// that ec.Memory.Namespace() carries. repo.* uses it to namespace
+	// persistent clones by caller so a clone is shared across that
+	// caller's sessions (the whole point of cross-session reuse), unlike
+	// session-scoped memory which is deliberately not shared.
+	Caller string
 }
 
 // Report sends an incremental status update to whoever is listening
@@ -538,6 +555,13 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 		Logger:    logger,
 		Artifacts: e.artifacts,
 		Progress:  progressFromContext(ctx),
+		Caller:    callerFromContext(ctx),
+	}
+	// Persistent repos path (ADR 040): surfaced to repo.* handlers when
+	// the runtime mounted a repos volume into this session. Empty when
+	// no volume is configured ⇒ ephemeral /tmp clone, as before.
+	if sess != nil {
+		ec.PersistentReposPath = sess.ReposPath
 	}
 	// Memory handle: non-nil only when a MemoryStore is wired. The
 	// namespace is the authenticated caller (JWT subject, "unknown"

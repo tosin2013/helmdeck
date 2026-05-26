@@ -263,7 +263,7 @@ func TestParseGitHost(t *testing.T) {
 }
 
 func TestBuildRepoFetchScript_OmitsCheckoutWithoutRef(t *testing.T) {
-	script := buildRepoFetchSSHScript("git@github.com:foo/bar.git", "", 0)
+	script := buildRepoFetchSSHScript("git@github.com:foo/bar.git", "", 0, "")
 	if strings.Contains(script, "checkout") {
 		t.Errorf("empty ref should produce no checkout line")
 	}
@@ -542,6 +542,101 @@ func TestRepoFetchEnvelopeScript_SparseRepo(t *testing.T) {
 	}
 	if sig["has_readme"] != false {
 		t.Errorf("has_readme should be false")
+	}
+}
+
+// TestRepoCloneHash_NormalizesEquivalentURLs verifies the .git suffix and
+// a trailing slash collapse to the same persistent clone directory (ADR 040).
+func TestRepoCloneHash_NormalizesEquivalentURLs(t *testing.T) {
+	a := repoCloneHash("https://github.com/o/r")
+	b := repoCloneHash("https://github.com/o/r.git")
+	c := repoCloneHash("https://github.com/o/r/")
+	if a != b || a != c {
+		t.Errorf("equivalent URLs hashed differently: %s / %s / %s", a, b, c)
+	}
+	if repoCloneHash("https://github.com/o/other") == a {
+		t.Error("distinct repos must not collide")
+	}
+	if len(a) != 16 {
+		t.Errorf("hash len = %d, want 16", len(a))
+	}
+}
+
+// TestSanitizePathSegment ensures a hostile subject cannot traverse out of
+// its namespace and that empty/dotty values collapse to "unknown".
+func TestSanitizePathSegment(t *testing.T) {
+	cases := map[string]string{
+		"":              "unknown",
+		"..":            "unknown",
+		".":             "unknown",
+		"alice":         "alice",
+		"a/../../etc":   "a_.._.._etc", // slashes stripped ⇒ single non-traversing segment
+		"/etc/passwd":   "_etc_passwd",
+		"user@host.com": "user_host.com",
+	}
+	for in, want := range cases {
+		if got := sanitizePathSegment(in); got != want {
+			t.Errorf("sanitizePathSegment(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestPersistentCloneDir composes the deterministic on-volume path.
+func TestPersistentCloneDir(t *testing.T) {
+	dir := persistentCloneDir("/repos", "alice", "https://github.com/o/r.git")
+	want := "/repos/alice/" + repoCloneHash("https://github.com/o/r.git")
+	if dir != want {
+		t.Errorf("persistentCloneDir = %q, want %q", dir, want)
+	}
+}
+
+// TestCloneAcquireScript_PersistentShape checks the persistent branch
+// emits the deterministic path, an flock guard, a fetch-or-clone fork,
+// the .hdcache-preserving clean, and the reused marker — and that the
+// whole generated script is valid POSIX sh (sh -n).
+func TestCloneAcquireScript_PersistentShape(t *testing.T) {
+	cloneDir := "/repos/alice/abc123"
+	script := buildRepoFetchHTTPSScript("https://github.com/o/r.git", "main", 1, false, cloneDir)
+
+	wants := []string{
+		"CLONE_DIR=" + shellQuote(cloneDir),
+		"flock -w 120 9",
+		`if [ -d "$CLONE_DIR/.git" ]; then`,
+		"git -C \"$CLONE_DIR\" fetch --depth 1 --prune origin",
+		`git clone --depth 1 'https://github.com/o/r.git' "$CLONE_DIR"`,
+		"clean -fdx -e .hdcache",
+		`9>"$CLONE_DIR.lock"`,
+		`REUSED=$(cat "$CLONE_DIR.hdreused"`,
+		"checkout -f 'main'",
+	}
+	for _, w := range wants {
+		if !strings.Contains(script, w) {
+			t.Errorf("persistent script missing %q\n---\n%s", w, script)
+		}
+	}
+
+	// Must be valid sh.
+	cmd := exec.Command("sh", "-n")
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated persistent script is not valid sh: %v\n%s\n---\n%s", err, out, script)
+	}
+}
+
+// TestCloneAcquireScript_EphemeralUnchanged confirms the default (no repos
+// volume) path still mktemps a /tmp clone with no flock/reuse machinery.
+func TestCloneAcquireScript_EphemeralUnchanged(t *testing.T) {
+	script := buildRepoFetchHTTPSScript("https://github.com/o/r.git", "main", 0, false, "")
+	if !strings.Contains(script, "CLONE_DIR=$(mktemp -d /tmp/helmdeck-clone-XXXXXX)") {
+		t.Error("ephemeral path should mktemp a /tmp clone dir")
+	}
+	if strings.Contains(script, "flock") || strings.Contains(script, "hdreused") {
+		t.Error("ephemeral path must not include persistent-reuse machinery")
+	}
+	cmd := exec.Command("sh", "-n")
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated ephemeral script is not valid sh: %v\n%s", err, out)
 	}
 }
 

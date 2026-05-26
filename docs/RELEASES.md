@@ -512,7 +512,7 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 ---
 
-## v0.14.0 — Autonomous code-fix + ADR 037 fully enforced (target: TBD) {#v0140}
+## v0.14.0 — Autonomous code-fix + ADR 037 fully enforced — ✅ Shipped 2026-05-26 {#v0140}
 
 **Theme:** `swe.solve` headline + close out [ADR 037](adrs/037-upstream-package-version-management.md) across every sidecar Dockerfile.
 

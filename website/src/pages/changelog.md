@@ -16,6 +16,29 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-05-26
+
+**Theme:** Autonomous code-fix (`swe.solve`) lands end-to-end, the Universal Memory layer and persistent repos ship as default-off-but-on-by-default seams, and ADR 037 upstream pinning is fully enforced across every sidecar.
+
+### Added
+
+- **`swe.solve`** — an autonomous code-fix pack. Give it a `repo_url` + `task` and it runs a mini-swe-agent loop *inside a session sidecar* to produce a reviewable change. `mode` selects the output: `patch` (diff + trajectory, no push), `branch`, or `pull_request`. The agent never sees git or AI-gateway credentials (vault-injected), never pushes to the default branch, and every run uploads a replayable trajectory artifact to the object store. Built on a `HelmdeckEnvironment` adapter (mini-swe-agent's `Environment` contract routed through `cmd.run`). (#265, #271, #233 Phases 1/3/4)
+- **GitHub-issue auto-trigger for `swe.solve`** (ADR 033) — the webhook receiver now handles `issues`/`issue_comment`: label an issue and helmdeck opens a PR, then posts the result back as an issue comment. HMAC-verified, label-gated, dispatched on a detached context. (#277, #233 Phase 6)
+- **Universal Memory delivery layer** (ADR 039) — an `ec.Memory` engine seam giving packs transparent, per-caller, namespace-scoped memory, with a declarative read-through cache (`Pack.Memory{Cache,TTL}`; `github.list_issues` is the first exemplar) and `Context()` aggregation. Backed by a pluggable `MemoryStore` (SQLite default, AES-256-GCM at rest). Memory is durable by default — the installer now generates `HELMDECK_MEMORY_KEY`. (#272, #278, epic #254: #255/#256/#257/#258/#260)
+- **Persistent repos volume** (ADR 040) — `repo.fetch` (and `swe.solve`) clone into a per-caller path on a shared `helmdeck-repos` volume and `git fetch` instead of re-cloning on a repeat, with a persistent per-language dependency cache (`.hdcache`) and a GC janitor (TTL + size cap). Default-off (no volume ⇒ ephemeral `/tmp`); enabled by default in the bundled Compose. New `repo.fetch` output fields `reused`/`persistent`. (#274, #259)
+- New `/reference/agent-memory` and `repo.fetch` persistent-clones docs; the "Clones aren't browser state" design post.
+- The in-tree pack catalog grows to **43** (adds `swe.solve`, `github.post_comment`).
+
+### Changed
+
+- **ADR 037 fully enforced** — exact upstream version pins, Dependabot, CLI-surface sentinels, and docs across every sidecar Dockerfile, plus follow-up cleanups (drop `marp --stdin`, fix `--html` spec, pin the global `playwright-mcp`). (#240–#243, #264)
+- The `clients-smoke` matrix builds the control-plane from source and its bridge leg is response-driven rather than sleep-timed. (#273)
+
+### Fixed
+
+- `clients-smoke` no longer aborts a slow cold-sidecar screenshot via a blind `sleep 30` then EOF — it polls for the reply and surfaces a real timeout distinctly. (#273)
+- The GitHub webhook's async dispatch no longer borrows the request context (cancelled the instant the 200 returns), which would have killed any long-running dispatched pack. (#277)
+
 ## [0.13.2] - 2026-05-23
 
 **Theme:** Hot-patch for the v0.13.1 release that shipped without a control-plane image. No code-behavior changes, only the build pipeline that produces the image is unblocked.

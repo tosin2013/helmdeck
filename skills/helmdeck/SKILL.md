@@ -10,13 +10,13 @@ metadata:
 
 <!-- This SKILL.md is the canonical helmdeck agent skill. Stamped at
      helmdeck v0.13.0 (#200 added hyperframes.render, bringing the
-     in-tree catalog to 41 packs, with #217 adding stock.search). Re-run scripts/configure-openclaw.sh
+     in-tree catalog to 43 packs; swe.solve (#271) and github.post_comment are the latest additions). Re-run scripts/configure-openclaw.sh
      after any helmdeck release so your OpenClaw agent picks up new
      packs and updated decision tables. -->
 
 ## You are connected to helmdeck
 
-Helmdeck is a browser automation and AI capability platform. You have access to 41 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
+Helmdeck is a browser automation and AI capability platform. You have access to 43 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
 
 ## Pack catalog
 

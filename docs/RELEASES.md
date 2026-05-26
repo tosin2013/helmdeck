@@ -546,10 +546,11 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 - **~13 built-in starter pipelines** auto-seeded at startup and runnable out of the box — including `content.ground → slides.render` (grounded deck), `content.ground → blog.publish` (grounded blog), `research.deep → {slides,podcast,blog}`, `web.scrape → content.ground → blog.publish`, and `repo.fetch → {slides.narrate, podcast.generate}` (clone a repo → media about it). Provider-dependent starters degrade gracefully (stable premade voice + `allow_silent_output`); a starter whose packs aren't registered is skip-and-logged.
 - `podcast.generate` now surfaces a presigned `audio_url` in its output (from the artifact store), unlocking a clean `podcast.generate → hyperframes.render` narrated-video chain (embed the URL in the composition's `<audio src>`).
 - Migration `0007_pipelines.sql` (additive: `pipelines` + `pipeline_runs` tables, auto-applied).
+- **Management UI `/pipelines` panel** — pulled forward from v1.2: list built-in + agent-created pipelines, trigger a run with JSON inputs, and watch run status/history poll live (pending → running → succeeded/failed, with per-step status) — operators see what agents build via the MCP tools.
 
 **Out (deferred follow-ups, seams in place):**
 
-- Cron + webhook pipeline triggers (the runner is HTTP-decoupled — ADR 033's receiver and a future scheduler call the same `StartRun`). The Management UI `/pipelines` panel, A2A pipeline-management skill, and "promote a successful run from the audit log into a pipeline" follow per ADR 041's sequencing (v1.0→v1.3).
+- Cron + webhook pipeline triggers (the runner is HTTP-decoupled — ADR 033's receiver and a future scheduler call the same `StartRun`). A2A pipeline-management skill and "promote a successful run from the audit log into a pipeline" follow per ADR 041's sequencing (v1.0→v1.3).
 
 **Status:** the v0.15.0 slice is the REST + MCP + runner + starters foundation; triggers/UI/audit-promote are explicitly later so the data model lands correct first.
 

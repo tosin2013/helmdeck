@@ -7,6 +7,7 @@ import { DashboardPage } from '@/pages/dashboard';
 import { SessionsPage } from '@/pages/sessions';
 import { VaultPage } from '@/pages/vault';
 import { PacksPage } from '@/pages/packs';
+import { PipelinesPage } from '@/pages/pipelines';
 import { MarketplacePage } from '@/pages/marketplace';
 import { McpPage } from '@/pages/mcp';
 import { ProvidersPage } from '@/pages/providers';
@@ -34,6 +35,7 @@ export function App() {
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="vault" element={<VaultPage />} />
         <Route path="packs" element={<PacksPage />} />
+        <Route path="pipelines" element={<PipelinesPage />} />
         <Route path="marketplace" element={<MarketplacePage />} />
         <Route path="mcp" element={<McpPage />} />
         <Route path="providers" element={<ProvidersPage />} />

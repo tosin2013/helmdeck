@@ -46,10 +46,9 @@ Ship a curated set auto-seeded at startup (idempotent `builtin.*` upsert), runna
 
 | Release | Ships |
 | :--- | :--- |
-| **v0.15.0 (this ADR's slice)** | REST CRUD + run + history; the runner + dot-notation templating + session threading; `helmdeck__pipeline-*` MCP tools; ~13 built-in starters; SQLite persistence. |
+| **v0.15.0 (this ADR's slice)** | REST CRUD + run + history; the runner + dot-notation templating + session threading; `helmdeck__pipeline-*` MCP tools; ~13 built-in starters; SQLite persistence; **the Management UI `/pipelines` panel** (list / run / live status — pulled forward from v1.2 so operators can watch agent-built pipelines). |
 | v1.0 | cron + webhook triggers (the runner is HTTP-decoupled so they reuse it). |
 | v1.1 | A2A skill exposure of pipeline management. |
-| v1.2 | Management UI `/pipelines` panel (GET endpoints already return what it needs). |
 | v1.3 | "Promote a successful run from the audit log into a pipeline." |
 
 ## Consequences

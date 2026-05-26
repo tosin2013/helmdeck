@@ -10,7 +10,7 @@ Helmdeck ships its agent instructions as a native **OpenClaw Skill** at `skills/
 
 **Every release — required:**
 
-1. **Update the pack count and decision tables** in `skills/helmdeck/SKILL.md` if this release adds/removes packs, changes an error code, or revises a pattern (e.g. the `repo.fetch` signals table).
+1. **Update the pack count and decision tables** in `skills/helmdeck/SKILL.md` if this release adds/removes packs, changes an error code, or revises a pattern (e.g. the `repo.fetch` signals table). When a release adds a pack or pipeline, also add its **prompt template** to `docs/reference/prompt-templates/` (`packs.md` / `pipelines.md`; copy the shape from `_template.md`).
 2. **Bump the `helmdeckVersion` stamp** — `scripts/configure-openclaw.sh` regenerates this automatically from `git rev-parse --short HEAD` at install time, so you don't edit it by hand. Ensure the release commit lands on `main` before operators run the configure script, otherwise the stamp reflects a stale pointer.
 3. **Call out new packs** in the release notes under "Ships" with their full `helmdeck__<name>` MCP prefix, so operators (and agents reading the release notes post-fact) know what's new.
 4. **Tell deployed operators to refresh**:

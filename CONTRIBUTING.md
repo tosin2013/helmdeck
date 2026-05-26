@@ -128,6 +128,11 @@ the project also welcomes:
   to request one or `docs/SIDECAR-LANGUAGES.md` to build one yourself.
 - **Documentation improvements** — operator runbooks for specific
   cloud providers, security audit reports, walkthrough tutorials.
+- **Prompt templates** — when you add a pack or pipeline, add its
+  fill-in-the-blank prompt template to
+  `docs/reference/prompt-templates/` (`packs.md` or `pipelines.md`).
+  Copy the entry shape from `_template.md` in that folder; variables
+  are `{{UPPERCASE}}` and must map to real inputs.
 - **Bug fixes** — file an issue first if it's non-trivial; small
   fixes (typos, obvious bugs) can come straight as a PR.
 - **ADR drafts** for design decisions you think the project should

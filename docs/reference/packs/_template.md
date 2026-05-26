@@ -8,6 +8,9 @@ keywords: [helmdeck, <family>, <pack-name>, MCP]
 TEMPLATE — copy this file as docs/reference/packs/<family>/<pack-name>.md
 and replace every <placeholder>. Delete this comment when you're done.
 
+When adding a new pack, ALSO add its fill-in prompt template to
+docs/reference/prompt-templates/packs.md (shape: prompt-templates/_template.md).
+
 PR-A established the agent-first / developer-second structure: the
 OpenClaw chat-UI worked example is the primary view, the curl block is
 the developer reference. See docs/reference/packs/browser/ and

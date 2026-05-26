@@ -9,17 +9,15 @@ date: 2026-05-26
 draft: false
 ---
 
-## Hook
-
 Helmdeck's sessions are ephemeral on purpose: [ADR 004](https://github.com/tosin2013/helmdeck/blob/main/docs/adrs/004-ephemeral-stateless-browser-sessions.md) makes every browser session a fresh container with a watchdog that recycles it, because Chromium leaks memory under sustained autonomous load and OOM-kills after ~20h. Good rule. But it had a side effect nobody designed: `repo.fetch` cloned into the session's `/tmp`, so the clone died with the session. Every autonomous code-fix run re-cloned the repo and re-ran `npm install` / `go mod download` from cold. The fix for v0.14.0 ([#259](https://github.com/tosin2013/helmdeck/issues/259), [ADR 040](https://github.com/tosin2013/helmdeck/blob/main/docs/adrs/040-persistent-repos-volume.md)) is one sentence of architecture: a git working tree is not browser state, so ADR 004 was never talking about it.
 
-## Context
+## The tension: does a clone violate ADR 004?
 
 The flagship example in our memory-layer proposal was "`repo.fetch` remembers the clone location across sessions and just `git pull`s." It reads like a memory-layer win. It isn't — and conflating the two would have been a mistake. Memory (the [`ec.Memory` seam we shipped alongside](/blog/memory-as-a-default-off-seam)) is an encrypted key-value tier; it records *facts*. A 200 MB working tree plus a `node_modules` is not a fact, it's a filesystem. Persisting it needed real infrastructure, and it sat on top of a since-fixed session-reuse bug ([#232](https://github.com/tosin2013/helmdeck/issues/232)). So we filed it separately and built it separately.
 
 The tension to resolve was the interesting part. ADR 004 says, in normative terms, *persistent state lives outside the session container.* Cookies, the DOM, the Chromium cache — all discarded on terminate, by design. If we let a clone survive a session, are we violating that?
 
-## Finding
+## A git tree isn't browser state
 
 No — and seeing *why not* is the whole design. ADR 004 is about **browser** state: the things that make a long-lived Chromium dangerous (memory growth, cookie accumulation, cross-tenant DOM bleed). A checked-out git tree has none of those properties. It's a build artifact sitting on disk. The mistake wasn't persisting it; the mistake was ever letting it land *inside* the session container's `/tmp` in the first place.
 
@@ -52,7 +50,7 @@ The honest negatives, made normative in the ADR rather than swept under it:
 
 And the safety contract that made it landable: it's **default-off**. No volume configured ⇒ `ec.PersistentReposPath` is empty ⇒ `repo.fetch` mktemps a `/tmp` clone, byte-for-byte as before. The bundled Compose turns it on; a hand-rolled deployment opts in by naming the volume.
 
-## Why this matters to you
+## Find the seam
 
 When a system has a strong, correct invariant — "sessions are ephemeral" — the easy failure mode is to treat it as a wall and route *everything* around it, or to chip a hole in it for the one case that hurts. Both are wrong. The right move is to ask what the invariant was actually protecting. ADR 004 was protecting you from a leaky, stateful *browser*. It was never protecting you from a folder of source code. Once that's named out loud, the design writes itself: keep the dangerous thing ephemeral, move the cheap durable thing to durable storage, and put a janitor on it.
 

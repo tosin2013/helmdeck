@@ -350,10 +350,17 @@ func researchDeepHandler(d vision.Dispatcher) packs.HandlerFunc {
 			})
 		}
 		if len(sources) == 0 {
+			// Caller-fixable, NOT a pack bug: helmdeck searched fine, the
+			// world just didn't yield usable content for this query (too
+			// long/narrow/obscure, or all results unscrapable). CodeHandlerFailed
+			// here classified the run as pack_bug — telling the user to file a
+			// GitHub issue for "refine your query." CodeInvalidInput → the
+			// pipeline's caller_fixable class, which matches the message's own
+			// advice and the actual fix (shorten the query).
 			return nil, &packs.PackError{
-				Code: packs.CodeHandlerFailed,
+				Code: packs.CodeInvalidInput,
 				Message: fmt.Sprintf("firecrawl search for %q returned no usable sources; "+
-					"try a broader query or raise limit", in.Query),
+					"try a shorter or more focused query, or raise limit", in.Query),
 			}
 		}
 

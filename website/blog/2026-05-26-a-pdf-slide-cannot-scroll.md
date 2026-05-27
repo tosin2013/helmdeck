@@ -33,7 +33,7 @@ The fix is a theme-independent auto-fit `<style>` injected into every render. Ma
 
 ```css
 section img { max-width: 100%; height: auto; }
-section img.mermaid-svg { max-height: 70vh; object-fit: contain; }
+section img.mermaid-svg { max-height: 60vh; object-fit: contain; }
 section table { max-width: 100%; table-layout: fixed; }
 section table th, section table td { overflow-wrap: anywhere; }
 ```

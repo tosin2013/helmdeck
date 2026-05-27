@@ -24,6 +24,7 @@ type PipelineService interface {
 	Create(ctx context.Context, def json.RawMessage) (json.RawMessage, error)
 	StartRun(ctx context.Context, id string, inputs json.RawMessage) (runID string, err error)
 	RunStatus(ctx context.Context, runID string) (json.RawMessage, error)
+	Rerun(ctx context.Context, runID string) (newRunID string, err error)
 }
 
 // WithPipelines wires the pipeline service so the helmdeck__pipeline-*
@@ -82,7 +83,16 @@ func (s *PackServer) pipelineTools() []Tool {
 		},
 		{
 			Name:        "helmdeck__pipeline-run-status",
-			Description: "Get the status of a pipeline run by run_id: overall status (pending|running|succeeded|failed) plus per-step outputs/errors. Poll every few seconds until terminal.",
+			Description: "Get the status of a pipeline run by run_id: overall status (pending|running|succeeded|failed) plus per-step outputs/errors. A failed run includes failure_class (caller_fixable|pack_bug|transient|state_changed) and a failure_reason saying what to do — fix the input, re-run, or file a helmdeck issue. Poll every few seconds until terminal.",
+			InputSchema: mustJSON(map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"run_id": map[string]any{"type": "string"}},
+				"required":   []string{"run_id"},
+			}),
+		},
+		{
+			Name:        "helmdeck__pipeline-rerun",
+			Description: "Re-run an existing run from the top with the same pipeline + inputs (the CI/CD 'retry this job' affordance). Use after fixing a caller_fixable failure, or to retry a transient one. Returns a new run_id.",
 			InputSchema: mustJSON(map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"run_id": map[string]any{"type": "string"}},
@@ -138,6 +148,19 @@ func (s *PackServer) dispatchPipelineTool(ctx context.Context, name string, argu
 		}
 		out, err := s.pipelines.RunStatus(ctx, a.RunID)
 		return jsonOrErr(out, err), true
+	case "helmdeck__pipeline-rerun":
+		var a struct {
+			RunID string `json:"run_id"`
+		}
+		if err := json.Unmarshal(arguments, &a); err != nil || a.RunID == "" {
+			return errorToolResult("invalid_input", "helmdeck__pipeline-rerun: run_id is required"), true
+		}
+		runID, err := s.pipelines.Rerun(ctx, a.RunID)
+		if err != nil {
+			return errorToolResult("pipeline_run_failed", err.Error()), true
+		}
+		body, _ := json.Marshal(map[string]string{"run_id": runID, "status": "pending"})
+		return okToolResult(body), true
 	}
 	return nil, false
 }

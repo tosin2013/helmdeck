@@ -68,6 +68,10 @@ func (a pipelineServiceAdapter) RunStatus(ctx context.Context, runID string) (js
 	return json.Marshal(run)
 }
 
+func (a pipelineServiceAdapter) Rerun(ctx context.Context, runID string) (string, error) {
+	return a.runner.Rerun(ctx, runID)
+}
+
 // newPipelineServiceAdapter builds the adapter from Deps, or returns
 // (nil-ok=false) when pipelines aren't wired.
 func newPipelineServiceAdapter(deps Deps) (pipelineServiceAdapter, bool) {

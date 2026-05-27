@@ -14,6 +14,7 @@ and the hard exit gates for each — see
 ### Added
 
 - **`helmdeck://models` MCP resource** ([ADR 043](docs/adrs/043-actionable-gateway-model-errors.md)): lists the chat-completion models the gateway can route to right now, as full `provider/model` IDs (e.g. `openrouter/minimax/minimax-m2.7`). Agents read it to pick a valid model for any pack's `model` input instead of guessing one that fails. Mirrors `helmdeck://voices` / `helmdeck://image-models`.
+- **Legible pipeline failures + re-run** (ADR 044, slice 1): when a pipeline run fails, each failed step is now attributed with a typed `error_code`, a `failure_class` — `caller_fixable` (the inputs/model given were wrong — fix and re-run), `pack_bug` (a code error in helmdeck — the reason includes a prefilled GitHub issue link to file), `transient` (environment blip — re-running may work), or `state_changed` — and a one-line `failure_reason` saying what to do. Surfaced in `GET …/runs/{runId}`, the `helmdeck__pipeline-run-status` tool, and the Management UI `/pipelines` run view (failure-class badge + "Report bug" link). Plus a one-call re-run: `POST /api/v1/pipelines/{id}/runs/{runId}/rerun`, the `helmdeck__pipeline-rerun` tool, and a "Re-run" button. Resume-from-failed-step and auto-retry are the next slice.
 
 ### Fixed
 

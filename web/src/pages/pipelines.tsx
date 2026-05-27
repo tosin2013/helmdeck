@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { GitBranch, Play, Workflow } from 'lucide-react';
+import { Bug, GitBranch, Play, RotateCw, Workflow } from 'lucide-react';
 
 import {
   Card,
@@ -52,6 +52,9 @@ interface RunStep {
   pack: string;
   status: string;
   error?: string;
+  error_code?: string;
+  failure_class?: string;
+  failure_reason?: string;
 }
 
 interface Run {
@@ -59,6 +62,8 @@ interface Run {
   pipeline_id: string;
   status: string;
   error?: string;
+  failure_class?: string;
+  failure_reason?: string;
   steps: RunStep[];
   started_at: string;
   ended_at?: string;
@@ -188,11 +193,26 @@ export function PipelinesPage() {
 // RunHistory polls a pipeline's recent runs every 3s so an operator sees
 // status advance live (pending → running → succeeded/failed).
 function RunHistory({ pipeline, onClose }: { pipeline: Pipeline; onClose: () => void }) {
-  const { data: runs } = useApi<Run[]>(
+  const { data: runs, refetch } = useApi<Run[]>(
     ['pipeline-runs', pipeline.id],
     `/api/v1/pipelines/${pipeline.id}/runs`,
     { refetchInterval: 3_000 },
   );
+  const authFetch = useAuthFetch();
+  const [rerunning, setRerunning] = useState<string | null>(null);
+
+  async function rerun(runID: string) {
+    setRerunning(runID);
+    try {
+      await authFetch(`/api/v1/pipelines/${pipeline.id}/runs/${runID}/rerun`, {
+        method: 'POST',
+      });
+      await refetch();
+    } finally {
+      setRerunning(null);
+    }
+  }
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-start justify-between">
@@ -212,20 +232,36 @@ function RunHistory({ pipeline, onClose }: { pipeline: Pipeline; onClose: () => 
               <TableHead>Status</TableHead>
               <TableHead>Steps</TableHead>
               <TableHead>Started</TableHead>
+              <TableHead>Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {!runs || runs.length === 0 ? (
-              <TableEmpty colSpan={4}>No runs yet.</TableEmpty>
+              <TableEmpty colSpan={5}>No runs yet.</TableEmpty>
             ) : (
               runs.map((r) => (
                 <TableRow key={r.id}>
                   <TableCell className="font-mono text-xs">{r.id}</TableCell>
                   <TableCell>
-                    <RunStatusBadge status={r.status} />
-                    {r.error && (
-                      <div className="mt-1 max-w-md truncate text-xs text-destructive" title={r.error}>
-                        {r.error}
+                    <div className="flex items-center gap-1">
+                      <RunStatusBadge status={r.status} />
+                      {r.status === 'failed' && r.failure_class && (
+                        <FailureClassBadge cls={r.failure_class} />
+                      )}
+                    </div>
+                    {r.status === 'failed' && (r.failure_reason || r.error) && (
+                      <div className="mt-1 max-w-md text-xs text-muted-foreground">
+                        {stripURL(r.failure_reason) || r.error}
+                        {issueURL(r) && (
+                          <a
+                            href={issueURL(r)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="ml-1 inline-flex items-center gap-0.5 text-destructive underline"
+                          >
+                            <Bug className="h-3 w-3" /> Report bug
+                          </a>
+                        )}
                       </div>
                     )}
                   </TableCell>
@@ -238,6 +274,18 @@ function RunHistory({ pipeline, onClose }: { pipeline: Pipeline; onClose: () => 
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {formatRelative(r.started_at)}
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      title="Re-run with the same inputs"
+                      disabled={rerunning === r.id}
+                      onClick={() => rerun(r.id)}
+                    >
+                      <RotateCw className="mr-1 h-3.5 w-3.5" />
+                      Re-run
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))
@@ -343,4 +391,32 @@ function RunStatusBadge({ status, label }: { status: string; label?: string }) {
       {label ?? status}
     </Badge>
   );
+}
+
+// FailureClassBadge tags WHY a run failed: pack_bug / state_changed read
+// as "not your input" (destructive), caller_fixable as "fix and retry"
+// (warning), transient as "retry may work" (outline).
+function FailureClassBadge({ cls }: { cls: string }) {
+  const label = cls.replace(/_/g, ' ');
+  const v =
+    cls === 'pack_bug' || cls === 'state_changed'
+      ? 'destructive'
+      : cls === 'caller_fixable'
+        ? 'warning'
+        : 'outline';
+  return <Badge variant={v}>{label}</Badge>;
+}
+
+// issueURL pulls the prefilled GitHub-issue link the runner embeds in a
+// pack_bug failure_reason (only pack bugs carry one).
+function issueURL(r: Run): string {
+  const m = r.failure_reason?.match(/https:\/\/github\.com\/\S+\/issues\/new\?\S+/);
+  return m ? m[0] : '';
+}
+
+// stripURL drops the embedded issue URL from the reason text so it isn't
+// shown twice (the URL becomes the "Report bug" button instead).
+function stripURL(reason?: string): string {
+  if (!reason) return '';
+  return reason.replace(/https:\/\/github\.com\/\S+/, '').replace(/:\s*$/, '').trim();
 }

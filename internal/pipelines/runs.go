@@ -102,6 +102,18 @@ func (r *Runner) StartRun(ctx context.Context, pipelineID string, inputs json.Ra
 	return run.ID, nil
 }
 
+// Rerun starts a fresh run of the pipeline + inputs from an existing run
+// — the CI/CD "re-run this job" affordance. It is NOT a resume: every
+// step executes again from the top (resume-from-failed-step is ADR 044
+// slice 2). Returns the new run id.
+func (r *Runner) Rerun(ctx context.Context, runID string) (string, error) {
+	prev, err := r.GetRun(ctx, runID)
+	if err != nil {
+		return "", err
+	}
+	return r.StartRun(ctx, prev.PipelineID, prev.Inputs)
+}
+
 // GetRun returns the live snapshot if present, else the persisted row.
 func (r *Runner) GetRun(ctx context.Context, runID string) (*Run, error) {
 	if run, ok := r.reg.get(runID); ok {

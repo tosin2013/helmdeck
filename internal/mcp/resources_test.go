@@ -477,3 +477,101 @@ func TestInitialize_DeclaresResourcesCapability(t *testing.T) {
 		t.Errorf("initialize missing tools capability: %v", got.Result.Capabilities)
 	}
 }
+
+// fakeModelLister is the test double for the helmdeck://models resource.
+type fakeModelLister struct {
+	out []ModelView
+	err error
+}
+
+func (f fakeModelLister) List(ctx context.Context) ([]ModelView, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.out, nil
+}
+
+func TestResourcesList_IncludesModels_WhenListerWired(t *testing.T) {
+	ml := fakeModelLister{out: []ModelView{{ID: "openrouter/minimax/minimax-m2.7", Provider: "openrouter"}}}
+	write, read, stop := startServerWithOpts(t, WithModels(ml))
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`)
+	resp := read()
+
+	var got struct {
+		Result struct {
+			Resources []Resource `json:"resources"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	found := false
+	for _, r := range got.Result.Resources {
+		if r.URI == "helmdeck://models" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("resources/list missing helmdeck://models")
+	}
+}
+
+func TestResourcesRead_Models_HappyPath(t *testing.T) {
+	ml := fakeModelLister{out: []ModelView{
+		{ID: "openrouter/minimax/minimax-m2.7", Provider: "openrouter"},
+		{ID: "anthropic/claude-sonnet-4-6", Provider: "anthropic"},
+	}}
+	write, read, stop := startServerWithOpts(t, WithModels(ml))
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://models"}}`)
+	resp := read()
+
+	var got struct {
+		Result struct {
+			Contents []ResourceContent `json:"contents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Result.Contents) != 1 || got.Result.Contents[0].URI != "helmdeck://models" {
+		t.Fatalf("unexpected contents: %+v", got.Result.Contents)
+	}
+	var payload struct {
+		Models    []ModelView `json:"models"`
+		FetchedAt string      `json:"fetched_at"`
+	}
+	if err := json.Unmarshal([]byte(got.Result.Contents[0].Text), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(payload.Models) != 2 {
+		t.Errorf("want 2 models, got %d", len(payload.Models))
+	}
+	if payload.Models[0].ID != "openrouter/minimax/minimax-m2.7" {
+		t.Errorf("model id not round-tripped: %+v", payload.Models[0])
+	}
+	if payload.FetchedAt == "" {
+		t.Error("fetched_at should be populated")
+	}
+}
+
+func TestResourcesRead_Models_NotWired(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://models"}}`)
+	resp := read()
+	var got struct {
+		Error *struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Error == nil || got.Error.Code != -32602 {
+		t.Errorf("want -32602 when models lister not wired, got %+v", got.Error)
+	}
+}

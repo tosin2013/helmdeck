@@ -57,7 +57,7 @@ func (s *PackServer) pipelineTools() []Tool {
 		},
 		{
 			Name:        "helmdeck__pipeline-create",
-			Description: "Create a new pipeline from an ordered list of steps. Each step is {id, pack, input}; a step's input may reference an earlier step via ${{ steps.<id>.output.<field> }} or a run input via ${{ inputs.<name> }}. Discover valid voice/model IDs via the helmdeck://voices and helmdeck://image-models resources before referencing podcast/image packs.",
+			Description: "Create a new pipeline from an ordered list of steps. Each step is {id, pack, input}; a step's input may reference an earlier step via ${{ steps.<id>.output.<field> }} or a run input via ${{ inputs.<name> }}. Discover valid chat-model IDs via the helmdeck://models resource, and voice/image-model IDs via helmdeck://voices and helmdeck://image-models, before setting a `model` or referencing podcast/image packs.",
 			InputSchema: mustJSON(map[string]any{
 				"type": "object",
 				"properties": map[string]any{

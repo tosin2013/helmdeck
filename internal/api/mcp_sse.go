@@ -116,6 +116,10 @@ func registerMCPSSERoutes(mux *http.ServeMux, deps Deps) {
 	}
 	// helmdeck://image-models is unconditional — catalog is in-tree.
 	mcpOpts = append(mcpOpts, mcp.WithImageModels(newImageModelListerAdapter()))
+	// helmdeck://models lists the gateway's routable chat models (ADR 043).
+	if deps.Gateway != nil {
+		mcpOpts = append(mcpOpts, mcp.WithModels(newModelListerAdapter(deps.Gateway)))
+	}
 	if adapter, ok := newPipelineServiceAdapter(deps); ok {
 		mcpOpts = append(mcpOpts, mcp.WithPipelines(adapter))
 	}

@@ -321,15 +321,11 @@ func webTestHandler(d vision.Dispatcher, eg *security.EgressGuard, newClient fun
 		for step := 0; step < maxSteps; step++ {
 			p, rawModel, err := askPlan(ctx, d, in.Model, in.Instruction, snapshot, steps)
 			if err != nil {
-				// Model-level errors are recorded in the trace and
-				// surfaced as handler_failed so the caller sees what
-				// happened on the LLM side.
+				// Model-level errors are recorded in the trace. A bad
+				// model/provider becomes invalid_input (caller-fixable);
+				// anything else stays handler_failed (see dispatchError).
 				steps = append(steps, webTestStep{Tool: "model_error", Result: rawModel, Reasoning: err.Error()})
-				return nil, &packs.PackError{
-					Code:    packs.CodeHandlerFailed,
-					Message: fmt.Sprintf("plan step %d: %v", step+1, err),
-					Cause:   err,
-				}
+				return nil, dispatchError(fmt.Sprintf("plan step %d", step+1), err)
 			}
 
 			switch p.Tool {

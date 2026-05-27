@@ -46,6 +46,11 @@ func registerMCPServerRoute(mux *http.ServeMux, deps Deps) {
 	// in-tree (internal/imagemodels). Always wire it on so agents can
 	// discover available models even before they set HELMDECK_FAL_KEY.
 	mcpOpts = append(mcpOpts, mcp.WithImageModels(newImageModelListerAdapter()))
+	// helmdeck://models lists the chat models the gateway can route to
+	// (ADR 043) so agents pick a real model instead of one that 404s.
+	if deps.Gateway != nil {
+		mcpOpts = append(mcpOpts, mcp.WithModels(newModelListerAdapter(deps.Gateway)))
+	}
 	// helmdeck__pipeline-* tools (ADR 041), when pipelines are wired.
 	if adapter, ok := newPipelineServiceAdapter(deps); ok {
 		mcpOpts = append(mcpOpts, mcp.WithPipelines(adapter))

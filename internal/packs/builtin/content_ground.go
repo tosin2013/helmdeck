@@ -508,11 +508,7 @@ func extractClaims(ctx context.Context, d vision.Dispatcher, model, markdown, to
 	}
 	resp, err := d.Dispatch(ctx, req)
 	if err != nil {
-		return nil, "", &packs.PackError{
-			Code:    packs.CodeHandlerFailed,
-			Message: fmt.Sprintf("claim extractor dispatch: %v", err),
-			Cause:   err,
-		}
+		return nil, "", dispatchError("claim extractor dispatch", err)
 	}
 	if len(resp.Choices) == 0 {
 		return nil, "", &packs.PackError{

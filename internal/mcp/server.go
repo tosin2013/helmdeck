@@ -67,6 +67,11 @@ type PackServer struct {
 	// internal/imagemodels catalog — no caching needed. Future
 	// dynamic-fetch impls slot in here.
 	imageModelLister ImageModelLister
+	// modelLister, when set, backs the helmdeck://models resource
+	// (ADR 043). Lists the chat-completion models the gateway can
+	// actually route to (provider/model IDs), so agents pick a real
+	// model instead of guessing one that errors with "unknown provider".
+	modelLister ModelLister
 	// pipelines, when set, backs the helmdeck__pipeline-* tools (ADR 041).
 	// Wired via WithPipelines; nil ⇒ those tools are absent.
 	pipelines PipelineService
@@ -136,6 +141,23 @@ type ImageModelView struct {
 	Notes                 string   `json:"notes,omitempty"`
 }
 
+// ModelLister backs the helmdeck://models resource (ADR 043): the
+// chat-completion models the gateway can route to right now, as
+// `provider/model` IDs. Production wraps the gateway registry's
+// AllModels; tests use a fake. Lets an agent discover valid models up
+// front instead of hitting "unknown provider" mid-run.
+type ModelLister interface {
+	List(ctx context.Context) ([]ModelView, error)
+}
+
+// ModelView is the JSON shape surfaced via helmdeck://models. `id` is
+// the full routable string (e.g. "openrouter/minimax/minimax-m2.7")
+// that goes straight into a pack's `model` input.
+type ModelView struct {
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+}
+
 // PackServerOption configures a PackServer at construction time.
 type PackServerOption func(*PackServer)
 
@@ -171,6 +193,13 @@ func WithVoices(v VoiceLister) PackServerOption {
 // Optional — without it, that resource is omitted from list/read.
 func WithImageModels(m ImageModelLister) PackServerOption {
 	return func(p *PackServer) { p.imageModelLister = m }
+}
+
+// WithModels registers a chat-model lister so the server can expose
+// helmdeck://models as an MCP resource (ADR 043). Optional — without
+// it, that resource is omitted from list/read.
+func WithModels(m ModelLister) PackServerOption {
+	return func(p *PackServer) { p.modelLister = m }
 }
 
 // NewPackServer constructs a server bound to a pack registry and
@@ -349,6 +378,14 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 				MimeType:    "application/json",
 			})
 		}
+		if s.modelLister != nil {
+			resources = append(resources, Resource{
+				URI:         "helmdeck://models",
+				Name:        "Chat model catalog",
+				Description: "Chat-completion models the gateway can route to right now, as full `provider/model` IDs (e.g. openrouter/minimax/minimax-m2.7). Use one verbatim for any pack's `model` input — `content.ground`, `research.deep`, `blog.publish` prompt mode, `web.test`. Providers like minimax/groq are reached via openrouter/…, not as bare providers; a bare `minimax/…` fails with 'unknown provider'.",
+				MimeType:    "application/json",
+			})
+		}
 		return mk(map[string]any{"resources": resources}, nil)
 
 	case "resources/read":
@@ -441,6 +478,27 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			body, err := json.Marshal(payload)
 			if err != nil {
 				return mk(nil, &rpcError{Code: -32603, Message: "encode image-models list: " + err.Error()})
+			}
+			return mk(map[string]any{
+				"contents": []ResourceContent{
+					{URI: params.URI, MimeType: "application/json", Text: string(body)},
+				},
+			}, nil)
+		case "helmdeck://models":
+			if s.modelLister == nil {
+				return mk(nil, &rpcError{Code: -32602, Message: "helmdeck://models unavailable: gateway not wired (configure a provider key)"})
+			}
+			models, err := s.modelLister.List(ctx)
+			if err != nil {
+				return mk(nil, &rpcError{Code: -32603, Message: "list models: " + err.Error()})
+			}
+			payload := map[string]any{
+				"models":     models,
+				"fetched_at": time.Now().UTC().Format(time.RFC3339),
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				return mk(nil, &rpcError{Code: -32603, Message: "encode model list: " + err.Error()})
 			}
 			return mk(map[string]any{
 				"contents": []ResourceContent{

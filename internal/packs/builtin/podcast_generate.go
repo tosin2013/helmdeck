@@ -116,6 +116,11 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 				"cover_image_prompt":       "string",
 				"cover_image_artifact_key": "string",
 				"cover_image_model_used":   "string",
+				// Cost transparency — emitted by the handler; declared
+				// here so agents/pipeline authors see them in the catalog.
+				"tts_chars":                "number",
+				"estimated_cost_usd":       "number",
+				"estimated_cost_breakdown": "object",
 			},
 		},
 		Handler: podcastGenerateHandler(v, eg, d),

@@ -155,6 +155,10 @@ smoke: ## End-to-end Phase 1 exit gate: compose up -> session -> CDP -> screensh
 smoke-integration: ## Fast NON-destructive OpenClaw agent round-trip against the already-running stack (no teardown)
 	bash scripts/smoke-integration.sh
 
+.PHONY: pipelines-smoke
+pipelines-smoke: ## Run built-in pipelines against the already-running stack and assert on real artifacts (integration-aware; no teardown)
+	bash scripts/pipelines-smoke.sh
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)

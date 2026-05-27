@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/tosin2013/helmdeck/internal/packs"
 )
 
 // RunStatus is the lifecycle state of a pipeline run (and of each step).
@@ -55,13 +57,17 @@ type Pipeline struct {
 
 // RunStep is the per-step record within a run.
 type RunStep struct {
-	StepID    string          `json:"step_id"`
-	Pack      string          `json:"pack"`
-	Status    RunStatus       `json:"status"`
-	Output    json.RawMessage `json:"output,omitempty"`
-	Error     string          `json:"error,omitempty"`
-	StartedAt time.Time       `json:"started_at"`
-	EndedAt   time.Time       `json:"ended_at,omitempty"`
+	StepID string          `json:"step_id"`
+	Pack   string          `json:"pack"`
+	Status RunStatus       `json:"status"`
+	Output json.RawMessage `json:"output,omitempty"`
+	// Artifacts are the files this step produced (e.g. slides.render's
+	// PDF). Surfaced in the run record so run-status (and the UI) shows
+	// what each step actually emitted, and so tests can assert on it.
+	Artifacts []packs.Artifact `json:"artifacts,omitempty"`
+	Error     string           `json:"error,omitempty"`
+	StartedAt time.Time        `json:"started_at"`
+	EndedAt   time.Time        `json:"ended_at,omitempty"`
 }
 
 // Run is one execution of a pipeline with its per-step history.

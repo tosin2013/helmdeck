@@ -114,7 +114,11 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				"hero_image_model_used": "string",
 				// Cost transparency — emitted by the handler; declared
 				// here so agents/pipeline authors see them in the catalog.
-				"tts_chars":                "number",
+				// tts_chars is a per-slide breakdown map with a "_total"
+				// key (see computeSlideTTSChars) — an object, not a number.
+				// Declaring it "number" shipped a real invalid_output
+				// failure on every pipeline run in v0.17.1.
+				"tts_chars":                "object",
 				"estimated_cost_usd":       "number",
 				"estimated_cost_breakdown": "object",
 			},

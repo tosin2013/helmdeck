@@ -16,6 +16,10 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Fixed
+
+- **`slides.narrate` / `podcast.generate` failed every real run with `invalid_output: field "tts_chars": expected number, got object`** (regression from v0.17.1). #299 declared the `tts_chars` cost-output field as `number`, but both handlers emit a per-speaker/per-slide breakdown *map* (with a `_total` key, see `computeTTSChars`/`computeSlideTTSChars`). The engine validates handler output against the declared OutputSchema on every `Execute`, so the mismatch failed `slides.narrate`, `podcast.generate`, and any pipeline using them (e.g. `builtin.repo-readme-narrate`). Corrected the declaration to `object`. The unit tests missed it because they call the pack handler directly, bypassing the engine's output validation — a new output-schema contract test now validates each pack's real output against its declared schema, so this class of drift fails in CI.
+
 ## [0.17.1] - 2026-05-28
 
 **Theme:** Fresh-stack reliability — persistent repos, grounded decks, and slide rendering now work on a clean install, and the test-suite gaps that let those bugs ship green are closed (every Docker/integration test now runs in CI, gated against silent skips).

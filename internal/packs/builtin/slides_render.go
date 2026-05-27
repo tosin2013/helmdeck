@@ -350,12 +350,17 @@ func frontmatterEndIndex(md string) int {
 // `table {}`/`img {}` rules, so the fit constraints win. Width is capped
 // for every image (harmless for the hero, which already fills its own
 // slide); height is capped only for mermaid diagrams, the usual vertical
-// overflow culprit. Tables get table-layout:fixed + wrapping cells so a
-// wide table shrinks/wraps instead of running off the edge.
+// overflow culprit. The mermaid cap is 60vh, not 70vh: the slide also
+// carries a heading plus Marp's section padding (~255px on the default
+// theme), so a 70vh (504px) diagram + that chrome overflowed a 720px
+// slide by ~39px — measured by TestSlidesFit_NoSectionOverflow. 60vh
+// (432px) leaves headroom even for a two-line title. Tables get
+// table-layout:fixed + wrapping cells so a wide table shrinks/wraps
+// instead of running off the edge.
 const slidesFitCSS = `<style>
 /* helmdeck slides.render auto-fit (#280) */
 section img { max-width: 100%; height: auto; }
-section img.mermaid-svg { max-height: 70vh; object-fit: contain; }
+section img.mermaid-svg { max-height: 60vh; object-fit: contain; }
 section table { max-width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.85em; }
 section table th, section table td { overflow-wrap: anywhere; word-break: break-word; }
 </style>`

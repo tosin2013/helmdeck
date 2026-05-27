@@ -269,7 +269,7 @@ func TestSlidesRender_FitStyleInjected(t *testing.T) {
 			piped := string(ex.last.Stdin)
 			for _, want := range []string{
 				"helmdeck slides.render auto-fit (#280)",
-				"section img.mermaid-svg { max-height: 70vh",
+				"section img.mermaid-svg { max-height: 60vh",
 				"section table { max-width: 100%; table-layout: fixed",
 			} {
 				if !strings.Contains(piped, want) {

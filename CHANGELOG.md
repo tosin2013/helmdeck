@@ -11,9 +11,9 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
-### Fixed
+## [0.17.1] - 2026-05-28
 
-- **`slides.narrate` and `podcast.generate` now declare their cost-transparency outputs** (`tts_chars`, `estimated_cost_usd`, `estimated_cost_breakdown`) in their OutputSchema. The handlers already emitted them; declaring them fixes catalog/schema drift so agents and pipeline authors can see and reference the cost fields.
+**Theme:** Fresh-stack reliability — persistent repos, grounded decks, and slide rendering now work on a clean install, and the test-suite gaps that let those bugs ship green are closed (every Docker/integration test now runs in CI, gated against silent skips).
 
 ### Changed
 
@@ -24,6 +24,7 @@ and the hard exit gates for each — see
 - **Persistent `repo.fetch` (ADR 040) failed with `mkdir: cannot create directory '/repos/…': Permission denied`.** The `helmdeck-repos` volume was root-owned, but the session sidecar runs as uid 1000 and the control-plane janitor as uid 65532 — neither could create clone directories under it, so every persistent clone (e.g. `builtin.repo-readme-narrate`/`-podcast`) failed. The session runtime now makes `/repos` world-writable on first use (a throwaway root container), with a `repos-init` compose one-shot as belt-and-suspenders — so it works for any deployment, not just Compose. The persistent clone also runs `umask 000` so the janitor (a different uid) can GC clones. Covered by a new Docker integration CI job that runs the `//go:build integration` suite (which exercises this exact clone-into-`/repos` path but wasn't previously run in CI).
 - **Pipeline-driven `repo.fetch` clones all collided in `/repos/unknown`.** `StartRun` executes on a detached context that dropped the caller subject, so persistent clones weren't namespaced per caller. The runner now threads the caller (`StartRun`/`Rerun` carry it and re-attach it via `packs.WithCaller`), so a pipeline started by `alice` clones into `/repos/alice/…` like a direct pack call.
 - **`slides.render` still clipped tall mermaid diagrams by ~39px in PDF/PPTX** — the non-scrolling formats [#280](https://github.com/tosin2013/helmdeck/issues/280)'s auto-fit was meant to protect. The mermaid cap was `max-height: 70vh` (504px on a 720px slide), but a slide also carries its heading plus Marp's ~255px section padding, so a top-down diagram + chrome overflowed. Lowered the cap to `60vh`, leaving headroom even for a two-line title. The integration suite's geometric overflow check (`TestSlidesFit_NoSectionOverflow`) had been silently *skipping* — it required a `playwright` module the sidecar doesn't ship — so it never caught this; it now runs on Marp's bundled `puppeteer-core` (the same Chromium that prints the PDF) and asserts zero section overflow, so the clip can't regress unnoticed.
+- **`slides.narrate` and `podcast.generate` now declare their cost-transparency outputs** (`tts_chars`, `estimated_cost_usd`, `estimated_cost_breakdown`) in their OutputSchema. The handlers already emitted them; declaring them fixes catalog/schema drift so agents and pipeline authors can see and reference the cost fields.
 
 ## [0.17.0] - 2026-05-28
 

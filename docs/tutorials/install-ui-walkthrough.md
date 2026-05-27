@@ -175,7 +175,7 @@ This is your reach-for-it page when something goes wrong: the audit log records 
 
 ### 10. Artifact Explorer (`/artifacts`)
 
-Lists pack output artifacts (screenshots, PDFs, videos, scrape results). Inline image preview, download button, filter by pack and date range. Useful when an MCP client returns just an artifact key — paste the key here to see the contents.
+Lists pack output artifacts (screenshots, PDFs, videos, scrape results). Inline image preview, download button, and a **delete (trash) button** to remove a single artifact on demand — handy for clearing large or one-off outputs without waiting for the TTL janitor to age them out. Filter by pack and date range. Useful when an MCP client returns just an artifact key — paste the key here to see the contents.
 
 ## Mint a JWT for your MCP client (the most-asked operation)
 

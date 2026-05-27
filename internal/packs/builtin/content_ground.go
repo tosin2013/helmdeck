@@ -333,6 +333,13 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 				"skipped":           []string{},
 				"sha256":            hex.EncodeToString(sum[:]),
 				"file_changed":      false,
+				// grounded_text is a total contract: it is always
+				// present so downstream pipeline steps (e.g.
+				// slides.render in builtin.grounded-deck) can wire
+				// ${{ steps.ground.output.grounded_text }} without the
+				// reference failing when a post had no groundable
+				// claims. Here the text is unchanged from the input.
+				"grounded_text": original,
 			})
 		}
 		_ = rawModel // retained for future audit logging; not surfaced today
@@ -645,13 +652,39 @@ Rules:
 	return &items[result.Pick], result.Snippet
 }
 
+// errRewriteTruncated signals that the rewrite response hit the
+// completion-token ceiling and is missing the tail of the document.
+// The caller treats it like any rewrite failure: keep the
+// citation-only version, which preserves all content (#deck-truncation).
+var errRewriteTruncated = errors.New("rewrite truncated at token ceiling; keeping citation-only version")
+
+// estimatedTokens is a coarse token estimate (~4 chars/token) used only
+// to size completion budgets. It is deliberately rough — over-budgeting
+// a little is cheap, under-budgeting truncates output.
+func estimatedTokens(s string) int { return len(s) / 4 }
+
 // rewriteWithSources asks the LLM to improve the grounded text by
 // rewriting weak claims into stronger prose backed by what the
 // sources actually say. The LLM sees the full text (with [source]
 // links already inserted) plus the grounding report (claim →
 // snippet pairs) and produces a polished version.
 func rewriteWithSources(ctx context.Context, d vision.Dispatcher, model, text string, gs []grounding) (string, error) {
-	maxTokens := 2048
+	// Budget the rewrite's output to fit the document. The rewrite
+	// returns the WHOLE text (rewritten), so the old fixed 2048-token
+	// cap silently truncated long inputs — a 20-25 slide deck blew
+	// past it and every slide after the cap was dropped. Scale to the
+	// input size (~4 chars/token) with 25% headroom for the citation
+	// links the rewrite weaves in, clamped to
+	// [defaultContentGroundTokens, maxContentGroundTokens]. Inputs that
+	// would need more than the ceiling fall back to the citation-only
+	// version via the FinishReason=="length" guard below.
+	maxTokens := estimatedTokens(text) * 5 / 4
+	if maxTokens < defaultContentGroundTokens {
+		maxTokens = defaultContentGroundTokens
+	}
+	if maxTokens > maxContentGroundTokens {
+		maxTokens = maxContentGroundTokens
+	}
 
 	var sourcesMsg strings.Builder
 	sourcesMsg.WriteString("GROUNDING REPORT:\n\n")
@@ -683,6 +716,7 @@ Your job: rewrite the text so that:
 - Do NOT add new claims or information not supported by the sources
 - Do NOT remove any content — only improve what has a source backing it
 - Keep the same markdown format
+- If the text is a slide deck (Marp/markdown using "---" as slide separators), preserve EVERY "---" separator and keep the exact same number of slides — never merge, split, drop, or reorder slides, and keep each slide's heading
 
 Return ONLY the rewritten markdown text. No commentary, no explanation, no code fences.`)},
 			{Role: "user", Content: gateway.TextContent(
@@ -696,6 +730,13 @@ Return ONLY the rewritten markdown text. No commentary, no explanation, no code 
 	}
 	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("rewrite: no choices returned")
+	}
+	// If the model hit the token ceiling, the tail of the document is
+	// missing — shipping it would silently drop content (e.g. the last
+	// slides of a deck). Discard the truncated rewrite; the caller
+	// keeps the structure-preserving citation-only version.
+	if resp.Choices[0].FinishReason == "length" {
+		return "", errRewriteTruncated
 	}
 	result := strings.TrimSpace(resp.Choices[0].Message.Content.Text())
 

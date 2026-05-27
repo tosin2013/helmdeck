@@ -169,13 +169,15 @@ func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFun
 			res, err := v.Resolve(ctx, actor, host, "")
 			if err != nil {
 				if errors.Is(err, vault.ErrNoMatch) {
-					return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-						Message: fmt.Sprintf("no vault credential matches host %q", host)}
+					// Caller-fixable: add an SSH credential for this host,
+					// or use an https:// URL for a public repo.
+					return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+						Message: fmt.Sprintf("no vault credential matches host %q — add an SSH key for it, or use an https:// URL for a public repo", host)}
 				}
 				return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: err.Error(), Cause: err}
 			}
 			if res.Record.Type != vault.TypeSSH {
-				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+				return nil, &packs.PackError{Code: packs.CodeInvalidInput,
 					Message: fmt.Sprintf("vault credential %q is type %q, expected ssh", res.Record.Name, res.Record.Type)}
 			}
 			script = buildRepoFetchSSHScript(in.URL, ref, depth, cloneDir)
@@ -190,7 +192,8 @@ func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFun
 				res, err := v.ResolveByName(ctx, actor, in.Credential)
 				if err != nil {
 					if errors.Is(err, vault.ErrNoMatch) {
-						return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+						// Caller-fixable: the named credential doesn't exist.
+						return nil, &packs.PackError{Code: packs.CodeInvalidInput,
 							Message: fmt.Sprintf("vault credential %q not found", in.Credential)}
 					}
 					return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: err.Error(), Cause: err}

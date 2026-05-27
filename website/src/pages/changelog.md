@@ -24,6 +24,7 @@ and the hard exit gates for each — see
 
 - **Persistent `repo.fetch` (ADR 040) failed with `mkdir: cannot create directory '/repos/…': Permission denied`.** The `helmdeck-repos` volume was root-owned, but the session sidecar runs as uid 1000 and the control-plane janitor as uid 65532 — neither could create clone directories under it, so every persistent clone (e.g. `builtin.repo-readme-narrate`/`-podcast`) failed. A new `repos-init` compose one-shot now makes `/repos` writable, and the persistent clone runs `umask 000` so the janitor (a different uid) can GC clones.
 - **Pipeline-driven `repo.fetch` clones all collided in `/repos/unknown`.** `StartRun` executes on a detached context that dropped the caller subject, so persistent clones weren't namespaced per caller. The runner now threads the caller (`StartRun`/`Rerun` carry it and re-attach it via `packs.WithCaller`), so a pipeline started by `alice` clones into `/repos/alice/…` like a direct pack call.
+- **`repo.fetch` now returns `invalid_input` (not `handler_failed`) when no vault credential matches the host or the named credential is the wrong type** -- both are caller-fixable (add/rename the credential, or use an https:// URL for a public repo), so the agent corrects instead of retrying blindly.
 
 ## [0.17.0] - 2026-05-28
 

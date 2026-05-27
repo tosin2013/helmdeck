@@ -118,7 +118,11 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 				"cover_image_model_used":   "string",
 				// Cost transparency — emitted by the handler; declared
 				// here so agents/pipeline authors see them in the catalog.
-				"tts_chars":                "number",
+				// tts_chars is a per-speaker breakdown map with a "_total"
+				// key (see computeTTSChars) — an object, not a number.
+				// Declaring it "number" shipped a real invalid_output
+				// failure on every pipeline run in v0.17.1.
+				"tts_chars":                "object",
 				"estimated_cost_usd":       "number",
 				"estimated_cost_breakdown": "object",
 			},

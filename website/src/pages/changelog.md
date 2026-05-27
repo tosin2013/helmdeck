@@ -16,14 +16,19 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-05-28
+
+**Theme:** Legible, recoverable failures — agents and operators can tell *why* a run failed and *what to do*: actionable model errors with a model catalog to pick from, and pipeline failure attribution with one-call re-run.
+
 ### Added
 
-- **`helmdeck://models` MCP resource** ([ADR 043](docs/adrs/043-actionable-gateway-model-errors.md)): lists the chat-completion models the gateway can route to right now, as full `provider/model` IDs (e.g. `openrouter/minimax/minimax-m2.7`). Agents read it to pick a valid model for any pack's `model` input instead of guessing one that fails. Mirrors `helmdeck://voices` / `helmdeck://image-models`.
-- **Legible pipeline failures + re-run** (ADR 044, slice 1): when a pipeline run fails, each failed step is now attributed with a typed `error_code`, a `failure_class` — `caller_fixable` (the inputs/model given were wrong — fix and re-run), `pack_bug` (a code error in helmdeck — the reason includes a prefilled GitHub issue link to file), `transient` (environment blip — re-running may work), or `state_changed` — and a one-line `failure_reason` saying what to do. Surfaced in `GET …/runs/{runId}`, the `helmdeck__pipeline-run-status` tool, and the Management UI `/pipelines` run view (failure-class badge + "Report bug" link). Plus a one-call re-run: `POST /api/v1/pipelines/{id}/runs/{runId}/rerun`, the `helmdeck__pipeline-rerun` tool, and a "Re-run" button. Resume-from-failed-step and auto-retry are the next slice.
+- **`helmdeck://models` MCP resource** ([ADR 043](docs/adrs/043-actionable-gateway-model-errors.md)): lists the chat-completion models the gateway can route to right now, as full `provider/model` IDs (e.g. `openrouter/minimax/minimax-m2.7`). Agents read it to pick a valid model for any pack's `model` input instead of guessing one that fails. Mirrors `helmdeck://voices` / `helmdeck://image-models`. (#293)
+- **Legible pipeline failures + re-run** ([ADR 044](docs/adrs/044-cicd-like-pipeline-execution.md), slice 1): when a pipeline run fails, each failed step is now attributed with a typed `error_code`, a `failure_class` — `caller_fixable` (the inputs/model given were wrong — fix and re-run), `pack_bug` (a code error in helmdeck — the reason includes a prefilled GitHub issue link to file), `transient` (environment blip — re-running may work), or `state_changed` — and a one-line `failure_reason` saying what to do. Surfaced in `GET …/runs/{runId}`, the `helmdeck__pipeline-run-status` tool, and the Management UI `/pipelines` run view (failure-class badge + "Report bug" link). Plus a one-call re-run: `POST /api/v1/pipelines/{id}/runs/{runId}/rerun`, the `helmdeck__pipeline-rerun` tool, and a "Re-run" button. Resume-from-failed-step and auto-retry are the next slice. (#294)
+- **Pipeline run records now list each step's artifacts**: a step's produced files (keys/URLs) are captured on the run, so `run-status` and the `/pipelines` UI show what each step emitted (previously only the final output JSON was visible). (#292)
 
 ### Fixed
 
-- **A bad/unroutable model now returns `invalid_input` with an actionable hint, not an opaque `handler_failed`.** Calling an LLM pack (`content.ground`, `research.deep`, `blog.publish` prompt mode, `web.test`) with a model the gateway can't route — e.g. `minimax/…` when MiniMax is only reachable as `openrouter/minimax/…` — used to fail as `handler_failed: … unknown provider: minimax: unknown provider: minimax` (a non-recoverable code, with a doubled message). It now returns `invalid_input` pointing at the `helmdeck://models` resource, so the agent retries with a valid model instead of hallucinating another. The doubled message is gone. ([ADR 043](docs/adrs/043-actionable-gateway-model-errors.md))
+- **A bad/unroutable model now returns `invalid_input` with an actionable hint, not an opaque `handler_failed`.** Calling an LLM pack (`content.ground`, `research.deep`, `blog.publish` prompt mode, `web.test`) with a model the gateway can't route — e.g. `minimax/…` when MiniMax is only reachable as `openrouter/minimax/…` — used to fail as `handler_failed: … unknown provider: minimax: unknown provider: minimax` (a non-recoverable code, with a doubled message). It now returns `invalid_input` pointing at the `helmdeck://models` resource, so the agent retries with a valid model instead of hallucinating another. The doubled message is gone. (#293)
 
 ## [0.16.0] - 2026-05-27
 

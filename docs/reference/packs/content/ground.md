@@ -407,9 +407,16 @@ The patched file is written back in place. `file_changed: true` if any claims gr
 | `invalid_input` | `model` empty | `model is required (provider/model)` |
 | `invalid_input` | Firecrawl overlay disabled | `content.ground is disabled; set HELMDECK_FIRECRAWL_ENABLED=true …` |
 | `invalid_input` | (file mode) `clone_path` outside safe roots | `clone_path must be an absolute path under /tmp/helmdeck- or /home/helmdeck/work/` |
+| `invalid_input` | `model` names a provider the gateway can't route (e.g. `minimax/…` — MiniMax is reachable only as `openrouter/minimax/…`) | `claim extractor dispatch: unknown provider: … — pick a configured model from the helmdeck://models resource …`. Read [`helmdeck://models`](#discovering-valid-models) for the routable IDs. |
 | `handler_failed` | Claim extractor returned malformed JSON | `could not parse claim extraction: <raw>` |
 | `handler_failed` | Every claim's exact-substring check failed | `no extracted claim was found verbatim in the source text` |
 | `session_unavailable` | (file mode) Engine has no session executor | `engine has no session executor` |
+
+## Discovering valid models
+
+The `model` input is a full `provider/model` string the gateway routes on (e.g. `openrouter/openai/gpt-oss-120b`). If you name a provider the gateway isn't configured for — a common trap is `minimax/…`, since MiniMax is reachable only **through** OpenRouter as `openrouter/minimax/minimax-m2.7` — the pack fails fast with `invalid_input` and points you here.
+
+Read the **`helmdeck://models`** MCP resource (or `GET /v1/models`) for the chat models the gateway can actually route to right now, as ready-to-paste `provider/model` IDs. It's the chat-model companion to `helmdeck://voices` and `helmdeck://image-models`. Pick one verbatim — don't guess.
 
 ## Session chaining
 

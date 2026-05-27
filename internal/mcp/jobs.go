@@ -193,6 +193,10 @@ func (r *jobRegistry) sweep(now time.Time) {
 type asyncOptions struct {
 	WebhookURL    string
 	WebhookSecret string
+	// Caller is the authenticated subject to thread into the detached
+	// job context so the memory layer (ADR 039) derives the same
+	// namespace it would for a sync call. Empty ⇒ "unknown".
+	Caller string
 }
 
 // startAsync spawns a goroutine that runs engine.Execute for pack
@@ -228,6 +232,10 @@ func (s *PackServer) startAsync(pack *packs.Pack, input json.RawMessage, opts as
 		j.mu.Unlock()
 	}
 	jobCtx = packs.WithProgress(jobCtx, progress)
+	// Memory namespace identity (ADR 039): the detached job context
+	// loses the request's auth claims, so we re-attach the caller the
+	// dispatch site captured. Empty ⇒ "unknown" inside the engine.
+	jobCtx = packs.WithCaller(jobCtx, opts.Caller)
 	// #183: thread the job ID into the context so gateway.Dispatch
 	// can stamp every provider_calls row with the originating job,
 	// making failed-pack diagnostics a one-query lookup instead of

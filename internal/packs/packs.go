@@ -7,12 +7,12 @@
 // pipeline around the pack's handler so every pack ships with the
 // same guarantees regardless of what it does internally:
 //
-//	1. validate input  (typed, refused before any side effects)
-//	2. acquire session (only when the pack declares NeedsSession)
-//	3. invoke handler  (with a strongly-typed ExecutionContext)
-//	4. validate output (refuses leaks of un-schemaed payloads)
-//	5. surface artifacts uploaded during the run
-//	6. return a typed Result OR a typed error
+//  1. validate input  (typed, refused before any side effects)
+//  2. acquire session (only when the pack declares NeedsSession)
+//  3. invoke handler  (with a strongly-typed ExecutionContext)
+//  4. validate output (refuses leaks of un-schemaed payloads)
+//  5. surface artifacts uploaded during the run
+//  6. return a typed Result OR a typed error
 //
 // The pack registry (T207), built-in packs (T208–T210), and the
 // artifact upload backend (T211) all build on this engine. T206
@@ -22,7 +22,10 @@ package packs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -32,6 +35,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tosin2013/helmdeck/internal/cdp"
+	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/session"
 	"github.com/tosin2013/helmdeck/internal/telemetry"
 )
@@ -68,6 +72,145 @@ func progressFromContext(ctx context.Context) ProgressFunc {
 	return func(float64, string) {}
 }
 
+// callerCtxKey carries the authenticated caller subject (JWT "sub")
+// into Engine.Execute so the memory layer can derive a stable
+// namespace. Mirrors progressCtxKey. Unexported so the only way to
+// attach a caller is via WithCaller.
+type callerCtxKey struct{}
+
+// WithCaller returns a child context carrying the caller's subject
+// (e.g. the JWT "sub" claim). The REST and MCP layers call this before
+// Engine.Execute so memory namespaces are scoped per caller. An empty
+// subject is treated as "unknown" by callerFromContext.
+func WithCaller(ctx context.Context, subject string) context.Context {
+	return context.WithValue(ctx, callerCtxKey{}, subject)
+}
+
+// callerFromContext returns the subject attached by WithCaller, or
+// "unknown" when none is present (or it is empty). Always non-empty so
+// the memory namespace is always well-defined.
+func callerFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(callerCtxKey{}).(string); ok && v != "" {
+		return v
+	}
+	return "unknown"
+}
+
+// MemoryConfig is the per-pack opt-in for the memory engine seam. The
+// zero value (nil *MemoryConfig on a Pack) means "no memory hooks" —
+// the pack runs exactly as it did before the memory layer existed.
+type MemoryConfig struct {
+	// Cache, when true, turns on the read-through response cache: the
+	// engine keys on sha256(input) under the pack name and, if a fresh
+	// entry exists in the caller's namespace, returns it WITHOUT
+	// invoking the handler. After a successful miss it stores the
+	// output under that key with TTL.
+	Cache bool
+	// TTL bounds cached entries. Zero with Cache=true means "never
+	// expire" — almost never what you want for a cache; set a real TTL.
+	TTL time.Duration
+	// Category tags stored cache entries (defaults to "cache" when
+	// empty) for Context() grouping.
+	Category string
+}
+
+// EntrySummary is a redacted, value-light view of a memory.Entry used
+// by Context() so packs/agents can decide what to recall without
+// pulling every payload. The Fingerprint identifies the value; callers
+// Recall by Key to get the bytes.
+type EntrySummary struct {
+	Key         string    `json:"key"`
+	Category    string    `json:"category,omitempty"`
+	Tags        []string  `json:"tags,omitempty"`
+	Fingerprint string    `json:"fingerprint"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// SessionContext is the structured recall surface returned by
+// MemoryInterface.Context (#260): the N most-recent non-expired
+// entries in the namespace, grouped by category.
+type SessionContext struct {
+	Namespace string                    `json:"namespace"`
+	Entries   map[string][]EntrySummary `json:"entries"`
+}
+
+// contextEntryCap bounds how many entries Context() aggregates so a
+// long-lived namespace doesn't return an unbounded blob.
+const contextEntryCap = 50
+
+// MemoryInterface is the handler-facing, namespace-scoped memory
+// handle exposed on ExecutionContext.Memory. It hides the namespace so
+// handlers never address another caller's memory by mistake. It is
+// non-nil only when the engine has a MemoryStore wired (WithMemoryStore)
+// — handlers MUST nil-check ec.Memory.
+type MemoryInterface interface {
+	Store(key string, value []byte, opts ...memory.PutOption) error
+	Recall(key string) (*memory.Entry, error)
+	List(prefix string) ([]memory.Entry, error)
+	Delete(key string) error
+	Namespace() string
+	Context() (*SessionContext, error)
+}
+
+// memoryAdapter binds a memory.MemoryStore to a fixed namespace and a
+// context, satisfying MemoryInterface. One is built per Execute call.
+type memoryAdapter struct {
+	store memory.MemoryStore
+	ns    string
+	ctx   context.Context
+}
+
+func (m *memoryAdapter) Namespace() string { return m.ns }
+
+func (m *memoryAdapter) Store(key string, value []byte, opts ...memory.PutOption) error {
+	_, err := m.store.Put(m.ctx, m.ns, key, value, opts...)
+	return err
+}
+
+func (m *memoryAdapter) Recall(key string) (*memory.Entry, error) {
+	e, err := m.store.Get(m.ctx, m.ns, key)
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+func (m *memoryAdapter) List(prefix string) ([]memory.Entry, error) {
+	return m.store.List(m.ctx, m.ns, prefix)
+}
+
+func (m *memoryAdapter) Delete(key string) error {
+	return m.store.Delete(m.ctx, m.ns, key)
+}
+
+func (m *memoryAdapter) Context() (*SessionContext, error) {
+	entries, err := m.store.List(m.ctx, m.ns, "")
+	if err != nil {
+		return nil, err
+	}
+	// List returns newest-first; cap to the most-recent N.
+	if len(entries) > contextEntryCap {
+		entries = entries[:contextEntryCap]
+	}
+	sc := &SessionContext{Namespace: m.ns, Entries: map[string][]EntrySummary{}}
+	for _, e := range entries {
+		cat := e.Category
+		if cat == "" {
+			cat = "uncategorized"
+		}
+		sc.Entries[cat] = append(sc.Entries[cat], EntrySummary{
+			Key:         e.Key,
+			Category:    e.Category,
+			Tags:        e.Tags,
+			Fingerprint: e.Fingerprint,
+			CreatedAt:   e.CreatedAt,
+			UpdatedAt:   e.UpdatedAt,
+		})
+	}
+	return sc, nil
+}
+
 // CDPFactory dials a chromedp client for a session id and is the
 // bridge between the engine's session lifecycle and pack handlers
 // that need to drive the browser. The same interface is implemented
@@ -92,15 +235,15 @@ type Schema interface {
 // the registry key in T207's pack registry; the engine itself is
 // stateless and just runs whatever Pack value is handed in.
 type Pack struct {
-	Name         string
-	Version      string
-	Description  string
-	InputSchema  Schema      // validated before Handler runs
-	OutputSchema Schema      // validated before Handler's output is returned
+	Name            string
+	Version         string
+	Description     string
+	InputSchema     Schema       // validated before Handler runs
+	OutputSchema    Schema       // validated before Handler's output is returned
 	NeedsSession    bool         // when true, Engine acquires a session and exposes it via ExecutionContext
 	PreserveSession bool         // when true AND NeedsSession, the engine does NOT terminate the session on return — the session persists for follow-on packs to reuse via _session_id. Watchdog cleans up after timeout.
 	SessionSpec     session.Spec // optional override; zero value means "runtime defaults"
-	Handler      HandlerFunc
+	Handler         HandlerFunc
 
 	// ArtifactTTL is the per-pack retention override consulted by the
 	// janitor (T211b, ADR 031). Zero means "use the platform default
@@ -125,6 +268,13 @@ type Pack struct {
 	// the benefit and the LLM has to interpret a task reference
 	// instead of an immediate result.
 	Async bool
+
+	// Memory is the optional opt-in for the Universal Memory engine
+	// seam (ADR 039). Nil — the default for every pack — means no
+	// memory hooks run and the pack behaves exactly as it did before
+	// the memory layer landed. Set it (e.g. {Cache: true, TTL: ...})
+	// to enable the declarative read-through response cache.
+	Memory *MemoryConfig
 }
 
 // HandlerFunc is the per-pack work function. It receives an
@@ -158,6 +308,29 @@ type ExecutionContext struct {
 	// should NOT call it directly; use ec.Report instead, which is
 	// nil-safe and survives test fixtures that build an EC manually.
 	Progress ProgressFunc
+
+	// Memory is the namespace-scoped memory handle. NIL unless the
+	// engine has a MemoryStore wired (WithMemoryStore). Handlers MUST
+	// nil-check before use — the default deployment (no memory key)
+	// leaves this nil so behavior is unchanged.
+	Memory MemoryInterface
+
+	// PersistentReposPath is the in-container mount point of the
+	// persistent repos volume (ADR 040), or "" when no repos volume is
+	// configured. Non-empty tells repo.* handlers they may persist a
+	// clone across sessions under PersistentReposPath/<Caller>/<hash>;
+	// empty means clones go to an ephemeral /tmp dir as before. Mirrors
+	// session.Session.ReposPath, surfaced here so handlers don't reach
+	// into the runtime.
+	PersistentReposPath string
+
+	// Caller is the bare authenticated subject (JWT subject, or
+	// "unknown" when unauthenticated) — WITHOUT the per-session suffix
+	// that ec.Memory.Namespace() carries. repo.* uses it to namespace
+	// persistent clones by caller so a clone is shared across that
+	// caller's sessions (the whole point of cross-session reuse), unlike
+	// session-scoped memory which is deliberately not shared.
+	Caller string
 }
 
 // Report sends an incremental status update to whoever is listening
@@ -198,10 +371,11 @@ type Result struct {
 // Engine is the pipeline runner. Construct one per process; it is
 // safe for concurrent use because it holds no mutable state.
 type Engine struct {
-	runtime    session.Runtime  // optional; nil disallows packs with NeedsSession
-	cdpFactory CDPFactory       // optional; when nil, ExecutionContext.CDP is nil
-	executor   session.Executor // optional; when nil, ExecutionContext.Exec is nil
-	artifacts  ArtifactStore    // optional; defaults to an in-memory store
+	runtime    session.Runtime    // optional; nil disallows packs with NeedsSession
+	cdpFactory CDPFactory         // optional; when nil, ExecutionContext.CDP is nil
+	executor   session.Executor   // optional; when nil, ExecutionContext.Exec is nil
+	artifacts  ArtifactStore      // optional; defaults to an in-memory store
+	memory     memory.MemoryStore // optional; when nil, ExecutionContext.Memory is nil (memory disabled)
 	logger     *slog.Logger
 	now        func() time.Time
 }
@@ -231,6 +405,12 @@ func WithSessionExecutor(ex session.Executor) Option {
 
 // WithArtifactStore overrides the default in-memory artifact store.
 func WithArtifactStore(s ArtifactStore) Option { return func(e *Engine) { e.artifacts = s } }
+
+// WithMemoryStore wires the Universal Memory backend (ADR 039). Without
+// one, ExecutionContext.Memory is nil on every run and the memory
+// engine seam is inert — the default-off safety contract. Pass an
+// InMemoryStore in tests or a SQLiteStore in production.
+func WithMemoryStore(s memory.MemoryStore) Option { return func(e *Engine) { e.memory = s } }
 
 // WithLogger overrides the default slog.Default() logger.
 func WithLogger(l *slog.Logger) Option { return func(e *Engine) { e.logger = l } }
@@ -375,11 +555,59 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 		Logger:    logger,
 		Artifacts: e.artifacts,
 		Progress:  progressFromContext(ctx),
+		Caller:    callerFromContext(ctx),
+	}
+	// Persistent repos path (ADR 040): surfaced to repo.* handlers when
+	// the runtime mounted a repos volume into this session. Empty when
+	// no volume is configured ⇒ ephemeral /tmp clone, as before.
+	if sess != nil {
+		ec.PersistentReposPath = sess.ReposPath
+	}
+	// Memory handle: non-nil only when a MemoryStore is wired. The
+	// namespace is the authenticated caller (JWT subject, "unknown"
+	// when unauthenticated); when the pack acquired a session we
+	// further scope it to that session so per-session memory doesn't
+	// bleed across a caller's concurrent runs.
+	if e.memory != nil {
+		ns := callerFromContext(ctx)
+		if sess != nil {
+			ns += ":" + sess.ID
+		}
+		ec.Memory = &memoryAdapter{store: e.memory, ns: ns, ctx: ctx}
 	}
 	if pack.NeedsSession && e.executor != nil && sess != nil {
 		sessID := sess.ID
 		ec.Exec = func(ctx context.Context, req session.ExecRequest) (session.ExecResult, error) {
 			return e.executor.Exec(ctx, sessID, req)
+		}
+	}
+
+	// Memory cache seam (PRE). Gated by ec.Memory != nil (a store is
+	// wired) AND pack.Memory.Cache (the pack opted in). Both nil/false
+	// ⇒ this block is skipped entirely ⇒ zero behavior change. When a
+	// fresh entry exists for sha256(input) under the pack name, return
+	// it as the output and skip the handler.
+	cacheEnabled := ec.Memory != nil && pack.Memory != nil && pack.Memory.Cache
+	var cacheKey string
+	if cacheEnabled {
+		cacheKey = pack.Name + "/" + sha256hex(input)
+		if ent, rerr := ec.Memory.Recall(cacheKey); rerr == nil && ent != nil {
+			logger.Debug("memory cache hit", "pack", pack.Name, "key", cacheKey, "fingerprint", ent.Fingerprint)
+			var sessionID string
+			if sess != nil {
+				sessionID = sess.ID
+			}
+			return &Result{
+				Pack:      pack.Name,
+				Version:   pack.Version,
+				Output:    json.RawMessage(ent.Value),
+				SessionID: sessionID,
+				Duration:  e.now().Sub(start),
+			}, nil
+		} else if rerr != nil && !errors.Is(rerr, memory.ErrNotFound) {
+			// A real backend error (not just a miss) shouldn't fail the
+			// pack — log and fall through to the handler.
+			logger.Warn("memory cache recall failed; running handler", "pack", pack.Name, "err", rerr)
 		}
 	}
 
@@ -401,6 +629,24 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 	if pack.OutputSchema != nil {
 		if err := pack.OutputSchema.Validate(output); err != nil {
 			return nil, &PackError{Code: CodeInvalidOutput, Message: err.Error(), Cause: err}
+		}
+	}
+
+	// Memory cache seam (POST). Store the successful output under the
+	// cache key with the pack's TTL/category so the next identical call
+	// within TTL hits the cache. Deliberately runs AFTER output-schema
+	// validation so a schema-invalid output is never cached (otherwise a
+	// rejected payload would be served as success on the next call,
+	// bypassing validation). A store failure must not fail the pack — it
+	// only forfeits the cache for this call.
+	if cacheEnabled {
+		cat := pack.Memory.Category
+		if cat == "" {
+			cat = "cache"
+		}
+		if serr := ec.Memory.Store(cacheKey, []byte(output),
+			memory.WithTTL(pack.Memory.TTL), memory.WithCategory(cat)); serr != nil {
+			logger.Warn("memory cache store failed", "pack", pack.Name, "err", serr)
 		}
 	}
 
@@ -440,6 +686,13 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 // error message — it might contain caller-supplied data and the
 // engine has no way to redact it safely. T206's middleware can add
 // stack capture for the audit log if needed.
+// sha256hex returns the hex-encoded sha256 of b, used to key cache
+// entries on the exact input bytes.
+func sha256hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
 func safeInvoke(ctx context.Context, ec *ExecutionContext, h HandlerFunc) (out json.RawMessage, err error) {
 	defer func() {
 		if r := recover(); r != nil {

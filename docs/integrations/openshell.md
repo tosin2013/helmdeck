@@ -19,7 +19,7 @@ Helmdeck and OpenShell solve **adjacent but distinct problems** in the agentic-p
 | Layer | Owner | Today |
 |---|---|---|
 | **Agent logic** (planning, tool selection, reasoning) | Agent (Claude Code, OpenClaw, Codex, Hermes) | — |
-| **Tool orchestration** (pack execution, MCP server, AI gateway, vault, artifact store) | **helmdeck** | 41 packs across 11 families; Docker-container session isolation; AES-256-GCM vault |
+| **Tool orchestration** (pack execution, MCP server, AI gateway, vault, artifact store) | **helmdeck** | 43 packs across 11 families; Docker-container session isolation; AES-256-GCM vault |
 | **Infrastructure & isolation** (sandbox lifecycle, L7 network policy, hardware isolation, OS-level credential injection) | **OpenShell** | Rust gateway + supervisor + policy proxy; OPA engine; experimental libkrun MicroVM backend; Landlock filesystem |
 
 The integration is not duplicative: each project covers a layer the other doesn't. By the end of Phase 3, helmdeck's `SessionRuntime` interface gains an OpenShell backend, and every browser / Python / Node sidecar that helmdeck spawns can run inside a hardware-isolated MicroVM with hot-reloadable L7 network policy. By the end of Phase 4, a single trace ID joins helmdeck's GenAI OTel spans with OpenShell's OCSF security events for the same sandbox.
@@ -146,7 +146,7 @@ Build a correlation layer that joins helmdeck's OTel GenAI traces (existing) wit
 | **Code-execution isolation** | Docker container | N/A | MicroVM + Landlock filesystem |
 | **Network policy** | URL blocklist (egress guard) | L7 YAML policy | L7 policy on every sidecar |
 | **Credential security** | AES-256-GCM vault + placeholders | Provider injection at process start | Both, non-overlapping |
-| **Tool availability** | 41 packs via MCP | Bring your own | 41 packs inside policy-governed sandboxes |
+| **Tool availability** | 43 packs via MCP | Bring your own | 43 packs inside policy-governed sandboxes |
 | **Local-model reliability** | ≥90% on 7B–30B via pack contracts | Inference routing only | ≥90% on 7B–30B, fully air-gapped |
 | **Observability** | OTel GenAI traces | OCSF security events | Correlated OTel + OCSF |
 | **Policy feedback loop** | None | Policy Advisor | Policy Advisor extended to tool sandboxes |

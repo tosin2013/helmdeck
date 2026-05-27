@@ -103,6 +103,7 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 			Properties: map[string]string{
 				"engine":             "string",
 				"audio_artifact_key": "string",
+				"audio_url":          "string",
 				"audio_size":         "number",
 				"duration_s":         "number",
 				"speaker_count":      "number",
@@ -431,6 +432,13 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 		}
 		if modelUsed != "" {
 			out["model_used"] = modelUsed
+		}
+		// #233/ADR 041: surface the presigned artifact URL so a pipeline
+		// can embed it in a hyperframes.render composition's <audio src>
+		// (podcast → narrated video). Empty for the in-memory artifact
+		// store (dev/CI); set when an S3 store is configured.
+		if art.URL != "" {
+			out["audio_url"] = art.URL
 		}
 		// Cover prompt is computed once (cheap, in-process) and either
 		// surfaced as `cover_image_prompt` (when generate_cover_prompt

@@ -77,12 +77,20 @@ start_playwright_mcp() {
         echo "helmdeck-entrypoint: Playwright MCP disabled via HELMDECK_PLAYWRIGHT_MCP_ENABLED" >&2
         return 0
     fi
-    if ! command -v npx >/dev/null 2>&1; then
-        echo "helmdeck-entrypoint: npx not on PATH; Playwright MCP unavailable" >&2
+    # ADR 037 (#248): use the @playwright/mcp installed globally and pinned in
+    # the image (sidecar.Dockerfile, ARG PLAYWRIGHT_MCP_VERSION) rather than
+    # `npx --yes @playwright/mcp@latest`. The npx form re-resolves @latest over
+    # the network on every container start, which (a) floats the version away
+    # from the pinned, sentinel-checked copy baked into the image — defeating
+    # ADR 037's reproducibility guarantee — and (b) fails closed on an
+    # air-gapped or egress-restricted host. The global install exposes the
+    # `playwright-mcp` bin on PATH.
+    if ! command -v playwright-mcp >/dev/null 2>&1; then
+        echo "helmdeck-entrypoint: playwright-mcp not on PATH; Playwright MCP unavailable" >&2
         return 0
     fi
     echo "helmdeck-entrypoint: starting Playwright MCP on 0.0.0.0:${PLAYWRIGHT_MCP_PORT} attached to CDP 127.0.0.1:${CHROMIUM_PORT}" >&2
-    npx --yes @playwright/mcp@latest \
+    playwright-mcp \
         --cdp-endpoint "http://127.0.0.1:${CHROMIUM_PORT}" \
         --host 0.0.0.0 \
         --port "${PLAYWRIGHT_MCP_PORT}" \

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/packs"
 )
 
@@ -83,7 +84,16 @@ func registerPackRoutes(mux *http.ServeMux, deps Deps) {
 			if len(input) == 0 {
 				input = json.RawMessage("{}")
 			}
-			res, perr := eng.Execute(r.Context(), pack, input)
+			// Thread the authenticated caller into the engine so the
+			// memory layer (ADR 039) derives a per-caller namespace.
+			// Empty subject (unauthenticated/auth-disabled) falls back
+			// to "unknown" inside packs.callerFromContext.
+			subject := ""
+			if c := auth.FromContext(r.Context()); c != nil {
+				subject = c.Subject
+			}
+			ctx := packs.WithCaller(r.Context(), subject)
+			res, perr := eng.Execute(ctx, pack, input)
 			if perr != nil {
 				writePackError(w, perr)
 				return

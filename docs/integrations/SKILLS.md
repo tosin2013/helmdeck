@@ -83,7 +83,7 @@ Find the client's "system prompt" / "custom instructions" / "agent context" fiel
 
 ## You are connected to helmdeck
 
-Helmdeck is a browser automation and AI capability platform. You have access to 41 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
+Helmdeck is a browser automation and AI capability platform. You have access to 43 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
 
 ## Pack catalog
 

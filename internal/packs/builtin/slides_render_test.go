@@ -62,9 +62,13 @@ func TestSlidesRenderHappyPathPDF(t *testing.T) {
 	if ex.calls != 1 {
 		t.Errorf("calls = %d", ex.calls)
 	}
-	// stdin must be the markdown verbatim
-	if string(ex.last.Stdin) != "# hi" {
-		t.Errorf("stdin = %q", ex.last.Stdin)
+	// stdin carries the deck markdown plus the always-on auto-fit <style>
+	// (#280) injected ahead of it.
+	if !strings.HasSuffix(string(ex.last.Stdin), "# hi") {
+		t.Errorf("stdin should end with the deck markdown, got %q", ex.last.Stdin)
+	}
+	if !strings.Contains(string(ex.last.Stdin), "auto-fit (#280)") {
+		t.Errorf("stdin should carry the auto-fit style, got %q", ex.last.Stdin)
 	}
 	// command must include marp + the requested format flag
 	cmd := ex.last.Cmd
@@ -96,14 +100,21 @@ func TestSlidesRenderHappyPathPDF(t *testing.T) {
 
 func TestSlidesRenderFormatSelection(t *testing.T) {
 	cases := map[string]struct {
+		// flag is the marp output-format flag the pack must pass for this
+		// format. Empty means NO format flag — marp's default codec emits
+		// HTML, and `--html` is marp's HTML-tag toggle, not a format
+		// selector (#248).
 		flag string
 		ext  string
 		mime string
 	}{
 		"pdf":  {"--pdf", "pdf", "application/pdf"},
 		"pptx": {"--pptx", "pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
-		"html": {"--html", "html", "text/html"},
+		"html": {"", "html", "text/html"},
 	}
+	// formatFlags are the marp output-format flags; for the HTML case we
+	// assert none of them appears (HTML is the default, flagless output).
+	formatFlags := []string{"--pdf", "--pptx", "--html", "--image", "--images", "--notes"}
 	for format, want := range cases {
 		t.Run(format, func(t *testing.T) {
 			ex := &fakeExecutor{result: session.ExecResult{Stdout: []byte("data")}}
@@ -113,14 +124,29 @@ func TestSlidesRenderFormatSelection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Execute: %v", err)
 			}
-			found := false
-			for _, a := range ex.last.Cmd {
-				if a == want.flag {
-					found = true
+			if want.flag != "" {
+				found := false
+				for _, a := range ex.last.Cmd {
+					if a == want.flag {
+						found = true
+					}
 				}
-			}
-			if !found {
-				t.Errorf("flag %q not in cmd %v", want.flag, ex.last.Cmd)
+				if !found {
+					t.Errorf("flag %q not in cmd %v", want.flag, ex.last.Cmd)
+				}
+			} else {
+				// HTML: no output-format flag may be present, and there
+				// must be no empty-string arg in the argv.
+				for _, a := range ex.last.Cmd {
+					if a == "" {
+						t.Errorf("argv carries empty-string arg: %v", ex.last.Cmd)
+					}
+					for _, ff := range formatFlags {
+						if a == ff {
+							t.Errorf("html format must pass no format flag, found %q in %v", ff, ex.last.Cmd)
+						}
+					}
+				}
 			}
 			if res.Artifacts[0].ContentType != want.mime {
 				t.Errorf("mime = %q want %q", res.Artifacts[0].ContentType, want.mime)
@@ -223,6 +249,53 @@ func TestSlidesRender_MermaidFencePreprocessed(t *testing.T) {
 	}
 	if !strings.Contains(piped, `<img src="data:image/svg+xml;base64,`) {
 		t.Errorf("markdown piped to marp should contain inline-SVG <img> data-URI:\n%s", piped)
+	}
+}
+
+func TestSlidesRender_FitStyleInjected(t *testing.T) {
+	// Every render must carry the auto-fit <style> (#280) in the markdown
+	// piped to marp, regardless of format — that's what keeps mermaid
+	// diagrams and wide tables inside the fixed slide bounds in PDF/PPTX.
+	for _, format := range []string{"pdf", "pptx", "html"} {
+		t.Run(format, func(t *testing.T) {
+			ex := &fakeExecutor{result: session.ExecResult{Stdout: []byte("OUT")}}
+			eng := newSlidesEngine(t, ex)
+			input, _ := json.Marshal(map[string]any{
+				"markdown": "# Slide\n\n| a | b |\n|---|---|\n| 1 | 2 |", "format": format,
+			})
+			if _, err := eng.Execute(context.Background(), SlidesRender(nil, nil), input); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			piped := string(ex.last.Stdin)
+			for _, want := range []string{
+				"helmdeck slides.render auto-fit (#280)",
+				"section img.mermaid-svg { max-height: 70vh",
+				"section table { max-width: 100%; table-layout: fixed",
+			} {
+				if !strings.Contains(piped, want) {
+					t.Errorf("[%s] markdown piped to marp missing fit rule %q:\n%s", format, want, piped)
+				}
+			}
+		})
+	}
+}
+
+func TestInjectFitStyle(t *testing.T) {
+	// With frontmatter: the <style> lands AFTER the closing --- so it
+	// doesn't get swallowed as slide content or break the theme directive.
+	fm := "---\ntheme: helmdeck-dark\n---\n# Slide"
+	out := injectFitStyle(fm)
+	if !strings.HasPrefix(out, "---\ntheme: helmdeck-dark\n---\n<style>") {
+		t.Errorf("style should be injected right after frontmatter:\n%s", out)
+	}
+	// No frontmatter: prepend.
+	out = injectFitStyle("# Slide")
+	if !strings.HasPrefix(out, "<style>") {
+		t.Errorf("style should be prepended when no frontmatter:\n%s", out)
+	}
+	// Idempotent.
+	if injectFitStyle(out) != out {
+		t.Error("injectFitStyle must be idempotent")
 	}
 }
 

@@ -53,6 +53,43 @@ func TestBuildHostConfig_CustomPidsLimit(t *testing.T) {
 	}
 }
 
+// ADR 040: the repos volume is mounted only when configured, at the
+// fixed /repos path, read-write.
+func TestBuildHostConfig_ReposVolumeMountedWhenConfigured(t *testing.T) {
+	r := &Runtime{pidsLimit: defaultPidsLimit, reposVolume: "helmdeck-repos"}
+	hc := r.buildHostConfig(1<<30, 1<<30, 1.0)
+	if len(hc.Mounts) != 1 {
+		t.Fatalf("Mounts = %v, want exactly the repos volume", hc.Mounts)
+	}
+	m := hc.Mounts[0]
+	if string(m.Type) != "volume" || m.Source != "helmdeck-repos" || m.Target != reposMountPath {
+		t.Errorf("repos mount = %+v, want volume helmdeck-repos -> %s", m, reposMountPath)
+	}
+	if m.ReadOnly {
+		t.Error("repos mount must be read-write (clone + dep cache writes)")
+	}
+}
+
+func TestBuildHostConfig_NoReposVolumeByDefault(t *testing.T) {
+	r := &Runtime{pidsLimit: defaultPidsLimit}
+	hc := r.buildHostConfig(1<<30, 1<<30, 1.0)
+	if len(hc.Mounts) != 0 {
+		t.Errorf("default config should mount no volumes, got %v", hc.Mounts)
+	}
+}
+
+// reposPathIfMounted reports the in-container mount path only when a
+// repos volume is configured, so the engine can leave
+// ec.PersistentReposPath empty (ephemeral behavior) otherwise.
+func TestReposPathIfMounted(t *testing.T) {
+	if got := reposPathIfMounted(""); got != "" {
+		t.Errorf("no volume should yield empty repos path, got %q", got)
+	}
+	if got := reposPathIfMounted("helmdeck-repos"); got != reposMountPath {
+		t.Errorf("configured volume should yield %q, got %q", reposMountPath, got)
+	}
+}
+
 func TestBuildHostConfig_SeccompProfile(t *testing.T) {
 	r := &Runtime{pidsLimit: defaultPidsLimit, seccompProfile: "/etc/helmdeck/chrome.json"}
 	hc := r.buildHostConfig(1<<30, 1<<30, 1.0)

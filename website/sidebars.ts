@@ -54,6 +54,16 @@ const sidebars: SidebarsConfig = {
   reference: [
     'reference/index',
     'reference/architecture',
+    'reference/agent-memory',
+    {
+      type: 'category',
+      label: 'Prompt templates',
+      link: {type: 'doc', id: 'reference/prompt-templates/index'},
+      items: [
+        'reference/prompt-templates/packs',
+        'reference/prompt-templates/pipelines',
+      ],
+    },
     'PACKS',
     'integrations/SKILLS',
     'integrations/README',

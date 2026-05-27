@@ -108,7 +108,13 @@ func formatSpec(format string) (marpFlag, ext, mime string, err error) {
 	case "pptx":
 		return "--pptx", "pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", nil
 	case "html":
-		return "--html", "html", "text/html", nil
+		// No output-format flag for HTML: HTML is marp's default output
+		// when no --pdf/--pptx/--image flag is given. (marp's `--html`
+		// is the markdown-HTML-extension toggle — "Enable or disable
+		// HTML tags" — NOT an output-format selector; passing it here
+		// was a semantic mismatch, see #248.) With `-o -` and a piped
+		// stdin, the default codec streams HTML to stdout.
+		return "", "html", "text/html", nil
 	default:
 		return "", "", "", fmt.Errorf("unsupported format %q (want pdf, pptx, or html)", format)
 	}
@@ -194,6 +200,12 @@ func slidesRenderHandler(v *vault.Store, eg *security.EgressGuard) packs.Handler
 			markdown = rewritten
 		}
 
+		// Auto-fit (#280): inject theme-independent CSS that scales
+		// mermaid diagrams/images down and shrinks-to-fit tables so the
+		// paginated PDF/PPTX codecs (which can't scroll) don't clip
+		// oversized content. Layers after the theme; harmless for HTML.
+		markdown = injectFitStyle(markdown)
+
 		// #202 Option C: when the deck's frontmatter declares one of
 		// our curated themes, upload the embedded CSS files to the
 		// sidecar so marp can resolve `theme: helmdeck-dark` (etc).
@@ -202,11 +214,15 @@ func slidesRenderHandler(v *vault.Store, eg *security.EgressGuard) packs.Handler
 		curatedThemeUsed := ""
 		marpArgs := []string{
 			"marp",
-			"--stdin",
 			"--allow-local-files",
-			flag,
-			"-o", "-",
 		}
+		// flag is empty for the HTML format (marp's default output codec
+		// needs no output-format flag); only append it when non-empty so
+		// we never pass an empty-string arg to marp.
+		if flag != "" {
+			marpArgs = append(marpArgs, flag)
+		}
+		marpArgs = append(marpArgs, "-o", "-")
 		if markdownReferencesCuratedTheme(markdown) {
 			themeDir, terr := uploadCuratedThemes(ctx, ec)
 			if terr != nil {
@@ -216,11 +232,11 @@ func slidesRenderHandler(v *vault.Store, eg *security.EgressGuard) packs.Handler
 			curatedThemeUsed = extractCuratedThemeName(markdown)
 		}
 
-		// Marp reads markdown from stdin when given `-` as the input
-		// path. We use `--stdin -o -` so the binary output streams back
-		// over our captured stdout — no temp files inside the container,
-		// no path management. The format flag (pdf/pptx/html) selects
-		// the output codec.
+		// Marp reads markdown from stdin automatically when input is
+		// piped (no input-path arg), and `-o -` streams the binary
+		// output back over our captured stdout — no temp files inside
+		// the container, no path management. The format flag
+		// (pdf/pptx/html) selects the output codec.
 		//
 		// `--allow-local-files` is required for any deck that references
 		// local images; harmless when the markdown has none. We do NOT
@@ -320,6 +336,43 @@ func frontmatterEndIndex(md string) int {
 		return 4 + i + len("\n---\n")
 	}
 	return 0
+}
+
+// slidesFitCSS keeps mermaid diagrams, images, and tables inside the
+// fixed Marp slide bounds (#280). Marp pages are a fixed 1280×720 canvas;
+// unlike HTML, the PDF and PPTX codecs cannot scroll, so any element
+// larger than the slide is silently clipped. These rules are
+// theme-independent — Marp hoists an inline <style> in the Markdown to
+// global CSS that layers after the selected theme — so they apply equally
+// to curated themes and the built-in Marp themes (gaia/default/uncover).
+//
+// `section …` selectors give these higher specificity than a theme's bare
+// `table {}`/`img {}` rules, so the fit constraints win. Width is capped
+// for every image (harmless for the hero, which already fills its own
+// slide); height is capped only for mermaid diagrams, the usual vertical
+// overflow culprit. Tables get table-layout:fixed + wrapping cells so a
+// wide table shrinks/wraps instead of running off the edge.
+const slidesFitCSS = `<style>
+/* helmdeck slides.render auto-fit (#280) */
+section img { max-width: 100%; height: auto; }
+section img.mermaid-svg { max-height: 70vh; object-fit: contain; }
+section table { max-width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.85em; }
+section table th, section table td { overflow-wrap: anywhere; word-break: break-word; }
+</style>`
+
+// injectFitStyle inserts the auto-fit <style> block (slidesFitCSS) right
+// after the deck's frontmatter, or at the very top when there is none.
+// Idempotent: if the block is already present (defensive against double
+// calls) it returns the markdown unchanged.
+func injectFitStyle(md string) string {
+	if strings.Contains(md, "/* helmdeck slides.render auto-fit (#280) */") {
+		return md
+	}
+	block := slidesFitCSS + "\n\n"
+	if idx := frontmatterEndIndex(md); idx > 0 {
+		return md[:idx] + block + md[idx:]
+	}
+	return block + md
 }
 
 // preprocessMermaidFences finds every ```mermaid…``` block in the

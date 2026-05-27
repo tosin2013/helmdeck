@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/telemetry"
 )
@@ -66,6 +67,9 @@ type PackServer struct {
 	// internal/imagemodels catalog — no caching needed. Future
 	// dynamic-fetch impls slot in here.
 	imageModelLister ImageModelLister
+	// pipelines, when set, backs the helmdeck__pipeline-* tools (ADR 041).
+	// Wired via WithPipelines; nil ⇒ those tools are absent.
+	pipelines PipelineService
 }
 
 // SessionLister is the minimum surface PackServer needs to expose live
@@ -302,6 +306,9 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 		// the same way as regular packs — SKILLS.md tells the LLM
 		// when to prefer the async path.
 		tools = append(tools, asyncPackTools()...)
+		// helmdeck__pipeline-* tools (ADR 041), only when a pipeline
+		// service is wired.
+		tools = append(tools, s.pipelineTools()...)
 		return mk(map[string]any{"tools": tools}, nil)
 
 	case "resources/list":
@@ -474,6 +481,11 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 		if asyncResult, handled := s.dispatchAsyncTool(params.Name, params.Arguments); handled {
 			return mk(asyncResult, nil)
 		}
+		// helmdeck__pipeline-* tools (ADR 041) intercept before the
+		// registry lookup, same as the async wrapper tools.
+		if pipeResult, handled := s.dispatchPipelineTool(ctx, params.Name, params.Arguments); handled {
+			return mk(pipeResult, nil)
+		}
 		pack, err := s.registry.Get(params.Name, "")
 		if err != nil {
 			return mk(nil, &rpcError{Code: -32601, Message: "unknown tool: " + params.Name})
@@ -504,6 +516,18 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 				_ = writeFrame(progressNotification(tok, pct, message))
 			})
 		}
+		// Thread the authenticated caller into the engine for the memory
+		// layer (ADR 039). MCP is single-session/stdio today, so JWT
+		// claims are present on ctx only when the transport attached them
+		// (the WebSocket bridge in the api package forwards the request
+		// ctx); when absent, callerFromContext defaults to "unknown". We
+		// capture the subject here so both the sync Execute below and the
+		// async start (which detaches to a background ctx) carry it.
+		callerSubject := ""
+		if c := auth.FromContext(ctx); c != nil {
+			callerSubject = c.Subject
+		}
+		ctx = packs.WithCaller(ctx, callerSubject)
 		// SEP-1686 task envelope path: packs that declare Async=true
 		// route through the job registry so the JSON-RPC response
 		// returns in milliseconds. The client either polls tasks/get
@@ -518,6 +542,7 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			j := s.startAsync(pack, cleanInput, asyncOptions{
 				WebhookURL:    webhookURL,
 				WebhookSecret: webhookSecret,
+				Caller:        callerSubject,
 			})
 			// Notify subscribed clients that a task was created.
 			// Clients that don't speak SEP-1686 ignore the

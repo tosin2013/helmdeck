@@ -78,6 +78,14 @@ type Session struct {
 
 	CreatedAt time.Time // session creation timestamp (UTC)
 	Spec      Spec      // the spec the session was created with
+
+	// ReposPath is the in-container mount point of the persistent repos
+	// volume (ADR 040), or "" when the runtime has no repos volume
+	// configured. Non-empty signals to repo.* pack handlers that clones
+	// can be persisted across sessions under this path; empty means the
+	// session is fully ephemeral and clones go to /tmp as before. The
+	// runtime sets this; callers do not.
+	ReposPath string
 }
 
 // Runtime is the contract every backend (Docker, Kubernetes, Firecracker)

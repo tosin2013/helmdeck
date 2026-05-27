@@ -29,7 +29,10 @@ import (
 	"github.com/tosin2013/helmdeck/internal/keystore"
 	"github.com/tosin2013/helmdeck/internal/marketplace"
 	"github.com/tosin2013/helmdeck/internal/mcp"
+	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
+	"github.com/tosin2013/helmdeck/internal/pipelines"
+	"github.com/tosin2013/helmdeck/internal/repos"
 	"github.com/tosin2013/helmdeck/internal/packs/builtin"
 	"strconv"
 
@@ -141,6 +144,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Universal Memory layer (ADR 039). HELMDECK_MEMORY_KEY is a third
+	// 32-byte hex master key, distinct from the keystore and vault keys
+	// (a leak of one domain's key must not expose another). Same
+	// autogenerate-with-warning fallback. When the key can't be derived
+	// the store is left nil and the engine's memory seam stays inert —
+	// packs and deployments without memory behave exactly as before.
+	var memStore memory.MemoryStore
+	memMaster, memAutogen, merr := loadOrGenerateMemoryMaster()
+	if merr != nil {
+		logger.Warn("memory key init failed; memory layer disabled", "err", merr)
+	} else {
+		if memAutogen {
+			logger.Warn("HELMDECK_MEMORY_KEY not set; generated an ephemeral master key. Memory entries will be unreadable after restart. Pin HELMDECK_MEMORY_KEY to persist.")
+		}
+		ms, serr := memory.NewSQLiteStore(db, memMaster)
+		if serr != nil {
+			logger.Warn("memory store init failed; memory layer disabled", "err", serr)
+		} else {
+			memStore = ms
+			logger.Info("universal memory layer enabled (SQLite, AES-256-GCM at rest)")
+		}
+	}
+
 	// Env-hydrate well-known credentials (#142). Operators set
 	// HELMDECK_<SVC>_API_KEY in .env.local per the README; this
 	// auto-imports each present env var into the vault under its
@@ -234,6 +260,18 @@ func main() {
 		if img := os.Getenv("HELMDECK_SIDECAR_IMAGE"); img != "" {
 			opts = append(opts, dockerrt.WithImage(img))
 		}
+		// ADR 040: HELMDECK_PERSISTENT_REPOS names a Docker volume that
+		// is mounted into every session sidecar at /repos, enabling
+		// repo.* clones to persist across sessions (`git fetch` instead
+		// of a full re-clone, and a persistent per-language dependency
+		// cache). Unset ⇒ sessions stay fully ephemeral and clones go to
+		// /tmp, exactly as before. The same name must be declared as a
+		// named volume in compose (helmdeck-repos) and mounted into the
+		// control-plane at /repos so the repos janitor can GC it.
+		if vol := os.Getenv("HELMDECK_PERSISTENT_REPOS"); vol != "" {
+			opts = append(opts, dockerrt.WithReposVolume(vol))
+			logger.Info("persistent repos volume enabled (ADR 040)", "volume", vol, "mount", "/repos")
+		}
 		dr, err := dockerrt.New(opts...)
 		if err != nil {
 			logger.Warn("docker runtime unavailable; /api/v1/sessions disabled", "err", err)
@@ -301,10 +339,10 @@ func main() {
 		Gateway:          gwReg,
 		RehydrateGateway: rehydrateGateway,
 		Keys:             ks,
-		MCPRegistry: mcp.NewRegistry(db),
-		Vault:       vaultStore,
-		Injector:    inject.New(vaultStore, logger.With("subsystem", "inject")),
-		Marketplace: marketplaceSvc,
+		MCPRegistry:      mcp.NewRegistry(db),
+		Vault:            vaultStore,
+		Injector:         inject.New(vaultStore, logger.With("subsystem", "inject")),
+		Marketplace:      marketplaceSvc,
 		// T607: expose the SQLite handle so the providers/stats
 		// endpoint can run aggregation queries against
 		// provider_calls. Other DB-backed endpoints land here
@@ -341,6 +379,9 @@ func main() {
 	}
 
 	engineOpts := []packs.Option{packs.WithRuntime(rt), packs.WithLogger(logger)}
+	if memStore != nil {
+		engineOpts = append(engineOpts, packs.WithMemoryStore(memStore))
+	}
 	var artifactStore packs.ArtifactStore
 	if store, err := loadS3StoreFromEnv(ctx); err != nil {
 		logger.Warn("S3 artifact store disabled", "err", err)
@@ -395,6 +436,26 @@ func main() {
 			"default_ttl", parseDurationOr("HELMDECK_ARTIFACT_TTL", 7*24*time.Hour))
 	}
 
+	// Repos janitor (ADR 040). Runs only when the persistent repos volume
+	// is configured; GCs stale clones from the volume mounted into the
+	// control plane at HELMDECK_REPOS_ROOT (/repos in compose). TTL and
+	// size cap are tunable; NewJanitor returns nil for an empty root so
+	// the no-volume deployment starts nothing.
+	if os.Getenv("HELMDECK_PERSISTENT_REPOS") != "" {
+		rj := repos.NewJanitor(repos.Config{
+			Root:     envOr("HELMDECK_REPOS_ROOT", "/repos"),
+			Interval: parseDurationOr("HELMDECK_REPOS_JANITOR_INTERVAL", time.Hour),
+			TTL:      parseDurationOr("HELMDECK_REPOS_TTL", 14*24*time.Hour),
+			MaxBytes: parseBytesOr("HELMDECK_REPOS_MAX_BYTES", 20<<30),
+			Logger:   logger.With("subsystem", "repos-janitor"),
+		})
+		if rj != nil {
+			go rj.Run(ctx)
+			logger.Info("repos janitor running",
+				"root", rj.Root, "interval", rj.Interval, "ttl", rj.TTL, "max_bytes", rj.MaxBytes)
+		}
+	}
+
 	// Register built-in packs (T208–T210, T402–T403). New packs append here.
 	if err := packReg.Register(builtin.ScreenshotURL()); err != nil {
 		logger.Warn("register screenshot_url pack failed", "err", err)
@@ -432,6 +493,13 @@ func main() {
 	}
 	if err := packReg.Register(builtin.RepoPush(vaultStore, egressGuard)); err != nil {
 		logger.Warn("register repo.push pack failed", "err", err)
+	}
+	// swe.solve (epic #233 Phase 3): runs a mini-swe-agent loop inside a
+	// session sidecar to produce a reviewable code change. Same vault +
+	// egress-guard deps as the other repo packs — used for clone/push
+	// credential resolution and SSRF protection on the git host.
+	if err := packReg.Register(builtin.SweSolve(vaultStore, egressGuard)); err != nil {
+		logger.Warn("register swe.solve pack failed", "err", err)
 	}
 	if err := packReg.Register(builtin.HTTPFetch(vaultStore, egressGuard)); err != nil {
 		logger.Warn("register http.fetch pack failed", "err", err)
@@ -499,6 +567,10 @@ func main() {
 		builtin.GitHubPostComment(vaultStore),
 		builtin.GitHubCreateRelease(vaultStore),
 		builtin.GitHubSearch(vaultStore),
+		// github.create_pr (epic #233 Phase 3): opens the PR that
+		// swe.solve's pull_request mode lands on a new branch. Also
+		// usable standalone for agent-driven PR creation.
+		builtin.GitHubCreatePR(vaultStore),
 	} {
 		if err := packReg.Register(p); err != nil {
 			logger.Warn("register github pack failed", "pack", p.Name, "err", err)
@@ -604,6 +676,30 @@ func main() {
 		logger.Warn("register command pack failed", "err", err)
 	}	
 
+	// Pipelines (ADR 041). Built after all packs are registered so seeding
+	// can confirm each starter's packs exist; a starter whose packs aren't
+	// present (e.g. a vision pack with no gateway) is skipped-and-logged so
+	// startup never fails. Runner reuses the pack engine; the run sweeper
+	// evicts terminal in-memory runs (durable history stays in SQLite).
+	pipeStore := pipelines.NewStore(db)
+	pipeRunner := pipelines.NewRunner(pipeStore, packReg.Get, deps.PackEngine, logger.With("subsystem", "pipelines"))
+	pipeRunner.SetHook(func(c context.Context, r *pipelines.Run) {
+		auditWriter.Write(c, audit.Entry{
+			EventType: audit.EventType("pipeline_run"),
+			Payload:   map[string]any{"pipeline_id": r.PipelineID, "run_id": r.ID, "status": string(r.Status)},
+		})
+	})
+	packExists := func(name, ver string) bool { _, e := packReg.Get(name, ver); return e == nil }
+	for _, p := range pipelines.Builtins() {
+		if err := pipeStore.Seed(ctx, p, packExists); err != nil {
+			logger.Warn("seed pipeline skipped", "id", p.ID, "err", err)
+		}
+	}
+	deps.PipelineStore = pipeStore
+	deps.PipelineRunner = pipeRunner
+	go pipeRunner.RunSweeper(ctx)
+	logger.Info("pipelines enabled (ADR 041)", "builtins", len(pipelines.Builtins()))
+
 	if *disableAuth {
 		deps.Issuer = nil
 		logger.Warn("auth disabled by flag; /api/v1/* is unprotected (DEV ONLY)")
@@ -683,6 +779,25 @@ func loadOrGenerateVaultMaster() ([]byte, bool, error) {
 	return b, true, err
 }
 
+// loadOrGenerateMemoryMaster mirrors the keystore/vault master-key
+// helpers but reads HELMDECK_MEMORY_KEY (ADR 039). The key is a third
+// distinct 32-byte hex master so a leak of the keystore or vault key
+// does not expose the memory domain. Returns (key, autogenerated,
+// err); on autogenerate the caller warns that entries won't survive a
+// restart. We reuse the vault key codec (32-byte hex) for parity.
+func loadOrGenerateMemoryMaster() ([]byte, bool, error) {
+	if raw := os.Getenv("HELMDECK_MEMORY_KEY"); raw != "" {
+		b, err := vault.ParseMasterKey(raw)
+		return b, false, err
+	}
+	hex, err := vault.GenerateMasterKey()
+	if err != nil {
+		return nil, false, err
+	}
+	b, err := vault.ParseMasterKey(hex)
+	return b, true, err
+}
+
 // pickVisionDispatcher mirrors the precedence used by api/vision.go:
 // the gateway chain when present (it includes fallback rules), otherwise
 // the bare registry. Returns nil only when neither is configured, in
@@ -711,6 +826,21 @@ func parseDurationOr(envKey string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// parseBytesOr parses a plain byte count from envKey, returning def when
+// unset or unparseable. A negative value is passed through so operators
+// can set e.g. HELMDECK_REPOS_MAX_BYTES=-1 to disable the repos size cap.
+func parseBytesOr(envKey string, def int64) int64 {
+	v := os.Getenv(envKey)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 // envOrFile returns the value of envKey if set; otherwise reads the

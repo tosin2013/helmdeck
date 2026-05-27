@@ -10,7 +10,7 @@ Helmdeck ships its agent instructions as a native **OpenClaw Skill** at `skills/
 
 **Every release — required:**
 
-1. **Update the pack count and decision tables** in `skills/helmdeck/SKILL.md` if this release adds/removes packs, changes an error code, or revises a pattern (e.g. the `repo.fetch` signals table).
+1. **Update the pack count and decision tables** in `skills/helmdeck/SKILL.md` if this release adds/removes packs, changes an error code, or revises a pattern (e.g. the `repo.fetch` signals table). When a release adds a pack or pipeline, also add its **prompt template** to `docs/reference/prompt-templates/` (`packs.md` / `pipelines.md`; copy the shape from `_template.md`).
 2. **Bump the `helmdeckVersion` stamp** — `scripts/configure-openclaw.sh` regenerates this automatically from `git rev-parse --short HEAD` at install time, so you don't edit it by hand. Ensure the release commit lands on `main` before operators run the configure script, otherwise the stamp reflects a stale pointer.
 3. **Call out new packs** in the release notes under "Ships" with their full `helmdeck__<name>` MCP prefix, so operators (and agents reading the release notes post-fact) know what's new.
 4. **Tell deployed operators to refresh**:
@@ -512,25 +512,47 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 ---
 
-## v0.14.0 — Autonomous code-fix + ADR 037 fully enforced (target: TBD) {#v0140}
+## v0.14.0 — Autonomous code-fix + ADR 037 fully enforced — ✅ Shipped 2026-05-26 {#v0140}
 
 **Theme:** `swe.solve` headline + close out [ADR 037](adrs/037-upstream-package-version-management.md) across every sidecar Dockerfile.
 
 **Ships:**
 
-- `swe.solve` epic — Phase 1 (`HelmdeckEnvironment` adapter) + Phase 3 (`swe.solve` Go pack handler) only
-- [#212](https://github.com/tosin2013/helmdeck/issues/212) — T-1 (ADR 037): add `.github/dependabot.yml`
-- [#213](https://github.com/tosin2013/helmdeck/issues/213) — T-2 (ADR 037): replace remaining `@latest` / unpinned tools in sidecar Dockerfiles
-- [#214](https://github.com/tosin2013/helmdeck/issues/214) — T-3 (ADR 037): add CLI-surface sentinels to every sidecar Dockerfile
-- [#215](https://github.com/tosin2013/helmdeck/issues/215) — T-4 (ADR 037): document pin + sentinel requirement for new sidecars
+- [#233](https://github.com/tosin2013/helmdeck/issues/233) — `swe.solve` epic: Phase 1 (`HelmdeckEnvironment` adapter, ✅ shipped #265) + Phase 3 (`swe.solve` Go pack handler, ✅ shipped #271) + Phase 4 (trajectory artifact in Garage S3, with Phase 3) + Phase 6 (GitHub-issue auto-trigger via ADR 033 — label an issue, get a PR; posts the result back as a comment)
+- [#253](https://github.com/tosin2013/helmdeck/issues/253) — post-install/upgrade integration smoke check via OpenClaw round-trip (✅ shipped #263)
+- [#212](https://github.com/tosin2013/helmdeck/issues/212)–[#215](https://github.com/tosin2013/helmdeck/issues/215) — ADR 037 fully enforced: dependabot, exact pins, CLI-surface sentinels, docs (✅ shipped #240–#243)
+- [#248](https://github.com/tosin2013/helmdeck/issues/248) — ADR 037 follow-up cleanups: drop `marp --stdin`, fix `--html` format spec, pinned global `playwright-mcp` bin in the sidecar entrypoint (✅ shipped #264)
+- [ADR 039](adrs/039-universal-memory-delivery-layer.md) — Universal Memory delivery layer (refines [ADR 029](adrs/029-four-tier-agent-memory-api.md)): **first implementation shipped** — pluggable `MemoryStore` (SQLite default, AES-256-GCM at rest), the `ec.Memory` engine seam + namespace model, `Context()` aggregation (#260), and the `github.list_issues` read-through cache exemplar (#258). Default-OFF and additive: packs without opt-in and deployments without `HELMDECK_MEMORY_KEY` behave exactly as before. Tracked in epic [#254](https://github.com/tosin2013/helmdeck/issues/254) (#255/#256/#257/#258/#260).
+- [#259](https://github.com/tosin2013/helmdeck/issues/259) / [ADR 040](adrs/040-persistent-repos-volume.md) — Persistent repos volume + cross-session clone reuse: `repo.fetch` (and `swe.solve`) clone into a per-caller path on a shared `helmdeck-repos` volume and `git fetch` instead of re-cloning on a repeat, with a persistent per-language dependency cache (`.hdcache`) and a GC janitor (TTL + size cap). Unblocked by #232. Default-OFF (no volume ⇒ ephemeral `/tmp` clones); enabled by default in the bundled Compose via `HELMDECK_PERSISTENT_REPOS`.
 
 **Out:**
 
-- `swe.solve` Phases 4–8 (trajectory storage in Garage S3, OTel spans per agent step, GitHub-webhook auto-trigger via ADR 033, A2A skill exposure via ADR 026, procedural-memory pack promotion via ADR 029). Each opens as its own follow-up issue after Phase 3 lands. Phases 4–8 lean on ADRs currently `Status: Proposed` — premature to commit.
+- Universal memory **deferred tiers**: Redis-backed Episodic and the pgvector/Semantic tier remain out per ADR 039 (the pluggable `MemoryStore` interface keeps the door open). The community validation middleware (#268) is the next seam consumer.
+- `swe.solve` remaining phases: **Phase 5** (OTel spans per agent step), **Phase 7** (A2A skill exposure via ADR 026), **Phase 8** (procedural-memory pack promotion via ADR 029). Phases 7–8 lean on ADRs currently `Status: Proposed` — premature to commit. (Phase 4 trajectory storage and Phase 6 GitHub-issue auto-trigger landed in this release — ADR 033 was already `Accepted`.)
 
-**Discipline call:** the four ADR 037 followups form a quad. Landing only 2 of 4 leaves the discipline half-enforced. If one slips, slip all four to v0.14.1.
+**Status:** the ADR 037 quad (#212–#215) shipped together as planned, with the #248 cleanups completing the enforcement. `swe.solve` Phases 1, 3, 4, and 6 are in (adapter, pack, trajectory artifact, GitHub-issue auto-trigger), alongside the universal-memory layer (ADR 039) and persistent repos (ADR 040). #232 is resolved.
 
 **Blocked by:** [#232](https://github.com/tosin2013/helmdeck/issues/232) — Phase 3 of `swe.solve` requires `repo.fetch → fs.*` working in a session.
+
+---
+
+## v0.15.0 — Pipelines as a first-class resource — ✅ Shipped 2026-05-26 {#v0150}
+
+**Theme:** A pipeline — a stored, named, ordered sequence of pack steps — becomes a first-class resource any actor can create, run, and inspect. helmdeck stops being only a tool server and starts owning the workflow.
+
+**Ships:**
+
+- [ADR 041](adrs/041-pipelines-as-first-class-resource.md) — **Pipelines as a first-class resource** (runnable slice): a new `internal/pipelines` package (SQLite-persisted definitions + run history, a sequential runner reusing `Engine.Execute`, `${{ steps.X.output.field }}` / `${{ inputs.* }}` dot-notation templating, automatic `_session_id` threading), REST CRUD + async run + run-history at `/api/v1/pipelines`, and `helmdeck__pipeline-{list,get,create,run,run-status}` MCP tools so any connected agent (OpenClaw, Gemini CLI, Claude Code) can build and run pipelines conversationally.
+- **~13 built-in starter pipelines** auto-seeded at startup and runnable out of the box — including `content.ground → slides.render` (grounded deck), `content.ground → blog.publish` (grounded blog), `research.deep → {slides,podcast,blog}`, `web.scrape → content.ground → blog.publish`, and `repo.fetch → {slides.narrate, podcast.generate}` (clone a repo → media about it). Provider-dependent starters degrade gracefully (stable premade voice + `allow_silent_output`); a starter whose packs aren't registered is skip-and-logged.
+- `podcast.generate` now surfaces a presigned `audio_url` in its output (from the artifact store), unlocking a clean `podcast.generate → hyperframes.render` narrated-video chain (embed the URL in the composition's `<audio src>`).
+- Migration `0007_pipelines.sql` (additive: `pipelines` + `pipeline_runs` tables, auto-applied).
+- **Management UI `/pipelines` panel** — pulled forward from v1.2: list built-in + agent-created pipelines, trigger a run with JSON inputs, and watch run status/history poll live (pending → running → succeeded/failed, with per-step status) — operators see what agents build via the MCP tools.
+
+**Out (deferred follow-ups, seams in place):**
+
+- Cron + webhook pipeline triggers (the runner is HTTP-decoupled — ADR 033's receiver and a future scheduler call the same `StartRun`). A2A pipeline-management skill and "promote a successful run from the audit log into a pipeline" follow per ADR 041's sequencing (v1.0→v1.3).
+
+**Status:** the v0.15.0 slice is the REST + MCP + runner + starters foundation; triggers/UI/audit-promote are explicitly later so the data model lands correct first.
 
 ---
 

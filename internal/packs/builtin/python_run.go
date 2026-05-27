@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
@@ -118,19 +119,70 @@ func validateLangRunInput(in langRunInput) *packs.PackError {
 // it in a `sh -c` so the working directory takes effect. We avoid
 // sh when no cwd is set so the captured argv stays inspectable in
 // tests and there's one less layer of quoting to worry about.
+//
+// When the cwd lives on the persistent repos volume (ADR 040), the
+// command also gets the per-language dependency-cache env vars pointed
+// at the clone's .hdcache, and the script first ensures that directory
+// exists. This is the cross-session win: `go mod download` / `npm
+// install` populate a cache that survives into the next session instead
+// of re-downloading every run. Off the volume, env is nil and behavior
+// is unchanged.
 func runWithCwd(ctx context.Context, ec *packs.ExecutionContext, cmd []string, cwd string, stdin []byte) (session.ExecResult, error) {
 	if cwd == "" {
 		return ec.Exec(ctx, session.ExecRequest{Cmd: cmd, Stdin: stdin})
 	}
+	base := hdcacheBase(ec.PersistentReposPath, cwd)
 	quoted := make([]string, 0, len(cmd))
 	for _, a := range cmd {
 		quoted = append(quoted, shellQuote(a))
 	}
 	script := "cd " + shellQuote(cwd) + " && exec " + strings.Join(quoted, " ")
+	if base != "" {
+		// Tools create their own per-cache subdirs; just guarantee the root.
+		script = "mkdir -p " + shellQuote(base) + " && " + script
+	}
 	return ec.Exec(ctx, session.ExecRequest{
 		Cmd:   []string{"sh", "-c", script},
 		Stdin: stdin,
+		Env:   hdcacheEnvForBase(base),
 	})
+}
+
+// hdcacheBase returns the clone's .hdcache directory when cwd is on the
+// persistent repos volume, or "" otherwise. It anchors at the clone ROOT
+// (<reposPath>/<caller>/<hash>) regardless of how deep cwd sits, so the
+// cache always lands where `git clean -fdx -e .hdcache` preserves it.
+func hdcacheBase(reposPath, cwd string) string {
+	if reposPath == "" || cwd == "" {
+		return ""
+	}
+	root := strings.TrimRight(reposPath, "/") + "/"
+	if !strings.HasPrefix(cwd, root) {
+		return ""
+	}
+	parts := strings.SplitN(strings.TrimPrefix(cwd, root), "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return filepath.Join(reposPath, parts[0], parts[1], ".hdcache")
+}
+
+// hdcacheEnvForBase maps a .hdcache base to the per-language cache env
+// vars (Go, npm/yarn/pnpm, pip, cargo). Returns nil for an empty base so
+// the ephemeral path injects nothing. Harmless when a tool's language
+// isn't the one running — an unused env var costs nothing.
+func hdcacheEnvForBase(base string) []string {
+	if base == "" {
+		return nil
+	}
+	return []string{
+		"GOMODCACHE=" + filepath.Join(base, "go-mod"),
+		"GOCACHE=" + filepath.Join(base, "go-build"),
+		"npm_config_cache=" + filepath.Join(base, "npm"),
+		"YARN_CACHE_FOLDER=" + filepath.Join(base, "yarn"),
+		"PIP_CACHE_DIR=" + filepath.Join(base, "pip"),
+		"CARGO_HOME=" + filepath.Join(base, "cargo"),
+	}
 }
 
 // marshalLangRunResult is the shared output encoder for language

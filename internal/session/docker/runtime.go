@@ -15,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
@@ -62,6 +63,14 @@ const (
 	// helpers and a couple of pack worker spawns, but tight enough
 	// that a fork bomb cannot exhaust the host's PID table.
 	defaultPidsLimit int64 = 1024
+
+	// reposMountPath is the fixed in-container mount point of the
+	// persistent repos volume (ADR 040). When WithReposVolume is set,
+	// every session sidecar gets the named volume mounted here, and
+	// repo.* packs persist clones under reposMountPath/<subject>/<hash>.
+	// Fixed (not configurable per-spec) so the path is stable across
+	// sessions — cross-session reuse depends on a deterministic mount.
+	reposMountPath = "/repos"
 )
 
 // Runtime is the Docker SDK implementation of [session.Runtime]. It is safe
@@ -83,6 +92,13 @@ type Runtime struct {
 	// spec Image is empty". Per-pack overrides via SessionSpec.Image
 	// always win over both.
 	imageOverride string
+
+	// reposVolume is the name of the persistent repos volume (ADR 040)
+	// mounted into every session at reposMountPath, wired via
+	// WithReposVolume from HELMDECK_PERSISTENT_REPOS. Empty (the
+	// default) means no repos volume is mounted and sessions stay fully
+	// ephemeral — repo.* clones go to /tmp as before.
+	reposVolume string
 
 	mu       sync.RWMutex
 	sessions map[string]*session.Session // id → session view
@@ -116,6 +132,22 @@ func WithImage(image string) Option {
 	return func(r *Runtime) {
 		if image != "" {
 			r.imageOverride = image
+		}
+	}
+}
+
+// WithReposVolume mounts the named Docker volume into every spawned
+// session sidecar at reposMountPath (/repos), enabling cross-session
+// clone reuse (ADR 040). Operators wire this to HELMDECK_PERSISTENT_REPOS
+// in cmd/control-plane. Empty string is a no-op — sessions stay fully
+// ephemeral and repo.* clones go to /tmp, exactly as before. The volume
+// is the only persistent state in an otherwise-ephemeral session (ADR
+// 004): Chromium, /dev/shm, and the container rootfs are still discarded
+// on terminate.
+func WithReposVolume(name string) Option {
+	return func(r *Runtime) {
+		if name != "" {
+			r.reposVolume = name
 		}
 	}
 }
@@ -221,6 +253,7 @@ func (r *Runtime) Create(ctx context.Context, spec session.Spec) (*session.Sessi
 		Spec:                  resolved,
 		CDPEndpoint:           cdpEndpoint,
 		PlaywrightMCPEndpoint: playwrightMCPEndpoint,
+		ReposPath:             reposPathIfMounted(r.reposVolume),
 	}
 
 	r.mu.Lock()
@@ -376,6 +409,17 @@ func (r *Runtime) withDefaults(in session.Spec) session.Spec {
 	return out
 }
 
+// reposPathIfMounted returns the in-container repos mount path when the
+// runtime has a repos volume configured, or "" otherwise. Surfaced on
+// session.Session.ReposPath so the pack engine can populate
+// ec.PersistentReposPath without knowing the runtime's volume wiring.
+func reposPathIfMounted(volume string) string {
+	if volume == "" {
+		return ""
+	}
+	return reposMountPath
+}
+
 func envSlice(m map[string]string) []string {
 	if len(m) == 0 {
 		return nil
@@ -489,6 +533,19 @@ func (r *Runtime) buildHostConfig(memBytes, shmBytes int64, cpuLimit float64) *c
 	}
 	if r.network != "" {
 		hostCfg.NetworkMode = container.NetworkMode(r.network)
+	}
+	// Persistent repos volume (ADR 040). Mounted read-write so repo.*
+	// can clone/pull and language packs can populate the dependency
+	// cache. This is the one piece of session state that survives
+	// terminate — git working trees are source artifacts, not browser
+	// state, so this is consistent with ADR 004's ephemerality (which
+	// governs Chromium/cookies/DOM, all still discarded).
+	if r.reposVolume != "" {
+		hostCfg.Mounts = append(hostCfg.Mounts, mount.Mount{
+			Type:   mount.TypeVolume,
+			Source: r.reposVolume,
+			Target: reposMountPath,
+		})
 	}
 	return hostCfg
 }

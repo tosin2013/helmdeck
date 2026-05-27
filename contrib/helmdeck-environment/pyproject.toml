@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "helmdeck-environment"
+version = "0.1.0"
+description = "A mini-swe-agent Environment that routes bash commands through helmdeck's cmd.run REST API."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "The helmdeck contributors" }]
+keywords = ["helmdeck", "mini-swe-agent", "swe-agent", "sandbox", "agent"]
+# No runtime dependencies: the adapter talks to helmdeck over HTTP using the
+# stdlib (urllib + json) so it can be vendored next to mini-swe-agent without
+# dragging in a transitive HTTP client.
+dependencies = []
+
+[project.optional-dependencies]
+# Installing mini-swe-agent is optional — the adapter only implements its
+# Environment contract and does not import the package.
+dev = ["pytest>=7"]
+mini = ["mini-swe-agent"]
+
+[project.urls]
+Homepage = "https://github.com/tosin2013/helmdeck"
+Issues = "https://github.com/tosin2013/helmdeck/issues/233"
+
+# Entry point so `mini --env helmdeck-environment` (or config referencing the
+# environment_class) can discover the class. mini-swe-agent resolves
+# environments by import path; this group is a convenience alias.
+[project.entry-points."minisweagent.environments"]
+helmdeck-environment = "helmdeck_environment:HelmdeckEnvironment"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

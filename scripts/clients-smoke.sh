@@ -24,6 +24,14 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${REPO_ROOT}/deploy/compose/compose.yaml"
+# Build the control-plane from THIS commit instead of pulling the published
+# :latest image. Without this overlay the smoke ran a freshly-built bridge +
+# sidecar against whatever release :latest points at (a moving target), so it
+# never exercised the PR's own control-plane / MCP-WS code, and any wire drift
+# between main and the last release surfaced as a confusing "no response" hang
+# in the bridge leg. Layering compose.build.yaml keeps bridge, sidecar, and
+# server all on the same commit.
+BUILD_OVERLAY="${REPO_ROOT}/deploy/compose/compose.build.yaml"
 ENV_FILE="${REPO_ROOT}/deploy/compose/.env.clients-smoke"
 RUNTIME_ENV_FILE="${REPO_ROOT}/deploy/compose/.env.local"
 SIDECAR_IMAGE="${SIDECAR_IMAGE:-helmdeck-sidecar:dev}"
@@ -42,9 +50,9 @@ cleanup() {
   local rc=$?
   if [[ $rc -ne 0 ]]; then
     echo "--- clients-smoke FAILED, dumping control-plane logs ---" >&2
-    docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" logs control-plane 2>&1 | tail -80 >&2 || true
+    docker compose -f "${COMPOSE_FILE}" -f "${BUILD_OVERLAY}" --env-file "${ENV_FILE}" logs control-plane 2>&1 | tail -80 >&2 || true
   fi
-  docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
+  docker compose -f "${COMPOSE_FILE}" -f "${BUILD_OVERLAY}" --env-file "${ENV_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
   rm -f "${ENV_FILE}"
   if [[ "${CREATED_RUNTIME_ENV}" == "1" ]]; then
     rm -f "${RUNTIME_ENV_FILE}"
@@ -101,8 +109,8 @@ EOF
   CREATED_RUNTIME_ENV=1
 fi
 
-echo "--- booting compose stack ---"
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d --wait
+echo "--- booting compose stack (control-plane built from source) ---"
+docker compose -f "${COMPOSE_FILE}" -f "${BUILD_OVERLAY}" --env-file "${ENV_FILE}" up -d --wait --build
 
 URL="http://localhost:${PORT}"
 # Mint a JWT via the control-plane binary's -mint-token flag, exec'd
@@ -117,26 +125,49 @@ if [[ -z "${TOKEN}" ]]; then
   exit 1
 fi
 
+# Max seconds to wait for the screenshot tools/call (id=3) to come back.
+# A cold session sidecar — container spawn + headless Chromium launch +
+# navigate + CDP screenshot — is fast locally (~4s) but can be markedly
+# slower on a loaded CI runner. The previous harness used a blind
+# `sleep 30` then EOF'd stdin, which closed the WebSocket and aborted any
+# in-flight request that hadn't answered yet — discarding the response
+# and surfacing it as a misleading "no image" / `jq: Cannot iterate over
+# null`. call_bridge below instead polls for the id=3 frame and closes as
+# soon as it lands (so success stays fast) or after this cap (so a
+# genuinely hung server still surfaces, with the handshake frames intact
+# for diagnosis rather than a silent stall).
+SCREENSHOT_WAIT_SECS="${SCREENSHOT_WAIT_SECS:-120}"
+
 call_bridge() {
   # Stream three JSON-RPC frames into helmdeck-mcp on stdin and read
   # responses from stdout. The bridge proxies them verbatim to the
-  # platform's WebSocket MCP endpoint. We rely on line-delimited JSON
-  # in both directions (the bridge wire format).
+  # platform's WebSocket MCP endpoint; both directions are line-delimited
+  # JSON (the bridge wire format).
   #
-  # We keep stdin open for an extra ~30s after the last frame because
-  # the bridge closes the WebSocket when stdin EOFs — and tools/call
-  # for browser.screenshot_url takes ~5s server-side (sidecar spawn +
-  # navigation + screenshot). EOF'ing immediately races the response
-  # back to us; the in-flight request gets aborted server-side and we
-  # see zero responses on stdout. The outer `timeout 60` caps total
-  # wall time so a hung server doesn't stall CI.
-  local payload
+  # We hold stdin open on fd 9 (the bridge closes the WebSocket when stdin
+  # EOFs) and poll the captured stdout for the id=3 reply, closing fd 9 the
+  # moment it arrives. `timeout` is a backstop a little past the poll cap so
+  # a wedged bridge can't stall CI indefinitely.
+  local payload fifo out bpid waited
   payload="$(jq -nc \
     '{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2024-11-05",capabilities:{},clientInfo:{name:"clients-smoke",version:"0.0.0"}}},
      {jsonrpc:"2.0",id:2,method:"tools/list"},
      {jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"browser.screenshot_url",arguments:{url:"https://example.com"}}}')"
+  fifo="$(mktemp -u)"; out="$(mktemp)"; mkfifo "${fifo}"
   HELMDECK_URL="${URL}" HELMDECK_TOKEN="${TOKEN}" \
-    timeout 60 bash -c '{ printf "%s\n" "$1"; sleep 30; } | "$2"' _ "${payload}" "${BRIDGE_BIN}"
+    timeout "$((SCREENSHOT_WAIT_SECS + 15))" "${BRIDGE_BIN}" <"${fifo}" >"${out}" 2>/dev/null &
+  bpid=$!
+  exec 9>"${fifo}"
+  printf '%s\n' "${payload}" >&9
+  waited=0
+  while (( waited < SCREENSHOT_WAIT_SECS )); do
+    grep -q '"id":3' "${out}" 2>/dev/null && break
+    sleep 1; waited=$((waited + 1))
+  done
+  exec 9>&-
+  wait "${bpid}" 2>/dev/null || true
+  cat "${out}"
+  rm -f "${fifo}" "${out}"
 }
 
 for client in "${CLIENTS[@]}"; do
@@ -147,15 +178,42 @@ for client in "${CLIENTS[@]}"; do
 
   echo "--- ${client}: invoking browser.screenshot_url via bridge ---"
   out="$(call_bridge)"
-  # Find the tools/call response (id=3) and pull out the first base64
-  # image content block, then check the magic bytes.
-  png_b64="$(echo "${out}" | jq -rs '
-    map(select(.id == 3)) | .[0].result.content
+
+  # Diagnosability first. The bridge leg has three distinct failure modes
+  # and they used to collapse into one misleading `jq: Cannot iterate over
+  # null` (jq exit 5) because the happy-path filter assumed `.result.content`
+  # was always present. Distinguish them explicitly and always dump `out`.
+  if [[ -z "${out//[$'\n\t ']/}" ]]; then
+    echo "clients-smoke: ${client} bridge returned NO response frames (MCP round-trip stalled — connected but no JSON-RPC reply)" >&2
+    exit 1
+  fi
+  # A JSON-RPC error envelope (id=3 with .error) means the call reached the
+  # server and was rejected — surface code+message instead of "no image".
+  rpc_err="$(printf '%s\n' "${out}" | jq -rs 'map(select(.id == 3)) | .[0].error // empty | select(. != null) | "code=\(.code) message=\(.message)"' 2>/dev/null || true)"
+  if [[ -n "${rpc_err}" ]]; then
+    echo "clients-smoke: ${client} tools/call returned a JSON-RPC error: ${rpc_err}" >&2
+    printf '%s\n' "${out}" >&2
+    exit 1
+  fi
+  # No id=3 reply at all (handshake frames present, tools/call answer absent)
+  # means the screenshot did not come back within SCREENSHOT_WAIT_SECS — a
+  # genuinely slow or wedged sidecar/screenshot path, distinct from "answered
+  # but with no image". Call it out specifically so a future timeout regression
+  # reads as a timeout, not a phantom "no image".
+  if ! printf '%s\n' "${out}" | jq -es 'any(.[]; .id == 3)' >/dev/null 2>&1; then
+    echo "clients-smoke: ${client} screenshot tools/call produced no id=3 reply within ${SCREENSHOT_WAIT_SECS}s (handshake frames received but tools/call never answered — slow or wedged sidecar/screenshot)" >&2
+    printf '%s\n' "${out}" >&2
+    exit 1
+  fi
+  # Happy path. `.result.content // []` guards the null-iterate so a result
+  # without a content array fails the [[ -z ]] check below, not jq.
+  png_b64="$(printf '%s\n' "${out}" | jq -rs '
+    map(select(.id == 3)) | .[0].result.content // []
     | map(select(.type == "image")) | .[0].data // empty
-  ')"
+  ' 2>/dev/null || true)"
   if [[ -z "${png_b64}" ]]; then
-    echo "clients-smoke: ${client} got no image content" >&2
-    echo "${out}" >&2
+    echo "clients-smoke: ${client} got no image content in the tools/call result" >&2
+    printf '%s\n' "${out}" >&2
     exit 1
   fi
   magic="$(echo "${png_b64}" | base64 -d 2>/dev/null | head -c 8 | xxd -p || true)"

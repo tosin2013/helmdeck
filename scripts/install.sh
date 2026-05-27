@@ -11,7 +11,7 @@
 #      openssl, curl) and prints platform-specific install hints
 #      when something is missing.
 #   2. Generates fresh secrets (HELMDECK_JWT_SECRET, HELMDECK_VAULT_KEY,
-#      HELMDECK_KEYSTORE_KEY, HELMDECK_ADMIN_PASSWORD) into
+#      HELMDECK_KEYSTORE_KEY, HELMDECK_MEMORY_KEY, HELMDECK_ADMIN_PASSWORD) into
 #      deploy/compose/.env.local — or reuses an existing file when
 #      one is already present.
 #   3. Builds the Management UI bundle, the Go binaries, and the
@@ -85,7 +85,7 @@ info()  { printf "    %s%s%s\n" "${C_DIM}" "$*" "${C_RESET}"; }
 
 usage() {
   cat <<EOF
-Usage: scripts/install.sh [--reset] [--no-build] [--image-mode] [--help]
+Usage: scripts/install.sh [--reset] [--no-build] [--image-mode] [--smoke] [--help]
 
 Bootstraps a fresh helmdeck install on the current host.
 
@@ -100,6 +100,10 @@ Options:
                required — host needs only Docker + curl. Pin the
                version with HELMDECK_VERSION=0.X.Y in .env.local;
                defaults to "latest".
+  --smoke      After install, run scripts/smoke-integration.sh — a fast,
+               non-destructive OpenClaw agent round-trip against the
+               freshly-installed stack. Off by default so CI / piped
+               installs aren't forced into it. Requires OpenClaw running.
   --help       Print this help and exit.
 
 Examples:
@@ -116,12 +120,14 @@ EOF
 DO_RESET=0
 DO_BUILD=1
 IMAGE_MODE=0
+DO_SMOKE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --reset) DO_RESET=1 ;;
     --no-build) DO_BUILD=0 ;;
     --image-mode) IMAGE_MODE=1; DO_BUILD=0 ;;
+    --smoke) DO_SMOKE=1 ;;
     --help|-h) usage; exit 0 ;;
     *) fail "unknown flag: $1"; usage; exit 1 ;;
   esac
@@ -309,10 +315,11 @@ generate_password() {
 }
 
 write_env_file() {
-  local jwt vault keystore password docker_gid
+  local jwt vault keystore memory password docker_gid
   jwt="$(generate_hex)"
   vault="$(generate_hex)"
   keystore="$(generate_hex)"
+  memory="$(generate_hex)"
   password="$(generate_password)"
   # On Linux the host's docker group GID needs to be passed into the
   # control-plane container so the nonroot user can read the docker
@@ -349,6 +356,15 @@ HELMDECK_VAULT_KEY=${vault}
 # Anthropic / OpenAI / Gemini / Ollama / Deepseek API keys
 # operators add via the AI Providers panel. 32-byte hex.
 HELMDECK_KEYSTORE_KEY=${keystore}
+
+# Universal Memory encryption key (ADR 039). Encrypts agent-memory
+# entries at rest (SQLite, AES-256-GCM) — pack caches, swe.solve
+# prior-solve notes, Context() aggregation. Distinct from the vault
+# and keystore keys so a leak of one domain doesn't expose another.
+# Pinning it here is what makes memory DURABLE: without it the control
+# plane autogenerates an ephemeral key and memory is wiped on every
+# restart. 32-byte hex.
+HELMDECK_MEMORY_KEY=${memory}
 
 # Management UI admin password. The login form at http://localhost:3000
 # accepts (admin, this value) and mints a 12-hour JWT.
@@ -593,6 +609,17 @@ main() {
   wait_for_health
   setup_github_token
   print_summary
+
+  # Optional: drive an OpenClaw agent round-trip against the stack we
+  # just brought up, to confirm a pack actually executes end-to-end.
+  # Gated behind --smoke so non-interactive / CI installs aren't
+  # forced into it (and so it's a no-op when OpenClaw isn't running).
+  if [[ "${DO_SMOKE}" -eq 1 ]]; then
+    echo
+    info "running integration smoke check (--smoke) against the live stack"
+    bash "${REPO_ROOT}/scripts/smoke-integration.sh" || \
+      warn "integration smoke check failed — see output above (install itself succeeded)"
+  fi
 }
 
 # ────────────────────────────────────────────────────────────────────────

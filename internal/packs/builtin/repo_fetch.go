@@ -2,10 +2,13 @@ package builtin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
@@ -87,6 +90,8 @@ func RepoFetch(v *vault.Store, eg *security.EgressGuard) *packs.Pack {
 				"files":          "number",
 				"clone_path":     "string",
 				"session_id":     "string",
+				"reused":         "boolean",
+				"persistent":     "boolean",
 				"tree":           "array",
 				"tree_total":     "number",
 				"tree_truncated": "boolean",
@@ -139,6 +144,16 @@ func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFun
 			depth = 0
 		}
 
+		// Persistent repos (ADR 040): when the runtime mounted a repos
+		// volume into this session, clone into a deterministic, per-caller
+		// path so a later session can `git fetch` instead of a full clone.
+		// cloneDir == "" preserves the original ephemeral /tmp behavior.
+		persistent := ec.PersistentReposPath != ""
+		var cloneDir string
+		if persistent {
+			cloneDir = persistentCloneDir(ec.PersistentReposPath, ec.Caller, in.URL)
+		}
+
 		var script string
 		var stdinPayload []byte
 		var credentialName string
@@ -163,7 +178,7 @@ func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFun
 				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 					Message: fmt.Sprintf("vault credential %q is type %q, expected ssh", res.Record.Name, res.Record.Type)}
 			}
-			script = buildRepoFetchSSHScript(in.URL, ref, depth)
+			script = buildRepoFetchSSHScript(in.URL, ref, depth, cloneDir)
 			stdinPayload = res.Plaintext
 			credentialName = res.Record.Name
 
@@ -180,12 +195,12 @@ func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFun
 					}
 					return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: err.Error(), Cause: err}
 				}
-				script = buildRepoFetchHTTPSScript(in.URL, ref, depth, true)
+				script = buildRepoFetchHTTPSScript(in.URL, ref, depth, true, cloneDir)
 				stdinPayload = res.Plaintext
 				credentialName = in.Credential
 			} else {
 				// Public repo — no credential needed.
-				script = buildRepoFetchHTTPSScript(in.URL, ref, depth, false)
+				script = buildRepoFetchHTTPSScript(in.URL, ref, depth, false, cloneDir)
 			}
 
 		default:
@@ -250,6 +265,11 @@ func repoFetchHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFun
 		if ec.Session != nil {
 			out["session_id"] = ec.Session.ID
 		}
+		// ADR 040: tell the caller whether this clone is persistent (lives
+		// on the repos volume, survives the session) so downstream packs
+		// and the smoke test can reason about reuse. `reused` (did this
+		// call hit an existing clone) comes from the script envelope.
+		out["persistent"] = persistent
 		return json.Marshal(out)
 	}
 }
@@ -286,16 +306,13 @@ func parseGitHost(rawURL string) (host, scheme string, err error) {
 }
 
 // buildRepoFetchSSHScript renders the shell pipeline that clones via SSH
-// using a key passed on stdin.
-func buildRepoFetchSSHScript(url, ref string, depth int) string {
-	depthFlag := ""
-	if depth > 0 {
-		depthFlag = fmt.Sprintf("--depth %d ", depth)
-	}
+// using a key passed on stdin. When cloneDir is non-empty (ADR 040), the
+// clone is persistent and reused across sessions; otherwise it lands in
+// an ephemeral /tmp dir.
+func buildRepoFetchSSHScript(url, ref string, depth int, cloneDir string) string {
 	lines := []string{
 		"set -eu",
 		"KEY_DIR=$(mktemp -d /tmp/helmdeck-key-XXXXXX)",
-		"CLONE_DIR=$(mktemp -d /tmp/helmdeck-clone-XXXXXX)",
 		"trap 'shred -u \"$KEY_DIR\"/id_rsa 2>/dev/null || rm -f \"$KEY_DIR\"/id_rsa; rmdir \"$KEY_DIR\" 2>/dev/null || true' EXIT",
 		"cat > \"$KEY_DIR\"/id_rsa",
 		"chmod 600 \"$KEY_DIR\"/id_rsa",
@@ -306,12 +323,9 @@ func buildRepoFetchSSHScript(url, ref string, depth int) string {
 		// tree and `git rev-parse HEAD` errors late. Exit 99 is mapped
 		// to invalid_input by the Go handler.
 		"if [ -z \"$(git ls-remote --heads " + shellQuote(url) + " 2>/dev/null)\" ]; then exit 99; fi",
-		"git clone " + depthFlag + shellQuote(url) + " \"$CLONE_DIR\" 1>&2",
+		cloneAcquireScript(url, ref, depth, cloneDir),
+		repoFetchEnvelopeScript,
 	}
-	if ref != "" {
-		lines = append(lines, "git -C \"$CLONE_DIR\" checkout "+shellQuote(ref)+" 1>&2")
-	}
-	lines = append(lines, repoFetchEnvelopeScript)
 	return strings.Join(lines, "\n")
 }
 
@@ -320,14 +334,9 @@ func buildRepoFetchSSHScript(url, ref string, depth int) string {
 // and injects it via GIT_ASKPASS — a tiny helper script that echoes the
 // token as the git password. The token never appears in the URL, the
 // process environment, or git's trace output.
-func buildRepoFetchHTTPSScript(gitURL, ref string, depth int, hasCredential bool) string {
-	depthFlag := ""
-	if depth > 0 {
-		depthFlag = fmt.Sprintf("--depth %d ", depth)
-	}
+func buildRepoFetchHTTPSScript(gitURL, ref string, depth int, hasCredential bool, cloneDir string) string {
 	lines := []string{
 		"set -eu",
-		"CLONE_DIR=$(mktemp -d /tmp/helmdeck-clone-XXXXXX)",
 	}
 	if hasCredential {
 		// Write a GIT_ASKPASS helper that echoes the token read from
@@ -353,13 +362,153 @@ func buildRepoFetchHTTPSScript(gitURL, ref string, depth int, hasCredential bool
 	// the full clone round-trip. Same sentinel exit code as the SSH path.
 	lines = append(lines,
 		"if [ -z \"$(git ls-remote --heads "+shellQuote(gitURL)+" 2>/dev/null)\" ]; then exit 99; fi",
-		"git clone "+depthFlag+shellQuote(gitURL)+" \"$CLONE_DIR\" 1>&2",
+		cloneAcquireScript(gitURL, ref, depth, cloneDir),
+		repoFetchEnvelopeScript,
 	)
-	if ref != "" {
-		lines = append(lines, "git -C \"$CLONE_DIR\" checkout "+shellQuote(ref)+" 1>&2")
-	}
-	lines = append(lines, repoFetchEnvelopeScript)
 	return strings.Join(lines, "\n")
+}
+
+// cloneAcquireScript renders the shell block that lands a checked-out
+// working tree at $CLONE_DIR and sets $REUSED (0|1). Two modes:
+//
+//   - Ephemeral (cloneDir == ""): mktemp a /tmp dir and full-clone, as
+//     repo.fetch always did. REUSED is always 0.
+//   - Persistent (cloneDir != "", ADR 040): clone into the deterministic
+//     per-caller path on the repos volume, guarded by an flock so two
+//     sessions can't corrupt the same tree. On a hit, `git fetch` +
+//     reset-to-clean (preserving .hdcache) instead of a fresh clone, and
+//     REUSED=1. On lock contention (flock -w timeout), fall back to a
+//     private ephemeral clone rather than blocking CI indefinitely.
+//
+// Auth env (GIT_SSH_COMMAND / GIT_ASKPASS) is exported by the caller
+// before this block, so both clone and fetch inherit it. flock ships in
+// util-linux, present in the debian:bookworm-slim sidecar base.
+func cloneAcquireScript(url, ref string, depth int, cloneDir string) string {
+	depthFlag := ""
+	fetchDepthFlag := ""
+	if depth > 0 {
+		depthFlag = fmt.Sprintf("--depth %d ", depth)
+		fetchDepthFlag = fmt.Sprintf("--depth %d ", depth)
+	}
+	cloneCmd := "git clone " + depthFlag + shellQuote(url) + " \"$CLONE_DIR\" 1>&2"
+	// Ephemeral / fresh clones use a plain checkout (the tree is pristine).
+	// The persistent reuse path forces (-f) because it may be checking out
+	// over a tree another session left dirty.
+	checkout := ""
+	checkoutForce := ""
+	if ref != "" {
+		checkout = "git -C \"$CLONE_DIR\" checkout " + shellQuote(ref) + " 1>&2"
+		checkoutForce = "git -C \"$CLONE_DIR\" checkout -f " + shellQuote(ref) + " 1>&2"
+	}
+
+	if cloneDir == "" {
+		lines := []string{
+			"REUSED=0",
+			"CLONE_DIR=$(mktemp -d /tmp/helmdeck-clone-XXXXXX)",
+			cloneCmd,
+		}
+		if checkout != "" {
+			lines = append(lines, checkout)
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	// Persistent path. The lock and reused-marker files are siblings of
+	// the clone dir on the volume.
+	q := shellQuote(cloneDir)
+	lines := []string{
+		"REUSED=0",
+		"CLONE_DIR=" + q,
+		"mkdir -p \"$(dirname \"$CLONE_DIR\")\"",
+		"set +e",
+		"( flock -w 120 9 || exit 75",
+		"  set -eu",
+		"  if [ -d \"$CLONE_DIR/.git\" ]; then",
+		"    git -C \"$CLONE_DIR\" fetch " + fetchDepthFlag + "--prune origin 1>&2",
+		"    printf 1 > \"$CLONE_DIR.hdreused\"",
+		"  else",
+		"    rm -rf \"$CLONE_DIR\"",
+		"    " + cloneCmd,
+		"    printf 0 > \"$CLONE_DIR.hdreused\"",
+		"  fi",
+	}
+	if checkoutForce != "" {
+		lines = append(lines, "  "+checkoutForce)
+	}
+	lines = append(lines,
+		// Drop any leftover state from a prior session's work, but keep
+		// the per-language dependency cache (.hdcache) so installs persist.
+		"  git -C \"$CLONE_DIR\" reset --hard 1>&2 || true",
+		"  git -C \"$CLONE_DIR\" clean -fdx -e .hdcache 1>&2 || true",
+		// Touch the access marker the repos janitor (ADR 040) reads to
+		// decide staleness, so an actively-reused clone isn't GC'd.
+		"  touch \"$CLONE_DIR.hdaccess\" 2>/dev/null || true",
+		") 9>\"$CLONE_DIR.lock\"",
+		"rc=$?",
+		"set -e",
+		"if [ \"$rc\" -eq 75 ]; then",
+		// Lock contention: fall back to a private ephemeral clone.
+		"  CLONE_DIR=$(mktemp -d /tmp/helmdeck-clone-XXXXXX)",
+		"  "+cloneCmd,
+	)
+	if checkout != "" {
+		lines = append(lines, "  "+checkout)
+	}
+	lines = append(lines,
+		"  REUSED=0",
+		"elif [ \"$rc\" -ne 0 ]; then",
+		"  exit \"$rc\"",
+		"else",
+		"  REUSED=$(cat \"$CLONE_DIR.hdreused\" 2>/dev/null || printf 0)",
+		"  rm -f \"$CLONE_DIR.hdreused\"",
+		"fi",
+	)
+	return strings.Join(lines, "\n")
+}
+
+// repoCloneHash derives a stable, filesystem-safe directory name for a
+// repo URL: the first 16 hex chars of sha256 over the URL normalized by
+// trimming whitespace, a trailing slash, and a ".git" suffix so
+// "https://h/o/r", "https://h/o/r/", and "https://h/o/r.git" collapse to
+// one clone.
+func repoCloneHash(rawURL string) string {
+	n := strings.TrimSuffix(strings.TrimSpace(rawURL), "/")
+	n = strings.TrimSuffix(n, ".git")
+	sum := sha256.Sum256([]byte(n))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// persistentCloneDir is the deterministic on-volume path a repo clones to
+// under ADR 040: <reposPath>/<caller>/<repo-hash>. The caller component
+// is sanitized to a safe path segment so a hostile JWT subject can't
+// escape its namespace.
+func persistentCloneDir(reposPath, caller, rawURL string) string {
+	return path.Join(reposPath, sanitizePathSegment(caller), repoCloneHash(rawURL))
+}
+
+// sanitizePathSegment reduces an arbitrary identity string to a single
+// safe path segment: anything outside [A-Za-z0-9._-] becomes '_', and
+// the empty/dotty cases collapse to "unknown" so the result is always a
+// usable, non-traversing directory name.
+func sanitizePathSegment(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "." || s == ".." {
+		return "unknown"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	out := b.String()
+	if out == "" || out == "." || out == ".." {
+		return "unknown"
+	}
+	return out
 }
 
 // repoFetchEnvelopeScript emits the stdout JSON envelope the Go handler
@@ -375,13 +524,15 @@ func buildRepoFetchHTTPSScript(gitURL, ref string, depth int, hasCredential bool
 // readme content ≤ 4096 bytes.
 const repoFetchEnvelopeScript = `COMMIT=$(git -C "$CLONE_DIR" rev-parse HEAD)
 FILES_TOTAL=$(git -C "$CLONE_DIR" ls-files | wc -l | tr -d ' ')
+if [ "${REUSED:-0}" = 1 ]; then REUSED_BOOL=true; else REUSED_BOOL=false; fi
 if command -v python3 >/dev/null 2>&1; then
-  CLONE_PATH="$CLONE_DIR" COMMIT="$COMMIT" FILES_TOTAL="$FILES_TOTAL" python3 <<'PYEOF'
+  CLONE_PATH="$CLONE_DIR" COMMIT="$COMMIT" FILES_TOTAL="$FILES_TOTAL" REUSED_BOOL="$REUSED_BOOL" python3 <<'PYEOF'
 import json, os, subprocess
 
 clone_path = os.environ["CLONE_PATH"]
 commit = os.environ["COMMIT"]
 files_total = int(os.environ["FILES_TOTAL"])
+reused = os.environ.get("REUSED_BOOL") == "true"
 
 os.chdir(clone_path)
 
@@ -449,6 +600,7 @@ envelope = {
     "clone_path":     clone_path,
     "commit":         commit,
     "files":          files_total,
+    "reused":         reused,
     "tree":           tree,
     "tree_total":     len(tree_all),
     "tree_truncated": tree_truncated,
@@ -464,5 +616,5 @@ envelope = {
 print(json.dumps(envelope))
 PYEOF
 else
-  printf '{"clone_path":"%s","commit":"%s","files":%s}' "$CLONE_DIR" "$COMMIT" "$FILES_TOTAL"
+  printf '{"clone_path":"%s","commit":"%s","files":%s,"reused":%s}' "$CLONE_DIR" "$COMMIT" "$FILES_TOTAL" "$REUSED_BOOL"
 fi`

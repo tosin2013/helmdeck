@@ -571,6 +571,23 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 ---
 
+## v0.17.0 — Legible, recoverable failures — ✅ Shipped 2026-05-28 {#v0170}
+
+**Theme:** When something goes wrong, an agent (or operator) should be able to tell *why* and *what to do* — not re-guess. This release makes model errors and pipeline failures legible and recoverable.
+
+**Ships:**
+
+- **`helmdeck://models` MCP resource + caller-fixable model errors** ([ADR 043](adrs/043-actionable-gateway-model-errors.md)) — a model the gateway can't route (e.g. `minimax/…`, reachable only as `openrouter/minimax/…`) now fails with `invalid_input` pointing at the new `helmdeck://models` catalog, instead of an opaque doubled `handler_failed`. Agents pick a real model up front rather than hallucinating one. (#293)
+- **Pipeline failure attribution + re-run** ([ADR 044](adrs/044-cicd-like-pipeline-execution.md), slice 1) — a failed run now carries a `failure_class` (`caller_fixable` / `pack_bug` → prefilled GitHub-issue link / `transient` / `state_changed`) and a one-line `failure_reason`, surfaced in run-status, the MCP tool, and the `/pipelines` UI. One-call re-run via `POST …/runs/{runId}/rerun`, `helmdeck__pipeline-rerun`, and a UI button. (#294)
+- **Pipeline run records list each step's artifacts**, and a hermetic end-to-end test runs all 13 built-in pipelines through the runner with stub packs. (#292)
+- Docs + blogs: a "When a pipeline fails" how-to, `helmdeck://models` docs, and two field-report posts. (#295)
+
+**Out (ADR 044 slice 2):** resume-from-failed-step and auto-retry of transient failures.
+
+**Upgrade:** no migrations, no breaking changes (new run/run-step fields are additive JSON). Clean in-place Compose upgrade from v0.16.0.
+
+---
+
 ## v1.0.0-rc1 — Kubernetes preview (planned) {#v100rc1}
 
 **Theme:** "Helm install works; production hardening pending."

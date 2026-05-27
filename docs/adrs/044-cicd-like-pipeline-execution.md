@@ -1,6 +1,6 @@
 # 44. CI/CD-like Pipeline Execution: Resume, Retry, Re-run
 
-**Status**: Proposed
+**Status**: Accepted (slice 1 shipped: failure attribution + re-run; resume + auto-retry pending)
 **Date**: 2026-05-27
 **Domain**: pipelines, pack-engine, api-design
 

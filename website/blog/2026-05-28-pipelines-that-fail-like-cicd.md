@@ -6,7 +6,7 @@ tags: [agent-architecture]
 description: A failed pipeline used to give you a red badge and a flattened error string. Now each failure is attributed — a pack bug (file an issue), a bad input the agent can fix, or a transient blip worth a re-run — the way a CI job tells you which step broke and why.
 image: /img/social-card.png
 date: 2026-05-28
-draft: true
+draft: false
 ---
 
 When a CI job fails, you don't just learn *that* it failed — you learn which step, with what error, and usually whether it's your code, a flaky runner, or a config problem. helmdeck pipelines didn't give you that. A failed run recorded a flattened string —

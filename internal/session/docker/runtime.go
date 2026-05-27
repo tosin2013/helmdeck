@@ -99,6 +99,13 @@ type Runtime struct {
 	// default) means no repos volume is mounted and sessions stay fully
 	// ephemeral — repo.* clones go to /tmp as before.
 	reposVolume string
+	// reposInitOnce makes the persistent repos volume writable exactly
+	// once (a fresh named volume is root-owned, but sidecars run as a
+	// non-root user). See ensureReposWritable. Compose also ships a
+	// repos-init one-shot; doing it here too makes any deployment that
+	// uses this runtime directly (incl. integration tests) work without
+	// the compose service.
+	reposInitOnce sync.Once
 
 	mu       sync.RWMutex
 	sessions map[string]*session.Session // id → session view
@@ -187,6 +194,12 @@ func New(opts ...Option) (*Runtime, error) {
 
 // Create spawns a new browser sidecar container.
 func (r *Runtime) Create(ctx context.Context, spec session.Spec) (*session.Session, error) {
+	// Best-effort: make the persistent repos volume writable on first use
+	// so repo.fetch can create per-caller clone dirs. A failure here does
+	// not block the session — repo.fetch surfaces the permission error
+	// itself if the volume still isn't writable.
+	_ = r.ensureReposWritable(ctx)
+
 	resolved := r.withDefaults(spec)
 
 	memBytes, err := units.RAMInBytes(resolved.MemoryLimit)
@@ -383,6 +396,69 @@ func (r *Runtime) ensureImage(ctx context.Context, ref string) error {
 	defer rc.Close()
 	_, err = io.Copy(io.Discard, rc) // drain pull progress
 	return err
+}
+
+// ensureReposWritable makes the persistent repos volume writable by the
+// non-root sidecar user, exactly once. A fresh Docker named volume is
+// owned by root, but sidecars run as uid 1000 (helmdeck), so the first
+// `repo.fetch` would fail with "mkdir /repos/<caller>: Permission denied".
+// We run a throwaway root container (the sidecar image with its USER
+// overridden to 0:0 — it already has sh+chmod) that chmods the mount
+// world-writable, matching the compose repos-init one-shot. Best-effort:
+// a failure is logged-by-return but does NOT block non-repos sessions —
+// the clone surfaces the permission error itself if this didn't take.
+func (r *Runtime) ensureReposWritable(ctx context.Context) error {
+	if r.reposVolume == "" {
+		return nil
+	}
+	var initErr error
+	r.reposInitOnce.Do(func() {
+		img := defaultImage
+		if r.imageOverride != "" {
+			img = r.imageOverride
+		}
+		if err := r.ensureImage(ctx, img); err != nil {
+			initErr = fmt.Errorf("repos-init: pull %s: %w", img, err)
+			return
+		}
+		cfg := &container.Config{
+			Image:      img,
+			User:       "0:0", // root, to chmod a root-owned volume
+			Entrypoint: []string{"sh", "-c"},
+			Cmd:        []string{"mkdir -p " + reposMountPath + " && chmod 0777 " + reposMountPath},
+		}
+		hostCfg := &container.HostConfig{
+			Mounts: []mount.Mount{{
+				Type:   mount.TypeVolume,
+				Source: r.reposVolume,
+				Target: reposMountPath,
+			}},
+		}
+		created, err := r.cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "helmdeck-repos-init-"+uuid.NewString()[:8])
+		if err != nil {
+			initErr = fmt.Errorf("repos-init: create: %w", err)
+			return
+		}
+		defer r.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+		if err := r.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+			initErr = fmt.Errorf("repos-init: start: %w", err)
+			return
+		}
+		statusCh, errCh := r.cli.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
+		select {
+		case err := <-errCh:
+			if err != nil {
+				initErr = fmt.Errorf("repos-init: wait: %w", err)
+			}
+		case st := <-statusCh:
+			if st.StatusCode != 0 {
+				initErr = fmt.Errorf("repos-init: chmod exited %d", st.StatusCode)
+			}
+		case <-ctx.Done():
+			initErr = ctx.Err()
+		}
+	})
+	return initErr
 }
 
 func (r *Runtime) withDefaults(in session.Spec) session.Spec {

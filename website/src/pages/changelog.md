@@ -16,6 +16,15 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Added
+
+- **Manual artifact deletion**: `DELETE /api/v1/artifacts/{key}` plus a delete (trash) button in the Management UI Artifact Explorer remove a single artifact on demand. Previously the only delete path was the TTL janitor (default 7-day age-out); operators can now reclaim space immediately. Delete is idempotent — a missing key still returns `204`. (#290)
+
+### Fixed
+
+- **`content.ground` no longer truncates or drops content during the optional rewrite.** The full-document rewrite was hard-capped at 2048 output tokens, so a long input — e.g. a 20–25 slide deck — was silently cut off mid-document and every slide past the cap vanished. The rewrite's completion budget now scales with the input size (capped at 8192 tokens); a response that still hits the token ceiling is discarded in favor of the structure-preserving citation-only version; and the rewrite prompt is instructed to preserve every `---` slide separator and slide count. `grounded_text` is now **always** present in the output (equal to the input when no claims were grounded), so pipeline steps wiring `${{ steps.<id>.output.grounded_text }}` never fail on an unresolved reference. (#290)
+- **`builtin.grounded-deck` and `builtin.research-ground-deck` now ground decks with citations only (`rewrite: false`)** rather than a full prose rewrite, which reflowed and collapsed slide structure. Blog-oriented pipelines (`grounded-blog`, `scrape-ground-blog`, `doc-ground-blog`) keep `rewrite: true` and are protected by the truncation guard above. (#290)
+
 ## [0.15.0] - 2026-05-26
 
 **Theme:** Pipelines as a first-class resource — a saved, runnable sequence of pack steps any actor can create, run, and watch.

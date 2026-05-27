@@ -52,8 +52,9 @@ Two input modes — supply **either** `text` (in-memory) **or** `clone_path` + `
 | `claims_grounded` | `number` | Of those, how many had a source found via search. |
 | `grounding` | `array` | `[{claim: "<exact substring>", url, title}]` for every grounded claim. |
 | `skipped` | `array` | Claims with no usable source. The agent can decide whether to soften them or remove them. |
-| `text` | `string` | (Text mode only.) The patched markdown. |
+| `grounded_text` | `string` | The grounded markdown (citations inserted; rewritten prose when `rewrite: true`). **Always present** — equal to the input when no claims were grounded — so a pipeline step can wire `${{ steps.<id>.output.grounded_text }}` without the reference ever failing. |
 | `sha256` | `string` | Hex sha256 of the patched content. |
+| `artifact_key` | `string` | (File mode, when the file changed.) Key of the uploaded grounded-markdown artifact. |
 | `file_changed` | `boolean` | (File mode only.) `false` when no claims were grounded → file untouched. |
 
 ## Vault credentials needed

@@ -19,8 +19,12 @@ import "encoding/json"
 func Builtins() []*Pipeline {
 	return []*Pipeline{
 		pipe("builtin.grounded-deck", "Grounded slide deck",
-			"Fact-check + rewrite markdown (content.ground), then render a PDF deck.",
-			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":true}`),
+			"Fact-check + add citations to markdown (content.ground), then render a PDF deck.",
+			// rewrite:false — a full-document prose rewrite reflows a
+			// slide deck and (when long) truncates it; citation-only
+			// grounding preserves every slide. Blog pipelines keep
+			// rewrite:true; decks do not.
+			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":false}`),
 			step("render", "slides.render", `{"markdown":"${{ steps.ground.output.grounded_text }}","format":"pdf"}`),
 		),
 		pipe("builtin.grounded-blog", "Grounded blog post",
@@ -50,9 +54,12 @@ func Builtins() []*Pipeline {
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
 		pipe("builtin.research-ground-deck", "Research → ground → deck",
-			"Deep-research a topic, fact-check + rewrite the synthesis, then render a deck.",
+			"Deep-research a topic, fact-check + cite the synthesis, then render a deck.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
-			step("ground", "content.ground", `{"text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto","rewrite":true}`),
+			// rewrite:false — same rationale as builtin.grounded-deck:
+			// the grounded text feeds slides.render, so keep the deck
+			// structure intact by adding citations only.
+			step("ground", "content.ground", `{"text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto","rewrite":false}`),
 			step("render", "slides.render", `{"markdown":"${{ steps.ground.output.grounded_text }}","format":"pdf"}`),
 		),
 		pipe("builtin.doc-ground-blog", "Document → ground → blog",

@@ -65,6 +65,25 @@ func registerArtifactRoutes(mux *http.ServeMux, deps Deps) {
 		_, _ = w.Write(data)
 	})
 
+	// DELETE /api/v1/artifacts/{key...} — remove a single artifact
+	// from the store. The TTL janitor already deletes by age; this is
+	// the operator-facing manual delete (Artifact Explorer trash
+	// button). Delete is idempotent — an unknown key is a no-op — so a
+	// missing artifact still returns 204. Key extraction mirrors the
+	// download route above.
+	mux.HandleFunc("DELETE /api/v1/artifacts/", func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.URL.Path, "/api/v1/artifacts/")
+		if key == "" {
+			writeError(w, http.StatusBadRequest, "missing_key", "artifact key required")
+			return
+		}
+		if err := store.Delete(r.Context(), key); err != nil {
+			writeError(w, http.StatusInternalServerError, "delete_failed", err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	mux.HandleFunc("GET /api/v1/artifacts", func(w http.ResponseWriter, r *http.Request) {
 		packFilter := strings.TrimSpace(r.URL.Query().Get("pack"))
 		limitStr := r.URL.Query().Get("limit")

@@ -174,12 +174,20 @@ func TestContentGround_NoClaimsReturnedUnchanged(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 	var out struct {
-		ClaimsGrounded int  `json:"claims_grounded"`
-		FileChanged    bool `json:"file_changed"`
+		ClaimsGrounded int    `json:"claims_grounded"`
+		FileChanged    bool   `json:"file_changed"`
+		GroundedText   string `json:"grounded_text"`
 	}
 	_ = json.Unmarshal(raw, &out)
 	if out.ClaimsGrounded != 0 || out.FileChanged {
 		t.Errorf("expected 0 grounded & no file change, got %+v", out)
+	}
+	// grounded_text is a total contract — even with zero claims it
+	// must be present (== the unchanged input) so downstream pipeline
+	// steps that wire ${{ steps.ground.output.grounded_text }} never
+	// fail with an unresolved-reference error.
+	if out.GroundedText != markdown {
+		t.Errorf("grounded_text must equal the unchanged input on zero claims; got %q", out.GroundedText)
 	}
 	// Write-back must NOT have fired.
 	for _, c := range exec.calls {
@@ -547,4 +555,63 @@ func itoa(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+// TestRewriteWithSources_DiscardsTruncated verifies the rewrite is
+// rejected (errRewriteTruncated) when the model hits the token ceiling.
+// This is the guard that stops a half-written deck from being shipped:
+// the caller falls back to the citation-only version, preserving every
+// slide.
+func TestRewriteWithSources_DiscardsTruncated(t *testing.T) {
+	disp := &scriptedDispatcherWT{
+		replies:       []string{"# Slide 1\n\n---\n\n# Slide 2 (cut off he"},
+		finishReasons: []string{"length"},
+	}
+	gs := []grounding{{Claim: "x", URL: "https://example.com", Snippet: "s"}}
+	_, err := rewriteWithSources(context.Background(), disp, "openai/gpt-4o-mini", "original text", gs)
+	if !errors.Is(err, errRewriteTruncated) {
+		t.Fatalf("expected errRewriteTruncated on FinishReason=length, got %v", err)
+	}
+}
+
+// TestRewriteWithSources_TokenBudgetScales verifies the rewrite's
+// completion budget scales with the input size and is clamped to
+// [defaultContentGroundTokens, maxContentGroundTokens]. The old fixed
+// 2048 cap truncated long decks; the budget must grow with the input.
+func TestRewriteWithSources_TokenBudgetScales(t *testing.T) {
+	gs := []grounding{{Claim: "x", URL: "https://example.com", Snippet: "s"}}
+
+	cases := []struct {
+		name string
+		text string
+		want int
+	}{
+		{"short input clamps to floor", "tiny", defaultContentGroundTokens},
+		{
+			// ~6000 tokens of input → 6000*5/4 = 7500, under the 8192 cap.
+			name: "mid input scales above floor",
+			text: strings.Repeat("a", 24000),
+			want: 24000 / 4 * 5 / 4,
+		},
+		{
+			// Huge input → scaled value exceeds the cap, clamps to ceiling.
+			name: "huge input clamps to ceiling",
+			text: strings.Repeat("a", 200000),
+			want: maxContentGroundTokens,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			disp := &scriptedDispatcherWT{replies: []string{"rewritten"}}
+			if _, err := rewriteWithSources(context.Background(), disp, "m", tc.text, gs); err != nil {
+				t.Fatalf("rewriteWithSources: %v", err)
+			}
+			if len(disp.captured) != 1 || disp.captured[0].MaxTokens == nil {
+				t.Fatalf("expected one captured request with MaxTokens set")
+			}
+			if got := *disp.captured[0].MaxTokens; got != tc.want {
+				t.Errorf("MaxTokens = %d, want %d", got, tc.want)
+			}
+		})
+	}
 }

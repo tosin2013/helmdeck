@@ -1,4 +1,4 @@
-import { Archive, Download, Eye, Image } from 'lucide-react';
+import { Archive, Download, Eye, Image, Trash2 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import {
@@ -19,7 +19,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
-import { useApi } from '@/lib/queries';
+import { useApi, useAuthFetch } from '@/lib/queries';
 import { formatRelative } from '@/lib/format';
 import { useState } from 'react';
 
@@ -46,6 +46,36 @@ export function ArtifactsPage() {
   );
 
   const [previewKey, setPreviewKey] = useState<string | null>(null);
+  const authFetch = useAuthFetch();
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function handleDelete(key: string) {
+    if (!window.confirm(`Delete artifact?\n\n${key}\n\nThis cannot be undone.`)) {
+      return;
+    }
+    setDeletingKey(key);
+    setDeleteError(null);
+    try {
+      // Key extraction on the server is a path-prefix trim, mirroring
+      // the download route — pass the raw key as path segments.
+      const resp = await authFetch(`/api/v1/artifacts/${key}`, {
+        method: 'DELETE',
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(
+          (body as { message?: string }).message ?? `HTTP ${resp.status}`,
+        );
+      }
+      if (previewKey === key) setPreviewKey(null);
+      await refetch();
+    } catch (e) {
+      setDeleteError((e as Error).message);
+    } finally {
+      setDeletingKey(null);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -68,6 +98,17 @@ export function ArtifactsPage() {
           </Button>
         </div>
       </div>
+
+      {deleteError && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-destructive">
+              Failed to delete artifact
+            </CardTitle>
+            <CardDescription>{deleteError}</CardDescription>
+          </CardHeader>
+        </Card>
+      )}
 
       {error && (
         <Card>
@@ -173,6 +214,16 @@ export function ArtifactsPage() {
                               <Download className="h-3.5 w-3.5" />
                             </Button>
                           </a>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                            title="Delete"
+                            disabled={deletingKey === a.key}
+                            onClick={() => handleDelete(a.key)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>

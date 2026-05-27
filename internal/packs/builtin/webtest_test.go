@@ -72,8 +72,12 @@ type scriptedDispatcherWT struct {
 	mu       sync.Mutex
 	replies  []string
 	replyErr []error
-	captured []gateway.ChatRequest
-	calls    int
+	// finishReasons, when set per call index, sets the response's
+	// FinishReason (e.g. "length" to simulate a token-capped/truncated
+	// completion). Empty/unset leaves it blank.
+	finishReasons []string
+	captured      []gateway.ChatRequest
+	calls         int
 }
 
 func (s *scriptedDispatcherWT) Dispatch(_ context.Context, req gateway.ChatRequest) (gateway.ChatResponse, error) {
@@ -89,10 +93,15 @@ func (s *scriptedDispatcherWT) Dispatch(_ context.Context, req gateway.ChatReque
 	if idx < len(s.replies) {
 		reply = s.replies[idx]
 	}
+	finish := ""
+	if idx < len(s.finishReasons) {
+		finish = s.finishReasons[idx]
+	}
 	return gateway.ChatResponse{
 		Choices: []gateway.Choice{{
-			Index:   0,
-			Message: gateway.Message{Role: "assistant", Content: gateway.TextContent(reply)},
+			Index:        0,
+			Message:      gateway.Message{Role: "assistant", Content: gateway.TextContent(reply)},
+			FinishReason: finish,
 		}},
 	}, nil
 }

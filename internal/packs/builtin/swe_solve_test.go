@@ -274,6 +274,49 @@ func TestSweSolve_MissingTask(t *testing.T) {
 	}
 }
 
+// fakeRuntimeWithRepos hands back a session carrying a persistent repos
+// mount, so swe.solve takes the ADR-040 on-volume clone path instead of an
+// ephemeral /tmp clone. Embeds fakeRuntime for the other methods.
+type fakeRuntimeWithRepos struct{ fakeRuntime }
+
+func (fakeRuntimeWithRepos) Create(ctx context.Context, spec session.Spec) (*session.Session, error) {
+	return &session.Session{ID: "sess-1", Status: session.StatusRunning, ReposPath: "/repos"}, nil
+}
+
+// TestSweSolve_PersistentCloneUsesSharedFixedPath is the regression guard for
+// the #298/#300 bug class: when a persistent repos volume is configured,
+// swe.solve must clone through the SAME shared repo.fetch builder as
+// repo.fetch — landing in the deterministic per-caller on-volume path and
+// inheriting the world-writable `umask 000` the repos janitor (a different
+// uid) needs to GC the tree. A bespoke clone here would silently re-introduce
+// the "/repos Permission denied" / un-GC-able-clone failures.
+func TestSweSolve_PersistentCloneUsesSharedFixedPath(t *testing.T) {
+	ex := &recordingExecutor{replies: []session.ExecResult{
+		{Stdout: []byte(sweCloneEnvelope)},     // 0: clone
+		{Stdout: []byte(`{"map":"pkg/x.go"}`)}, // 1: repo.map
+		{},                                     // 2: mini run
+		{Stdout: []byte("diff --git a/x b/x\n+added")},      // 3: git diff
+		{Stdout: []byte(`{"messages":[{"content":"ok"}]}`)}, // 4: cat trajectory
+	}}
+	eng := packs.New(
+		packs.WithRuntime(fakeRuntimeWithRepos{}),
+		packs.WithSessionExecutor(ex),
+	)
+	const repo = "https://github.com/octocat/Hello-World.git"
+	ctx := packs.WithCaller(context.Background(), "alice")
+	if _, err := eng.Execute(ctx, SweSolve(nil, nil),
+		json.RawMessage(`{"repo_url":"`+repo+`","task":"add a test","mode":"patch"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	clone := scriptOf(ex.calls[0])
+	if want := persistentCloneDir("/repos", "alice", repo); !strings.Contains(clone, want) {
+		t.Errorf("persistent clone not into shared per-caller path %q:\n%s", want, clone)
+	}
+	if !strings.Contains(clone, "umask 000") {
+		t.Errorf("persistent clone missing 'umask 000' (janitor GC needs world-writable):\n%s", clone)
+	}
+}
+
 // TestGitHubCreatePR_RequestShaping verifies the PR pack builds the
 // correct REST path and POST body without making a live call. We invoke
 // the inner closure logic indirectly: the pack input is validated and

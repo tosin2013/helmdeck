@@ -96,6 +96,11 @@ func callerFromContext(ctx context.Context) string {
 	return "unknown"
 }
 
+// CallerFromContext is the exported accessor for the WithCaller subject
+// ("unknown" when none). Lets callers outside this package (e.g. tests,
+// the pipeline runner) read the threaded caller.
+func CallerFromContext(ctx context.Context) string { return callerFromContext(ctx) }
+
 // MemoryConfig is the per-pack opt-in for the memory engine seam. The
 // zero value (nil *MemoryConfig on a Pack) means "no memory hooks" —
 // the pack runs exactly as it did before the memory layer existed.

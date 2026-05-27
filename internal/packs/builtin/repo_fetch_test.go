@@ -657,3 +657,17 @@ func runInDir(t *testing.T, dir, name string, args ...string) {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}
 }
+
+func TestCloneAcquireScript_PersistentIsWorldWritable(t *testing.T) {
+	// Persistent clones must be world-writable: the control-plane repos
+	// janitor runs as a different uid than the sidecar and must `rm -rf`
+	// the tree on GC, so every dir needs to be writable by it.
+	persistent := cloneAcquireScript("https://github.com/o/r.git", "main", 1, "/repos/alice/abc123")
+	if !strings.Contains(persistent, "umask 000") {
+		t.Errorf("persistent clone script must set `umask 000`; got:\n%s", persistent)
+	}
+	// The ephemeral /tmp path is single-session and doesn't need it.
+	if eph := cloneAcquireScript("https://github.com/o/r.git", "main", 1, ""); strings.Contains(eph, "umask 000") {
+		t.Errorf("ephemeral clone script should not set umask 000")
+	}
+}

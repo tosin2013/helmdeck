@@ -7,9 +7,17 @@ name: Integration (Docker)
 # /repos permission failure (#298) shipped green. These need Docker but NO
 # paid APIs, so they belong in CI.
 #
-# Path-scoped on PRs (only when pack/pipeline/session/runtime or the
-# sidecar image changes) so the slower Docker job doesn't gate every PR,
-# plus a nightly run and manual dispatch.
+# Path-scoped on PRs (only when pack/pipeline/session/runtime or a sidecar
+# image changes) so the slower Docker job doesn't gate every PR, plus a
+# nightly run and manual dispatch.
+#
+# No-silent-skips policy (issue #303): in this environment every dependency
+# an integration test needs is present — Docker, HELMDECK_INTEGRATION=1, the
+# built sidecars, universal-ctags. So nothing should skip, and the final step
+# FAILS the job on any `--- SKIP`. A skip asserts nothing; that's exactly how
+# TestSlidesFit_NoSectionOverflow silently never ran (see the
+# the-test-that-never-ran blog post). If a new test needs a dep we don't have
+# here, install/build it below rather than letting it skip into a green run.
 
 on:
   pull_request:
@@ -19,6 +27,7 @@ on:
       - 'internal/session/**'
       - 'internal/repos/**'
       - 'deploy/docker/sidecar.Dockerfile'
+      - 'deploy/docker/sidecar-hyperframes.Dockerfile'
       - '.github/workflows/integration.yml'
   schedule:
     - cron: '0 5 * * *'   # nightly at 05:00 UTC
@@ -28,7 +37,7 @@ jobs:
   integration:
     name: Docker integration tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -37,17 +46,61 @@ jobs:
           go-version: '1.26.x'
           cache: true
 
-      # Build the sidecar locally and tag it as the runtime's default
-      # image so dockerrt.New() finds it WITHOUT pulling from ghcr — this
-      # exercises the PR's actual sidecar (incl. any Dockerfile change) and
-      # avoids depending on registry availability/staleness.
+      # universal-ctags backs the repo.map integration tests (TestRepoMap_*
+      # and TestCtagsSanity). Ubuntu's default `ctags` is a different tool;
+      # without the universal build those tests skip. macos-ci installs the
+      # brew equivalent for the same reason.
+      - name: Install universal-ctags
+        run: sudo apt-get update && sudo apt-get install -y universal-ctags
+
+      # Build the sidecar locally and tag it as the runtime's default image
+      # so dockerrt.New() finds it WITHOUT pulling from ghcr — this exercises
+      # the PR's actual sidecar (incl. any Dockerfile change) and avoids
+      # depending on registry availability/staleness.
       - name: Build sidecar image
         run: make sidecar-build
 
       - name: Tag sidecar as runtime default
         run: docker tag helmdeck-sidecar:dev ghcr.io/tosin2013/helmdeck-sidecar:latest
 
+      # The hyperframes sidecar (built incrementally on the base) backs the
+      # CLI-surface invariant for the `hyperframes` binary. Without it that
+      # subtest skips — i.e. never checks that the pack's declared argv flags
+      # still match the real CLI.
+      - name: Build hyperframes sidecar image
+        run: make sidecar-hyperframes-build
+
       - name: Run integration tests
         env:
           HELMDECK_INTEGRATION: "1"
-        run: go test -tags=integration -timeout 25m ./internal/packs/builtin/...
+        # -count=1 disables the test cache so the verbose per-test output the
+        # skip gate parses is real (a cached package prints only "ok (cached)").
+        run: |
+          set -o pipefail
+          go test -tags=integration -count=1 -timeout 25m -v ./internal/packs/builtin/... 2>&1 | tee integration-test.log
+
+      # No-silent-skips gate: a SKIP in this fully-provisioned environment
+      # means a test asserted nothing. Surface every skip and fail, so the
+      # class of bug from issue #303 can't recur unnoticed.
+      - name: Fail on silent skips
+        if: always()
+        run: |
+          if [ ! -f integration-test.log ]; then
+            echo "::error::integration-test.log missing — the test step did not run"
+            exit 1
+          fi
+          skipped=$(grep -E -- '--- SKIP:' integration-test.log || true)
+          if [ -n "$skipped" ]; then
+            echo "::error::Integration suite skipped test(s). In this environment (Docker + HELMDECK_INTEGRATION + built sidecars + ctags) nothing should skip — a skip asserts nothing. Install/build the missing dependency in integration.yml, or remove the dead test."
+            echo "$skipped"
+            {
+              echo "### ❌ Silent skips in the integration suite"
+              echo "A skipped integration test asserts nothing. Provision its dependency or delete it."
+              echo ""
+              echo '```'
+              echo "$skipped"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "✅ No skipped tests — every integration test asserted something."

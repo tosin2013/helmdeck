@@ -118,8 +118,13 @@ func TestSlidesFit_RenderSmoke(t *testing.T) {
 	}
 
 	// HTML: must carry the injected fit rules, targeting the mermaid <img>.
+	// Marp hoists the injected fit <style> and applies it, but MINIFIES the
+	// hoisted CSS — it strips comments and collapses whitespace (so the
+	// `auto-fit (#280)` source comment is dropped and `table-layout: fixed`
+	// becomes `table-layout:fixed`). MARP_VERSION is pinned (4.0.4), so assert
+	// the deterministic minified rules rather than the verbatim source text.
 	html := string(renderFixture(t, eng, store, "html"))
-	for _, want := range []string{"auto-fit (#280)", "section img.mermaid-svg", "table-layout: fixed", `class="mermaid-svg"`} {
+	for _, want := range []string{"section img.mermaid-svg{max-height:60vh", "table-layout:fixed", `class="mermaid-svg"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rendered HTML missing %q (fit CSS must reach the renderer)", want)
 		}
@@ -158,16 +163,21 @@ func TestSlidesFit_NoSectionOverflow(t *testing.T) {
 		t.Fatalf("write html: %v", err)
 	}
 
-	// Measure with the sidecar's Chromium via Playwright. scrollWidth vs
-	// clientWidth is a pre-transform layout value, so it's unaffected by
-	// Marp's fit-to-viewport scale. Skip cleanly if the measure harness
-	// isn't usable in this image rather than fail spuriously.
+	// Measure with the sidecar's Chromium via Marp's bundled puppeteer-core
+	// (the same browser path Marp uses to print PDFs — so a no-overflow result
+	// here validates the PDF/PPTX layout too, since those are Chromium prints
+	// of this very HTML). The sidecar ships no standalone playwright/puppeteer,
+	// so NODE_PATH points at Marp's vendored copy. scrollWidth vs clientWidth is
+	// a pre-transform layout value, so it's unaffected by Marp's fit-to-viewport
+	// scale. Skip cleanly if the measure harness isn't usable in this image
+	// rather than fail spuriously.
 	const measure = `
-const { chromium } = require('playwright');
+const puppeteer = require('puppeteer-core');
 (async () => {
-  const b = await chromium.launch({ executablePath: process.env.CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox'] });
-  const p = await b.newPage({ viewport: { width: 1280, height: 720 } });
-  await p.goto('file:///tmp/deck-280.html', { waitUntil: 'networkidle' });
+  const b = await puppeteer.launch({ executablePath: process.env.CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-gpu'], headless: 'new' });
+  const p = await b.newPage();
+  await p.setViewport({ width: 1280, height: 720 });
+  await p.goto('file:///tmp/deck-280.html', { waitUntil: 'networkidle0' });
   const overflow = await p.evaluate(() =>
     [...document.querySelectorAll('section')].filter(s =>
       s.scrollWidth > s.clientWidth + 2 || s.scrollHeight > s.clientHeight + 2).length);
@@ -176,7 +186,7 @@ const { chromium } = require('playwright');
 })().catch(e => { console.error('MEASURE_UNAVAILABLE:' + e.message); process.exit(42); });
 `
 	res, err := ex.Exec(ctx, sess.ID, session.ExecRequest{
-		Cmd:   []string{"sh", "-c", "node -e \"$(cat)\""},
+		Cmd:   []string{"sh", "-c", "NODE_PATH=/usr/lib/node_modules/@marp-team/marp-cli/node_modules:/usr/lib/node_modules node -e \"$(cat)\""},
 		Stdin: []byte(measure),
 	})
 	if err != nil {

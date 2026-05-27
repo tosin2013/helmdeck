@@ -1,0 +1,53 @@
+name: Integration (Docker)
+
+# Runs the //go:build integration tests — the ones that spin REAL session
+# sidecars over the Docker socket (persistent repos volume, cross-session
+# reuse, slides auto-fit). The default `go test ./...` in ci.yml skips
+# these (no integration tag), which is how a fresh-stack-only bug like the
+# /repos permission failure (#298) shipped green. These need Docker but NO
+# paid APIs, so they belong in CI.
+#
+# Path-scoped on PRs (only when pack/pipeline/session/runtime or the
+# sidecar image changes) so the slower Docker job doesn't gate every PR,
+# plus a nightly run and manual dispatch.
+
+on:
+  pull_request:
+    paths:
+      - 'internal/packs/**'
+      - 'internal/pipelines/**'
+      - 'internal/session/**'
+      - 'internal/repos/**'
+      - 'deploy/docker/sidecar.Dockerfile'
+      - '.github/workflows/integration.yml'
+  schedule:
+    - cron: '0 5 * * *'   # nightly at 05:00 UTC
+  workflow_dispatch:
+
+jobs:
+  integration:
+    name: Docker integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      # Build the sidecar locally and tag it as the runtime's default
+      # image so dockerrt.New() finds it WITHOUT pulling from ghcr — this
+      # exercises the PR's actual sidecar (incl. any Dockerfile change) and
+      # avoids depending on registry availability/staleness.
+      - name: Build sidecar image
+        run: make sidecar-build
+
+      - name: Tag sidecar as runtime default
+        run: docker tag helmdeck-sidecar:dev ghcr.io/tosin2013/helmdeck-sidecar:latest
+
+      - name: Run integration tests
+        env:
+          HELMDECK_INTEGRATION: "1"
+        run: go test -tags=integration -timeout 25m ./internal/packs/builtin/...

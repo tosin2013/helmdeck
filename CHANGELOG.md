@@ -11,6 +11,14 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Added
+
+- **`helmdeck://models` MCP resource** ([ADR 043](docs/adrs/043-actionable-gateway-model-errors.md)): lists the chat-completion models the gateway can route to right now, as full `provider/model` IDs (e.g. `openrouter/minimax/minimax-m2.7`). Agents read it to pick a valid model for any pack's `model` input instead of guessing one that fails. Mirrors `helmdeck://voices` / `helmdeck://image-models`.
+
+### Fixed
+
+- **A bad/unroutable model now returns `invalid_input` with an actionable hint, not an opaque `handler_failed`.** Calling an LLM pack (`content.ground`, `research.deep`, `blog.publish` prompt mode, `web.test`) with a model the gateway can't route — e.g. `minimax/…` when MiniMax is only reachable as `openrouter/minimax/…` — used to fail as `handler_failed: … unknown provider: minimax: unknown provider: minimax` (a non-recoverable code, with a doubled message). It now returns `invalid_input` pointing at the `helmdeck://models` resource, so the agent retries with a valid model instead of hallucinating another. The doubled message is gone. ([ADR 043](docs/adrs/043-actionable-gateway-model-errors.md))
+
 ## [0.16.0] - 2026-05-27
 
 **Theme:** Correctness + housekeeping — grounding stops truncating long slide decks, artifacts become deletable on demand, and the `email.send` pack lands.

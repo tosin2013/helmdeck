@@ -433,8 +433,7 @@ func blogExpandPrompt(ctx context.Context, d vision.Dispatcher, title, prompt, m
 		},
 	})
 	if err != nil {
-		return "", &packs.PackError{Code: packs.CodeHandlerFailed,
-			Message: fmt.Sprintf("blog.publish prompt expansion: %v", err), Cause: err}
+		return "", dispatchError("blog.publish prompt expansion", err)
 	}
 	if len(resp.Choices) == 0 {
 		return "", &packs.PackError{Code: packs.CodeHandlerFailed,

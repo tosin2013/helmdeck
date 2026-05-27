@@ -6,6 +6,7 @@ package api
 //   - sessionListerAdapter        → helmdeck://sessions      (issue #44)
 //   - voiceListerCachingAdapter   → helmdeck://voices        (issue #143)
 //   - imageModelListerAdapter     → helmdeck://image-models  (issue #158)
+//   - modelListerAdapter          → helmdeck://models        (ADR 043)
 //
 // Kept narrow on purpose: PackServer doesn't need (or want) the full
 // session.Runtime API (Create / Logs / Delete) — only List. Limiting
@@ -14,9 +15,11 @@ package api
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/imagemodels"
 	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/session"
@@ -154,6 +157,36 @@ func (a *imageModelListerAdapter) List(ctx context.Context) ([]mcp.ImageModelVie
 			Capabilities:          m.Capabilities,
 			Notes:                 m.Notes,
 		})
+	}
+	return views, nil
+}
+
+// modelListerAdapter backs helmdeck://models (ADR 043) over the gateway
+// registry: it lists the chat models the gateway can route to right now,
+// as full provider/model IDs, so an agent picks a real model instead of
+// guessing one that 404s with "unknown provider".
+type modelListerAdapter struct {
+	reg *gateway.Registry
+}
+
+func newModelListerAdapter(reg *gateway.Registry) *modelListerAdapter {
+	return &modelListerAdapter{reg: reg}
+}
+
+func (a *modelListerAdapter) List(ctx context.Context) ([]mcp.ModelView, error) {
+	models, err := a.reg.AllModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]mcp.ModelView, 0, len(models))
+	for _, m := range models {
+		// AllModels formats ID as "<provider>/<model>"; the provider is
+		// the first segment — the routable provider the gateway resolves.
+		provider := m.ID
+		if i := strings.Index(m.ID, "/"); i > 0 {
+			provider = m.ID[:i]
+		}
+		views = append(views, mcp.ModelView{ID: m.ID, Provider: provider})
 	}
 	return views, nil
 }

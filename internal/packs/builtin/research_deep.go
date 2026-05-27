@@ -385,11 +385,7 @@ func researchDeepHandler(d vision.Dispatcher) packs.HandlerFunc {
 		}
 		chat, err := d.Dispatch(ctx, req2)
 		if err != nil {
-			return nil, &packs.PackError{
-				Code:    packs.CodeHandlerFailed,
-				Message: fmt.Sprintf("synthesis dispatch: %v", err),
-				Cause:   err,
-			}
+			return nil, dispatchError("synthesis dispatch", err)
 		}
 		if len(chat.Choices) == 0 {
 			return nil, &packs.PackError{

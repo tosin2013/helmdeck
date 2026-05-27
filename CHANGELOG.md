@@ -15,6 +15,11 @@ and the hard exit gates for each — see
 
 - **`blog.publish` now renders mermaid diagrams to inline SVG server-side** (default `mermaid: true`): ```mermaid``` fenced blocks in a markdown body are pre-rendered via `mmdc` (the same renderer `slides.render` uses) into `<img src="data:image/svg+xml;base64,…">`, so diagrams show reliably on Ghost (any theme), in email, RSS, and plain-markdown readers — no client-side MermaidJS required. Set `mermaid: false` to keep the previous client-render behavior. As a result `blog.publish` now runs with a session (`NeedsSession: true`) to reach `mmdc` — each publish acquires a short-lived sidecar.
 
+### Fixed
+
+- **Persistent `repo.fetch` (ADR 040) failed with `mkdir: cannot create directory '/repos/…': Permission denied`.** The `helmdeck-repos` volume was root-owned, but the session sidecar runs as uid 1000 and the control-plane janitor as uid 65532 — neither could create clone directories under it, so every persistent clone (e.g. `builtin.repo-readme-narrate`/`-podcast`) failed. A new `repos-init` compose one-shot now makes `/repos` writable, and the persistent clone runs `umask 000` so the janitor (a different uid) can GC clones.
+- **Pipeline-driven `repo.fetch` clones all collided in `/repos/unknown`.** `StartRun` executes on a detached context that dropped the caller subject, so persistent clones weren't namespaced per caller. The runner now threads the caller (`StartRun`/`Rerun` carry it and re-attach it via `packs.WithCaller`), so a pipeline started by `alice` clones into `/repos/alice/…` like a direct pack call.
+
 ## [0.17.0] - 2026-05-28
 
 **Theme:** Legible, recoverable failures — agents and operators can tell *why* a run failed and *what to do*: actionable model errors with a model catalog to pick from, and pipeline failure attribution with one-call re-run.

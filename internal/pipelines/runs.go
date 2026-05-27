@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/tosin2013/helmdeck/internal/packs"
 )
 
 // runRegistry holds live run snapshots in memory (mirrors the MCP async
@@ -66,7 +68,12 @@ func (rr *runRegistry) sweep(now time.Time) {
 // StartRun loads a pipeline by id, creates a pending run, and executes it
 // on a detached, timed context in a background goroutine. Returns the run
 // id immediately. The run's progress is observable via GetRun.
-func (r *Runner) StartRun(ctx context.Context, pipelineID string, inputs json.RawMessage) (string, error) {
+//
+// caller is the authenticated subject (JWT "sub"); it is re-attached to
+// the detached run context via packs.WithCaller so per-step packs (e.g.
+// repo.fetch's persistent clone namespace) see the real caller instead of
+// "unknown". Pass "" when unauthenticated.
+func (r *Runner) StartRun(ctx context.Context, pipelineID string, inputs json.RawMessage, caller string) (string, error) {
 	p, err := r.store.Get(ctx, pipelineID)
 	if err != nil {
 		return "", err
@@ -92,6 +99,7 @@ func (r *Runner) StartRun(ctx context.Context, pipelineID string, inputs json.Ra
 	go func() {
 		bg, cancel := context.WithTimeout(context.Background(), r.timeout)
 		defer cancel()
+		bg = packs.WithCaller(bg, caller)
 		if err := r.RunSync(bg, p, inputs, run); err != nil {
 			run.Status = RunFailed
 			run.Error = err.Error()
@@ -106,12 +114,12 @@ func (r *Runner) StartRun(ctx context.Context, pipelineID string, inputs json.Ra
 // — the CI/CD "re-run this job" affordance. It is NOT a resume: every
 // step executes again from the top (resume-from-failed-step is ADR 044
 // slice 2). Returns the new run id.
-func (r *Runner) Rerun(ctx context.Context, runID string) (string, error) {
+func (r *Runner) Rerun(ctx context.Context, runID string, caller string) (string, error) {
 	prev, err := r.GetRun(ctx, runID)
 	if err != nil {
 		return "", err
 	}
-	return r.StartRun(ctx, prev.PipelineID, prev.Inputs)
+	return r.StartRun(ctx, prev.PipelineID, prev.Inputs, caller)
 }
 
 // GetRun returns the live snapshot if present, else the persisted row.

@@ -419,6 +419,13 @@ func cloneAcquireScript(url, ref string, depth int, cloneDir string) string {
 	lines := []string{
 		"REUSED=0",
 		"CLONE_DIR=" + q,
+		// World-writable umask: the sidecar (uid 1000) creates the clone,
+		// but the control-plane repos janitor (uid 65532) must `rm -rf` it
+		// on GC — which needs write on every directory in the tree. The
+		// repos-init one-shot makes /repos itself 0777; this makes the
+		// per-caller/per-repo subdirs and the clone contents 0777/0666 too
+		// (internal volume, same trust model as /tmp).
+		"umask 000",
 		"mkdir -p \"$(dirname \"$CLONE_DIR\")\"",
 		"set +e",
 		"( flock -w 120 9 || exit 75",

@@ -88,6 +88,8 @@ services:
     depends_on:
       garage-init:
         condition: service_completed_successfully
+      repos-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "/usr/local/bin/control-plane", "-version"]
       interval: 10s
@@ -179,6 +181,25 @@ services:
     depends_on:
       garage:
         condition: service_healthy
+
+  # ADR 040: one-shot that makes the persistent repos volume writable by
+  # the session sidecars. A fresh Docker named volume is root-owned, but
+  # the sidecar runs as uid 1000 (helmdeck) and the control-plane janitor
+  # as uid 65532 (nonroot) — neither can chown it, so without this
+  # repo.fetch fails with "mkdir /repos/...: Permission denied". chmod 0777
+  # (no sticky bit) lets both uids create clones and lets the janitor GC
+  # them; the volume is internal to helmdeck's own containers (same trust
+  # model as /tmp). Control-plane startup is gated on this completing.
+  repos-init:
+    image: busybox:1.37
+    container_name: helmdeck-repos-init
+    user: "0:0"
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /repos && chmod 0777 /repos"]
+    volumes:
+      - helmdeck-repos:/repos
+    networks:
+      - baas-net
 
 volumes:
   helmdeck-data:

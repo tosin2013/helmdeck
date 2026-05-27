@@ -18,8 +18,20 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/pipelines"
 )
+
+// pipelineCaller extracts the authenticated subject from the request so
+// pipeline runs namespace per-caller resources (e.g. repo.fetch's
+// persistent clone dir) the same way single-pack calls do. Empty when
+// unauthenticated/auth-disabled → packs treat it as "unknown".
+func pipelineCaller(r *http.Request) string {
+	if c := auth.FromContext(r.Context()); c != nil {
+		return c.Subject
+	}
+	return ""
+}
 
 func registerPipelineRoutes(mux *http.ServeMux, deps Deps) {
 	if deps.PipelineStore == nil || deps.PipelineRunner == nil {
@@ -180,7 +192,7 @@ func handlePipelineRun(w http.ResponseWriter, r *http.Request, runner *pipelines
 	if raw, _ := io.ReadAll(r.Body); len(raw) > 0 {
 		_ = json.Unmarshal(raw, &body)
 	}
-	runID, err := runner.StartRun(r.Context(), id, body.Inputs)
+	runID, err := runner.StartRun(r.Context(), id, body.Inputs, pipelineCaller(r))
 	if err != nil {
 		if errors.Is(err, pipelines.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "pipeline not found")
@@ -197,7 +209,7 @@ func handlePipelineRun(w http.ResponseWriter, r *http.Request, runner *pipelines
 // handlePipelineRerun starts a fresh run from an existing run (same
 // pipeline + inputs). Distinct from a resume — every step runs again.
 func handlePipelineRerun(w http.ResponseWriter, r *http.Request, runner *pipelines.Runner, runID string) {
-	newRunID, err := runner.Rerun(r.Context(), runID)
+	newRunID, err := runner.Rerun(r.Context(), runID, pipelineCaller(r))
 	if err != nil {
 		if errors.Is(err, pipelines.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "run or pipeline not found")

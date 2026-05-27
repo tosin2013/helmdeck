@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/pipelines"
 )
 
@@ -57,7 +58,7 @@ func (a pipelineServiceAdapter) Create(ctx context.Context, def json.RawMessage)
 }
 
 func (a pipelineServiceAdapter) StartRun(ctx context.Context, id string, inputs json.RawMessage) (string, error) {
-	return a.runner.StartRun(ctx, id, inputs)
+	return a.runner.StartRun(ctx, id, inputs, mcpCaller(ctx))
 }
 
 func (a pipelineServiceAdapter) RunStatus(ctx context.Context, runID string) (json.RawMessage, error) {
@@ -69,7 +70,17 @@ func (a pipelineServiceAdapter) RunStatus(ctx context.Context, runID string) (js
 }
 
 func (a pipelineServiceAdapter) Rerun(ctx context.Context, runID string) (string, error) {
-	return a.runner.Rerun(ctx, runID)
+	return a.runner.Rerun(ctx, runID, mcpCaller(ctx))
+}
+
+// mcpCaller pulls the authenticated subject off the tools/call context
+// (the MCP server attaches it via auth.FromContext before dispatch), so
+// pipeline runs started over MCP namespace per-caller like REST does.
+func mcpCaller(ctx context.Context) string {
+	if c := auth.FromContext(ctx); c != nil {
+		return c.Subject
+	}
+	return ""
 }
 
 // newPipelineServiceAdapter builds the adapter from Deps, or returns

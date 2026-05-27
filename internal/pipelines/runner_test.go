@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -143,7 +144,7 @@ func TestRunner_StartRunAsync(t *testing.T) {
 	if err := r.store.Create(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	runID, err := r.StartRun(ctx, "p", json.RawMessage(`{"url":"u"}`))
+	runID, err := r.StartRun(ctx, "p", json.RawMessage(`{"url":"u"}`), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +223,7 @@ func TestRunner_Rerun(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Re-run it → new run id, same pipeline + inputs replayed.
-	newID, err := r.Rerun(context.Background(), "run-1")
+	newID, err := r.Rerun(context.Background(), "run-1", "")
 	if err != nil {
 		t.Fatalf("Rerun: %v", err)
 	}
@@ -238,5 +239,49 @@ func TestRunner_Rerun(t *testing.T) {
 	}
 	if got.PipelineID != "p" {
 		t.Errorf("rerun pipeline = %s, want p", got.PipelineID)
+	}
+}
+
+type callerCapturingExec struct {
+	mu     sync.Mutex
+	caller string
+}
+
+func (e *callerCapturingExec) Execute(ctx context.Context, _ *packs.Pack, _ json.RawMessage) (*packs.Result, error) {
+	e.mu.Lock()
+	e.caller = packs.CallerFromContext(ctx)
+	e.mu.Unlock()
+	return &packs.Result{Output: json.RawMessage(`{}`)}, nil
+}
+
+func (e *callerCapturingExec) Caller() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.caller
+}
+
+func TestRunner_StartRunThreadsCaller(t *testing.T) {
+	ex := &callerCapturingExec{}
+	r := newTestRunner(t, ex)
+	ctx := context.Background()
+	p := &Pipeline{ID: "p", Name: "n", Builtin: true, Steps: []Step{
+		{ID: "s1", Pack: "a.pack", Input: json.RawMessage(`{}`)},
+	}}
+	if err := r.store.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := r.StartRun(ctx, "p", nil, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200; i++ {
+		got, _ := r.GetRun(ctx, runID)
+		if got != nil && (got.Status == RunSucceeded || got.Status == RunFailed) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if c := ex.Caller(); c != "alice" {
+		t.Errorf("step Execute ctx caller = %q, want alice (StartRun must thread the caller onto the detached run context)", c)
 	}
 }

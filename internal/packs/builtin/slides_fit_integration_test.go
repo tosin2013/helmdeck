@@ -17,12 +17,14 @@ package builtin_test
 //     PDF, and the HTML output carries the injected fit rules targeting
 //     the mermaid <img>. Proves the fix reaches the real marp/mmdc path
 //     without breaking it.
-//   - geometric bounds-assert (best-effort): load the rendered HTML in
-//     the sidecar's Chromium and assert no <section> overflows its own
-//     box. We measure section.scrollWidth/clientWidth, which are
-//     pre-transform layout values and therefore robust to Marp's
-//     fit-to-viewport scale transform. Skips cleanly if a headless
-//     Chromium measure isn't available in the image.
+//   - geometric bounds-assert: load the rendered HTML in the sidecar's
+//     Chromium (via Marp's bundled puppeteer-core) and assert no <section>
+//     overflows its own box. We measure section.scrollWidth/clientWidth,
+//     which are pre-transform layout values and therefore robust to Marp's
+//     fit-to-viewport scale transform. Under HELMDECK_INTEGRATION the measure
+//     harness MUST be present, so an unavailable harness fails the test rather
+//     than skipping — a skip is how this check silently asserted nothing for
+//     its whole life (see the-test-that-never-ran blog post).
 //
 // Run with:
 //   HELMDECK_INTEGRATION=1 go test -tags=integration ./internal/packs/builtin/... -run TestSlidesFit -v
@@ -169,8 +171,8 @@ func TestSlidesFit_NoSectionOverflow(t *testing.T) {
 	// of this very HTML). The sidecar ships no standalone playwright/puppeteer,
 	// so NODE_PATH points at Marp's vendored copy. scrollWidth vs clientWidth is
 	// a pre-transform layout value, so it's unaffected by Marp's fit-to-viewport
-	// scale. Skip cleanly if the measure harness isn't usable in this image
-	// rather than fail spuriously.
+	// scale. The harness must be present under HELMDECK_INTEGRATION, so the
+	// failure paths below fail the test rather than skipping.
 	const measure = `
 const puppeteer = require('puppeteer-core');
 (async () => {
@@ -189,21 +191,29 @@ const puppeteer = require('puppeteer-core');
 		Cmd:   []string{"sh", "-c", "NODE_PATH=/usr/lib/node_modules/@marp-team/marp-cli/node_modules:/usr/lib/node_modules node -e \"$(cat)\""},
 		Stdin: []byte(measure),
 	})
+	// Fail loud, don't skip. We're already past the HELMDECK_INTEGRATION +
+	// docker gates, so the sidecar is freshly built and MUST carry the measure
+	// harness (Marp's bundled puppeteer-core + /usr/bin/chromium). A skip here
+	// is how this test silently asserted nothing for its entire life when it
+	// required a `playwright` module the image never shipped — see
+	// website/blog/2026-05-29-the-test-that-never-ran.md. If the harness is
+	// unavailable in the integration env, that's a real regression (the image
+	// dropped a dependency, or the measure broke), not something to skip past.
 	if err != nil {
-		t.Skipf("headless measure unavailable (exec error): %v", err)
+		t.Fatalf("headless measure exec failed (harness must work under HELMDECK_INTEGRATION): %v", err)
 	}
 	if res.ExitCode == 42 || strings.Contains(string(res.Stderr), "MEASURE_UNAVAILABLE") {
-		t.Skipf("headless measure unavailable in this sidecar image: %s", strings.TrimSpace(string(res.Stderr)))
+		t.Fatalf("headless measure harness unavailable in the integration sidecar — it must ship puppeteer-core + chromium: %s", strings.TrimSpace(string(res.Stderr)))
 	}
 	if res.ExitCode != 0 {
-		t.Skipf("measure script exit %d (treated as unavailable): %s", res.ExitCode, strings.TrimSpace(string(res.Stderr)))
+		t.Fatalf("measure script exit %d: %s", res.ExitCode, strings.TrimSpace(string(res.Stderr)))
 	}
 
 	var out struct {
 		Overflow int `json:"overflow"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(res.Stdout))), &out); err != nil {
-		t.Skipf("could not parse measure output %q: %v", res.Stdout, err)
+		t.Fatalf("could not parse measure output %q: %v", res.Stdout, err)
 	}
 	if out.Overflow != 0 {
 		t.Errorf("%d slide section(s) overflow their bounds after the fit fix — diagrams/tables still clip", out.Overflow)

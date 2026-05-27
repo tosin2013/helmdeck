@@ -112,6 +112,11 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				"metadata_artifact_key": "string",
 				"metadata":              "object",
 				"hero_image_model_used": "string",
+				// Cost transparency — emitted by the handler; declared
+				// here so agents/pipeline authors see them in the catalog.
+				"tts_chars":                "number",
+				"estimated_cost_usd":       "number",
+				"estimated_cost_breakdown": "object",
 			},
 		},
 		Handler: slidesNarrateHandler(d, vs, eg),

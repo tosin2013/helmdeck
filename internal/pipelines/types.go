@@ -66,8 +66,15 @@ type RunStep struct {
 	// what each step actually emitted, and so tests can assert on it.
 	Artifacts []packs.Artifact `json:"artifacts,omitempty"`
 	Error     string           `json:"error,omitempty"`
-	StartedAt time.Time        `json:"started_at"`
-	EndedAt   time.Time        `json:"ended_at,omitempty"`
+	// ErrorCode/FailureClass/FailureReason attribute a failure so a run
+	// reads like a CI/CD job: the typed code, a class (caller_fixable /
+	// pack_bug / transient / state_changed), and a one-line reason +
+	// recommended action. Populated only on a failed step. See classify.
+	ErrorCode     packs.ErrorCode `json:"error_code,omitempty"`
+	FailureClass  string          `json:"failure_class,omitempty"`
+	FailureReason string          `json:"failure_reason,omitempty"`
+	StartedAt     time.Time       `json:"started_at"`
+	EndedAt       time.Time       `json:"ended_at,omitempty"`
 }
 
 // Run is one execution of a pipeline with its per-step history.
@@ -78,8 +85,12 @@ type Run struct {
 	Inputs     json.RawMessage `json:"inputs,omitempty"`
 	Steps      []RunStep       `json:"steps"`
 	Error      string          `json:"error,omitempty"`
-	StartedAt  time.Time       `json:"started_at"`
-	EndedAt    time.Time       `json:"ended_at,omitempty"`
+	// FailureClass/FailureReason mirror the failing step's attribution at
+	// the run level, so a caller sees "why" without scanning every step.
+	FailureClass  string    `json:"failure_class,omitempty"`
+	FailureReason string    `json:"failure_reason,omitempty"`
+	StartedAt     time.Time `json:"started_at"`
+	EndedAt       time.Time `json:"ended_at,omitempty"`
 }
 
 // Validate checks a pipeline definition for structural soundness:

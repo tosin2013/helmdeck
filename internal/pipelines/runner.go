@@ -95,10 +95,16 @@ func (r *Runner) RunSync(ctx context.Context, p *Pipeline, inputs json.RawMessag
 		res, serr := r.runStep(ctx, step, inputMap, outputs, &prevSession)
 		run.Steps[idx].EndedAt = r.now()
 		if serr != nil {
+			code, class, reason := classify(serr, step.Pack)
 			run.Steps[idx].Status = RunFailed
 			run.Steps[idx].Error = serr.Error()
+			run.Steps[idx].ErrorCode = code
+			run.Steps[idx].FailureClass = class
+			run.Steps[idx].FailureReason = reason
 			run.Status = RunFailed
 			run.Error = fmt.Sprintf("step %q: %v", step.ID, serr)
+			run.FailureClass = class
+			run.FailureReason = reason
 			run.EndedAt = r.now()
 			r.finish(ctx, run)
 			return nil

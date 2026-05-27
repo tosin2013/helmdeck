@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,5 +158,85 @@ func TestRunner_StartRunAsync(t *testing.T) {
 	}
 	if got == nil || got.Status != RunSucceeded {
 		t.Fatalf("async run did not succeed: %+v", got)
+	}
+}
+
+// failingExec returns a typed *packs.PackError for a named pack, so we
+// can assert the runner classifies and records the failure attribution.
+type failingExec struct {
+	failOn string
+	err    *packs.PackError
+}
+
+func (e *failingExec) Execute(_ context.Context, p *packs.Pack, _ json.RawMessage) (*packs.Result, error) {
+	if p.Name == e.failOn {
+		return nil, e.err
+	}
+	return &packs.Result{Output: json.RawMessage(`{}`)}, nil
+}
+
+func TestRunner_RecordsFailureAttribution(t *testing.T) {
+	ex := &failingExec{failOn: "slides.render", err: &packs.PackError{Code: packs.CodeHandlerFailed, Message: "marp blew up"}}
+	r := newTestRunner(t, ex)
+	p := &Pipeline{ID: "p", Name: "n", Steps: []Step{
+		{ID: "render", Pack: "slides.render", Input: json.RawMessage(`{"markdown":"# x"}`)},
+	}}
+	run := &Run{ID: "run-attr", PipelineID: "p", StartedAt: r.now()}
+	if err := r.store.CreateRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RunSync(context.Background(), p, nil, run); err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != RunFailed {
+		t.Fatalf("status = %s", run.Status)
+	}
+	step := run.Steps[0]
+	if step.ErrorCode != packs.CodeHandlerFailed {
+		t.Errorf("step ErrorCode = %q, want handler_failed", step.ErrorCode)
+	}
+	if step.FailureClass != FailurePackBug {
+		t.Errorf("step FailureClass = %q, want pack_bug", step.FailureClass)
+	}
+	if run.FailureClass != FailurePackBug {
+		t.Errorf("run FailureClass = %q, want pack_bug (run-level mirror)", run.FailureClass)
+	}
+	if !strings.Contains(run.FailureReason, "issues/new") {
+		t.Errorf("pack_bug run reason should link an issue; got %q", run.FailureReason)
+	}
+}
+
+func TestRunner_Rerun(t *testing.T) {
+	ex := &recordingExec{outputs: map[string]string{"a.pack": `{}`}}
+	r := newTestRunner(t, ex)
+	p := &Pipeline{ID: "p", Name: "n", Builtin: true, Steps: []Step{
+		{ID: "s1", Pack: "a.pack", Input: json.RawMessage(`{"k":"${{ inputs.v }}"}`)},
+	}}
+	if err := r.store.Create(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	// First run.
+	run := &Run{ID: "run-1", PipelineID: "p", Inputs: json.RawMessage(`{"v":"hello"}`), StartedAt: r.now()}
+	_ = r.store.CreateRun(context.Background(), run)
+	if err := r.RunSync(context.Background(), p, run.Inputs, run); err != nil {
+		t.Fatal(err)
+	}
+	// Re-run it → new run id, same pipeline + inputs replayed.
+	newID, err := r.Rerun(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("Rerun: %v", err)
+	}
+	if newID == "" || newID == "run-1" {
+		t.Fatalf("Rerun should return a fresh run id, got %q", newID)
+	}
+	got, err := r.GetRun(context.Background(), newID)
+	if err != nil {
+		t.Fatalf("GetRun(new): %v", err)
+	}
+	if string(got.Inputs) != `{"v":"hello"}` {
+		t.Errorf("rerun inputs = %s, want the original inputs", got.Inputs)
+	}
+	if got.PipelineID != "p" {
+		t.Errorf("rerun pipeline = %s, want p", got.PipelineID)
 	}
 }

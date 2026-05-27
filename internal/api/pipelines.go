@@ -92,6 +92,16 @@ func registerPipelineRoutes(mux *http.ServeMux, deps Deps) {
 				handlePipelineRun(w, r, runner, id)
 				return
 			case "runs":
+				// POST /{id}/runs/{runId}/rerun — start a fresh run from
+				// an existing one (same pipeline + inputs).
+				if len(parts) >= 4 && parts[3] == "rerun" {
+					if r.Method != http.MethodPost {
+						writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", r.Method)
+						return
+					}
+					handlePipelineRerun(w, r, runner, parts[2])
+					return
+				}
 				if r.Method != http.MethodGet {
 					writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", r.Method)
 					return
@@ -181,6 +191,23 @@ func handlePipelineRun(w http.ResponseWriter, r *http.Request, runner *pipelines
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"run_id": runID, "pipeline_id": id, "status": string(pipelines.RunPending),
+	})
+}
+
+// handlePipelineRerun starts a fresh run from an existing run (same
+// pipeline + inputs). Distinct from a resume — every step runs again.
+func handlePipelineRerun(w http.ResponseWriter, r *http.Request, runner *pipelines.Runner, runID string) {
+	newRunID, err := runner.Rerun(r.Context(), runID)
+	if err != nil {
+		if errors.Is(err, pipelines.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "run or pipeline not found")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid_pipeline", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"run_id": newRunID, "status": string(pipelines.RunPending),
 	})
 }
 

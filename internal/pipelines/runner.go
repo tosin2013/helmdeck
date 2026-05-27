@@ -92,7 +92,7 @@ func (r *Runner) RunSync(ctx context.Context, p *Pipeline, inputs json.RawMessag
 		_ = r.store.SaveRun(ctx, run)
 		r.reg.put(run)
 
-		out, serr := r.runStep(ctx, step, inputMap, outputs, &prevSession)
+		res, serr := r.runStep(ctx, step, inputMap, outputs, &prevSession)
 		run.Steps[idx].EndedAt = r.now()
 		if serr != nil {
 			run.Steps[idx].Status = RunFailed
@@ -104,8 +104,9 @@ func (r *Runner) RunSync(ctx context.Context, p *Pipeline, inputs json.RawMessag
 			return nil
 		}
 		run.Steps[idx].Status = RunSucceeded
-		run.Steps[idx].Output = out
-		outputs[step.ID] = out
+		run.Steps[idx].Output = res.Output
+		run.Steps[idx].Artifacts = res.Artifacts
+		outputs[step.ID] = res.Output
 		_ = r.store.SaveRun(ctx, run)
 		r.reg.put(run)
 	}
@@ -117,9 +118,9 @@ func (r *Runner) RunSync(ctx context.Context, p *Pipeline, inputs json.RawMessag
 }
 
 // runStep resolves a step's input, threads the prior session, executes
-// the pack, and returns the pack output. prevSession is updated to the
-// session this step ran in (if any) for the next step.
-func (r *Runner) runStep(ctx context.Context, step Step, inputs map[string]any, outputs map[string]json.RawMessage, prevSession *string) (json.RawMessage, error) {
+// the pack, and returns the pack result (output + artifacts). prevSession
+// is updated to the session this step ran in (if any) for the next step.
+func (r *Runner) runStep(ctx context.Context, step Step, inputs map[string]any, outputs map[string]json.RawMessage, prevSession *string) (*packs.Result, error) {
 	pack, err := r.resolve(step.Pack, step.Version)
 	if err != nil {
 		return nil, fmt.Errorf("pack %q not available: %w", step.Pack, err)
@@ -144,7 +145,7 @@ func (r *Runner) runStep(ctx context.Context, step Step, inputs map[string]any, 
 	if res.SessionID != "" {
 		*prevSession = res.SessionID
 	}
-	return res.Output, nil
+	return res, nil
 }
 
 // injectSessionID sets _session_id on the resolved input object unless it

@@ -193,6 +193,7 @@ Beyond packs, helmdeck exposes read-only resources for catalog discovery. Use `r
 - `helmdeck://sessions` — Live session list (id, status, image, created_at).
 - `helmdeck://voices` — ElevenLabs voice catalog (id, name, labels, preview URL) for `podcast.generate`'s `speakers` and `slides.narrate`'s `voice_id`. Requires `elevenlabs-key` in the vault.
 - `helmdeck://image-models` (v0.12.0 #158) — Curated fal.ai model catalog for `image.generate` and the chained image inputs (`cover_image_model`, `hero_image_model`). Each entry has cost, p50 latency, max resolution, capabilities. **Read this before picking a non-default model** so you understand cost/quality trade-offs.
+- `helmdeck://models` (ADR 043) — Chat-completion models the gateway can route to **right now**, as full `provider/model` IDs (e.g. `openrouter/minimax/minimax-m2.7`). Use one **verbatim** for any pack's `model` input (`content.ground`, `research.deep`, `blog.publish` prompt mode, `web.test`) or a pipeline step's `model`. Pick from here rather than guessing — an unroutable model fails with `invalid_input`. Providers like minimax/groq are reached **via** `openrouter/…`, not as bare providers.
 
 ## Chained image generation (v0.12.0 #146)
 

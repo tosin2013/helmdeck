@@ -22,6 +22,7 @@ const sidebars: SidebarsConfig = {
         'howto/manage-vault-credentials',
         'howto/configure-llm-providers',
         'howto/inspect-audit-logs',
+        'howto/when-a-pipeline-fails',
       ],
     },
     {

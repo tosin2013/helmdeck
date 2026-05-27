@@ -17,6 +17,13 @@ for when to run a pipeline vs. call packs directly.
 > Provider-dependent steps degrade gracefully: podcast/narrate pipelines run
 > silently without an `elevenlabs-key`; grounding/research need the Firecrawl
 > overlay; `blog.publish` defaults to an artifact (no Ghost needed).
+>
+> **If a run fails**, `helmdeck__pipeline-run-status` reports a `failure_class`
+> (`caller_fixable` — fix the input/model and re-run; `pack_bug` — file the
+> linked issue; `transient` — re-run; `state_changed` — refresh and re-run) and
+> a one-line `failure_reason`. Re-run with the same inputs via
+> `helmdeck__pipeline-rerun`. See [When a pipeline fails](/howto/when-a-pipeline-fails).
+> For a step's `model`, pick a routable id from `helmdeck://models`.
 
 ---
 

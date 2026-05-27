@@ -52,6 +52,7 @@ For the `artifact` destination, **no vault credential is needed** — the pack w
 | `hero_image` | `boolean` | no | `false` | Auto-generate the feature image via `image.generate` (v0.12.0 #146). Uses `hero_image_prompt` if set, falling back to the post title. **Mutually exclusive with `feature_image_artifact_key`.** |
 | `hero_image_prompt` | `string` | no | — | Prompt for the auto-generated hero image when `hero_image:true`. Defaults to the post title if omitted. |
 | `hero_image_model` | `string` | no | `"fal-ai/flux/schnell"` | fal.ai model used when `hero_image:true`. Browse choices via the `helmdeck://image-models` MCP resource. |
+| `mermaid` | `boolean` | no | `true` | Pre-render ```` ```mermaid ```` fenced blocks to inline SVG (server-side via mmdc) so diagrams show reliably everywhere. Set `false` to leave fences for client-side rendering. See [Mermaid diagrams](#mermaid-diagrams-in-technical-posts). |
 
 **Validation:**
 - Exactly one of `body` or (`prompt`+`model`) — providing both or neither errors.
@@ -296,34 +297,20 @@ With `also_save_artifact:true` (the default), all five of those failures appear 
 
 ## Mermaid diagrams in technical posts
 
-`blog.publish` understands ```` ```mermaid ```` fenced blocks in markdown bodies and renders them per output cell:
+By default (`mermaid: true`), `blog.publish` **pre-renders** ```` ```mermaid ```` fenced blocks in a markdown body to **inline SVG** server-side — it shells to `mmdc` in the sidecar (the same renderer `slides.render` uses) and replaces each fence with an `<img src="data:image/svg+xml;base64,…" class="mermaid-svg" />`. The diagram is then **baked into the post**, so it renders identically on Ghost (regardless of theme), in email, in RSS, and in any plain-markdown reader — **no client-side MermaidJS required.**
 
-| destination | format | Behaviour |
-|---|---|---|
-| `artifact` | `markdown` | Fence passes through verbatim. Use this when the artifact lands in a renderer that knows mermaid (Docusaurus, GitHub, MkDocs). |
-| `artifact` | `html`     | Fence → `<pre class="mermaid">…</pre>` via [goldmark-mermaid](https://pkg.go.dev/go.abhg.dev/goldmark/mermaid). One `<script src="…mermaid…">` is injected at end of document; open the artifact in any browser and the diagram renders. |
-| `ghost`    | `markdown` | Same as artifact-html — markdown is rendered to HTML via goldmark before POST. |
-| `ghost`    | `html`     | If the body is HTML, it passes through unchanged. If you provide markdown content in an `html`-format request, the cross-mode path renders it the same way as the row above. |
+| `mermaid` | Behaviour |
+|---|---|
+| `true` (default) | Fences → inline-SVG `<img>` before publishing. Works for every destination/format. Needs a session (the pack runs with one — see below). |
+| `false` | Fences are left as ```` ```mermaid ```` and rendered **client-side**: in `html`/Ghost output they become `<pre class="mermaid">` + an injected MermaidJS `<script>` (via [goldmark-mermaid](https://pkg.go.dev/go.abhg.dev/goldmark/mermaid)); in `markdown` output the fence passes through verbatim (for renderers that know mermaid — Docusaurus, GitHub, MkDocs). Use this if you'd rather ship the source fence than a baked SVG, or your reader already loads MermaidJS. |
 
-**Ghost themes and `<script>` tags.** Ghost's HTML sanitiser may strip the injected `<script>` tag depending on the post-rendering pipeline and theme. The most reliable path is to add MermaidJS to your Ghost theme's `default.hbs` (or equivalent) so it loads on every post:
+**Prompt-mode nudging.** In prompt mode the pack's system prompt instructs the model to emit ```` ```mermaid ```` fences when content is genuinely visual (architecture, request flow, sequence interactions, state transitions, decision trees) and to prefer prose otherwise. So "write a post about X with a diagram of its architecture" produces a diagram with no extra flag — and with the default `mermaid: true` it ships as SVG.
 
-```hbs
-<!-- inside <head> of default.hbs -->
-<script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({ startOnLoad: true });
-</script>
-```
-
-After that the `<pre class="mermaid">` blocks `blog.publish` writes will render as diagrams.
-
-**Prompt-mode nudging.** In prompt mode, the pack's system prompt instructs the model to emit ```` ```mermaid ```` fences when content is genuinely visual (architecture, request flow, sequence interactions, state transitions, decision trees) and to prefer prose otherwise. The model decides per post — there's no flag to force or forbid diagrams.
-
-**Supported diagram kinds.** Anything mermaid supports: `flowchart`/`graph`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `erDiagram`, `gantt`, `pie`, `mindmap`, etc. The pack does not validate the diagram body — invalid mermaid syntax surfaces at render time in the reader's browser.
+**Supported diagram kinds.** Anything mermaid supports: `flowchart`/`graph`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `erDiagram`, `gantt`, `pie`, `mindmap`, etc. Invalid mermaid syntax fails the publish with `handler_failed` (the `mmdc` error), rather than silently shipping a broken diagram.
 
 ## Session chaining
 
-**No session.** Stateless. Composes naturally:
+**Runs with a session** (`NeedsSession: true`) so it can reach `mmdc` for server-side mermaid rendering — i.e. each publish acquires a short-lived sidecar even for diagram-free posts (set `mermaid: false` to skip the render work). Composes naturally:
 
 - **`research.deep` → `content.ground` → `blog.publish`** — the canonical "evidence-grounded blog post" chain. Research surfaces sources; content.ground appends citations into a draft body; blog.publish ships it.
 - **`web.scrape` → `blog.publish` (artifact mode)** — re-publish a scraped page as a draft artifact for later editing.

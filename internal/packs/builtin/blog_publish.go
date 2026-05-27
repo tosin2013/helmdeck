@@ -54,6 +54,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/vault"
 	"github.com/tosin2013/helmdeck/internal/vision"
 	"github.com/yuin/goldmark"
+	ghtml "github.com/yuin/goldmark/renderer/html"
 	"go.abhg.dev/goldmark/mermaid"
 )
 
@@ -72,7 +73,10 @@ func BlogPublish(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) 
 	return &packs.Pack{
 		Name:        "blog.publish",
 		Version:     "v1",
-		Description: "Publish a post to a Ghost blog or render markdown/HTML to the artifact store. Body or prompt+model. Optional feature image (auto-generated via fal.ai or operator-supplied artifact). Markdown bodies may include ```mermaid``` fenced blocks — diagrams render client-side in HTML/Ghost outputs (Ghost theme must include MermaidJS).",
+		Description: "Publish a post to a Ghost blog or render markdown/HTML to the artifact store. Body or prompt+model. Optional feature image (auto-generated via fal.ai or operator-supplied artifact). ```mermaid``` fenced blocks in a markdown body are pre-rendered to inline SVG (via mmdc) so diagrams show reliably in any output — Ghost, email, plain readers — with no client-side MermaidJS needed. Set `mermaid: false` to leave fences for client-side rendering instead.",
+		// NeedsSession so the handler can reach mmdc in the sidecar to
+		// pre-render mermaid fences to SVG (same as slides.render).
+		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"format", "title"},
 			Properties: map[string]string{
@@ -93,6 +97,7 @@ func BlogPublish(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) 
 				"hero_image":                 "boolean",
 				"hero_image_model":           "string",
 				"hero_image_prompt":          "string",
+				"mermaid":                    "boolean", // default true; pre-render ```mermaid``` fences to inline SVG
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -131,16 +136,16 @@ type blogPublishInput struct {
 	// so we can distinguish absent vs explicitly-false.
 	AlsoSaveArtifact *bool    `json:"also_save_artifact,omitempty"`
 	Format           string   `json:"format"`
-	Title       string   `json:"title"`
-	Body        string   `json:"body"`
-	Prompt      string   `json:"prompt"`
-	Model       string   `json:"model"`
-	MaxTokens   int      `json:"max_tokens"`
-	Tags        []string `json:"tags"`
-	Status      string   `json:"status"`
-	PublishedAt string   `json:"published_at"`
-	Host        string   `json:"host"`
-	Credential  string   `json:"credential"`
+	Title            string   `json:"title"`
+	Body             string   `json:"body"`
+	Prompt           string   `json:"prompt"`
+	Model            string   `json:"model"`
+	MaxTokens        int      `json:"max_tokens"`
+	Tags             []string `json:"tags"`
+	Status           string   `json:"status"`
+	PublishedAt      string   `json:"published_at"`
+	Host             string   `json:"host"`
+	Credential       string   `json:"credential"`
 	// Feature image inputs (#146d). Exactly one of these triggers
 	// feature-image processing:
 	//   feature_image_artifact_key — operator passes an artifact key
@@ -154,6 +159,10 @@ type blogPublishInput struct {
 	HeroImage               bool   `json:"hero_image"`
 	HeroImageModel          string `json:"hero_image_model"`
 	HeroImagePrompt         string `json:"hero_image_prompt"`
+	// Mermaid controls whether ```mermaid``` fences in the body are
+	// pre-rendered to inline SVG via mmdc before publishing. Default
+	// true (nil ⇒ on); false leaves fences for client-side rendering.
+	Mermaid *bool `json:"mermaid,omitempty"`
 }
 
 func blogPublishHandler(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) packs.HandlerFunc {
@@ -237,6 +246,21 @@ func blogPublishHandler(v *vault.Store, eg *security.EgressGuard, d vision.Dispa
 			body = expanded
 			bodySource = "model"
 			modelUsed = in.Model
+		}
+
+		// Pre-render ```mermaid``` fences to inline SVG (via mmdc in the
+		// sidecar) so diagrams show in any output — Ghost, email, plain
+		// readers — without client-side MermaidJS. Default on; mermaid:false
+		// leaves fences for the client-render path in mdToHTML. Reuses
+		// slides.render's preprocessor. No-op when the body has no fences
+		// (incl. HTML bodies) or when no session executor is available.
+		mermaidOn := in.Mermaid == nil || *in.Mermaid
+		if mermaidOn && ec.Exec != nil {
+			rendered, perr := preprocessMermaidFences(ctx, ec.Exec, body)
+			if perr != nil {
+				return nil, perr
+			}
+			body = rendered
 		}
 
 		// Resolve feature image (#146d). Either operator-supplied
@@ -859,6 +883,11 @@ func mdToHTML(md string) (string, error) {
 		goldmark.WithExtensions(&mermaid.Extender{
 			RenderMode: mermaid.RenderModeClient,
 		}),
+		// Allow raw HTML through: the mermaid:true path pre-renders
+		// fences to inline-SVG <img> tags (server-side), which would
+		// otherwise be escaped here. The client-render extender above
+		// still handles any fences left when mermaid:false.
+		goldmark.WithRendererOptions(ghtml.WithUnsafe()),
 	)
 	var buf bytes.Buffer
 	if err := engine.Convert([]byte(md), &buf); err != nil {

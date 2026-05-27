@@ -19,6 +19,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/tosin2013/helmdeck/internal/packs"
+	"github.com/tosin2013/helmdeck/internal/session"
 	"github.com/tosin2013/helmdeck/internal/store"
 	"github.com/tosin2013/helmdeck/internal/vault"
 )
@@ -344,10 +345,10 @@ func TestBlogPublish_Ghost_HappyPath_MarkdownBody(t *testing.T) {
 	// Ghost wants HTML, so the markdown body must have been rendered.
 	var sent struct {
 		Posts []struct {
-			Title  string                  `json:"title"`
-			HTML   string                  `json:"html"`
-			Status string                  `json:"status"`
-			Tags   []map[string]string     `json:"tags"`
+			Title  string              `json:"title"`
+			HTML   string              `json:"html"`
+			Status string              `json:"status"`
+			Tags   []map[string]string `json:"tags"`
 		} `json:"posts"`
 	}
 	if err := json.Unmarshal([]byte(c.Body), &sent); err != nil {
@@ -984,5 +985,81 @@ func TestBlogPublish_JWTRoundtrip(t *testing.T) {
 	}
 	if parsed.Header["kid"] != id {
 		t.Errorf("kid = %v, want %v", parsed.Header["kid"], id)
+	}
+}
+
+// runBlogWithExec builds an ExecutionContext with a stub session executor
+// (returning canned SVG for the mmdc call) so we can exercise the
+// server-side mermaid path. Returns the response + the artifact store.
+func runBlogWithExec(t *testing.T, input string, svg []byte) (json.RawMessage, *packs.MemoryArtifactStore, error) {
+	t.Helper()
+	pack := BlogPublish(nil, nil, nil)
+	store := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack:      pack,
+		Input:     json.RawMessage(input),
+		Artifacts: store,
+		Exec: func(_ context.Context, _ session.ExecRequest) (session.ExecResult, error) {
+			// blog.publish's only exec is mmdc → return canned SVG.
+			return session.ExecResult{Stdout: svg, ExitCode: 0}, nil
+		},
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	return raw, store, err
+}
+
+func mermaidBodyInput(t *testing.T, mermaidField string) string {
+	t.Helper()
+	body := "# Title\n\n```mermaid\ngraph TD; A-->B;\n```\n\nAfter the diagram."
+	m := map[string]any{"destination": "artifact", "format": "markdown", "title": "Diagram Post", "body": body}
+	if mermaidField != "" {
+		m["mermaid"] = mermaidField == "true"
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+func TestBlogPublish_MermaidServerSideSVG(t *testing.T) {
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>`)
+	raw, store, err := runBlogWithExec(t, mermaidBodyInput(t, ""), svg) // default mermaid:on
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		ArtifactKey string `json:"artifact_key"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.ArtifactKey == "" {
+		t.Fatal("no artifact_key")
+	}
+	body, _, gErr := store.Get(context.Background(), out.ArtifactKey)
+	if gErr != nil {
+		t.Fatalf("get artifact: %v", gErr)
+	}
+	got := string(body)
+	if !strings.Contains(got, "data:image/svg+xml;base64,") {
+		t.Errorf("published body should contain an inline-SVG <img> data URI; got:\n%s", got)
+	}
+	if strings.Contains(got, "```mermaid") {
+		t.Errorf("```mermaid fence should have been pre-rendered away; got:\n%s", got)
+	}
+}
+
+func TestBlogPublish_MermaidFalseKeepsFence(t *testing.T) {
+	svg := []byte(`<svg/>`)
+	raw, store, err := runBlogWithExec(t, mermaidBodyInput(t, "false"), svg)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		ArtifactKey string `json:"artifact_key"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	body, _, _ := store.Get(context.Background(), out.ArtifactKey)
+	if !strings.Contains(string(body), "```mermaid") {
+		t.Errorf("mermaid:false should leave the fence intact for client rendering; got:\n%s", string(body))
+	}
+	if strings.Contains(string(body), "data:image/svg+xml") {
+		t.Errorf("mermaid:false should NOT pre-render to SVG")
 	}
 }

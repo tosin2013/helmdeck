@@ -16,6 +16,10 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Changed
+
+- **`blog.publish` now renders mermaid diagrams to inline SVG server-side** (default `mermaid: true`): ```mermaid``` fenced blocks in a markdown body are pre-rendered via `mmdc` (the same renderer `slides.render` uses) into `<img src="data:image/svg+xml;base64,…">`, so diagrams show reliably on Ghost (any theme), in email, RSS, and plain-markdown readers — no client-side MermaidJS required. Set `mermaid: false` to keep the previous client-render behavior. As a result `blog.publish` now runs with a session (`NeedsSession: true`) to reach `mmdc` — each publish acquires a short-lived sidecar.
+
 ## [0.17.0] - 2026-05-28
 
 **Theme:** Legible, recoverable failures — agents and operators can tell *why* a run failed and *what to do*: actionable model errors with a model catalog to pick from, and pipeline failure attribution with one-call re-run.

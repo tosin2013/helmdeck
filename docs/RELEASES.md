@@ -556,6 +556,21 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 ---
 
+## v0.16.0 — Correctness + housekeeping — ✅ Shipped 2026-05-27 {#v0160}
+
+**Theme:** Sharp edges off the pipeline work — grounding stops silently truncating long slide decks, artifacts become deletable on demand, and a new `email.send` pack lands.
+
+**Ships:**
+
+- **`content.ground` rewrite no longer truncates long documents** — the optional full-document rewrite was hard-capped at 2048 output tokens, silently cutting off any input larger than the test fixtures (a 20–25 slide deck lost its back half when run through `builtin.grounded-deck`). The rewrite budget now scales with the input (cap 8192), a ceiling-hit rewrite (`finish_reason: length`) is discarded in favor of the structure-preserving citation-only version, and the prompt is told to keep every `---` separator. `grounded_text` is now always emitted so pipeline steps referencing it never fail. The deck pipelines (`builtin.grounded-deck`, `builtin.research-ground-deck`) now ground with `rewrite: false`. (#290)
+- **Manual artifact deletion** — `DELETE /api/v1/artifacts/{key}` + a delete button in the Management UI Artifact Explorer; previously only the TTL janitor could delete. (#290)
+- **`email.send` pack** (`helmdeck__email-send`) — send a transactional email via Resend (vault `resend-api-key`); 44 packs in-tree. (#289)
+- **Prompt-template reference pages** at `/reference/prompt-templates/` — a copy-and-fill `{{VARIABLE}}` prompt for every pack and pipeline. (#288)
+
+**Upgrade:** no migrations, no breaking changes; `grounded_text` is an additive output field. Clean in-place Compose upgrade from v0.15.0.
+
+---
+
 ## v1.0.0-rc1 — Kubernetes preview (planned) {#v100rc1}
 
 **Theme:** "Helm install works; production hardening pending."

@@ -16,8 +16,14 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-05-27
+
+**Theme:** Correctness + housekeeping — grounding stops truncating long slide decks, artifacts become deletable on demand, and the `email.send` pack lands.
+
 ### Added
 
+- **`email.send` pack** (`helmdeck__email-send`): send a transactional email via Resend. Required input `to`; optional `from`, `subject`, `html`, `cc`, `bcc`, `reply_to`; returns a `message_id`. Vault credential `resend-api-key`. Brings the in-tree catalog to 44 packs. (#289)
+- **Prompt-template reference pages** at `/reference/prompt-templates/`: a copy-and-fill `{{VARIABLE}}` prompt for every built-in pack and pipeline, kept current by a contributor convention. (#288)
 - **Manual artifact deletion**: `DELETE /api/v1/artifacts/{key}` plus a delete (trash) button in the Management UI Artifact Explorer remove a single artifact on demand. Previously the only delete path was the TTL janitor (default 7-day age-out); operators can now reclaim space immediately. Delete is idempotent — a missing key still returns `204`. (#290)
 
 ### Fixed

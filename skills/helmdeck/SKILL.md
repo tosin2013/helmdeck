@@ -10,13 +10,15 @@ metadata:
 
 <!-- This SKILL.md is the canonical helmdeck agent skill. Stamped at
      helmdeck v0.13.0 (#200 added hyperframes.render, bringing the
-     in-tree catalog to 43 packs; swe.solve (#271) and github.post_comment are the latest additions). Re-run scripts/configure-openclaw.sh
+     in-tree catalog to 43 packs; swe.solve (#271), github.post_comment,
+     and email.send (#289) are the latest additions, bringing the
+     catalog to 44 packs). Re-run scripts/configure-openclaw.sh
      after any helmdeck release so your OpenClaw agent picks up new
      packs and updated decision tables. -->
 
 ## You are connected to helmdeck
 
-Helmdeck is a browser automation and AI capability platform. You have access to 43 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
+Helmdeck is a browser automation and AI capability platform. You have access to 44 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
 
 ## Pack catalog
 
@@ -52,6 +54,9 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 - `github.post_comment` — Comment on an issue or PR.
 - `github.create_release` — Create a GitHub release.
 - `github.search` — Search code, issues, or repos.
+
+### Communication
+- `email.send` — Send a transactional email via Resend. Required: `to`. Optional: `from`, `subject`, `html` (HTML body), `cc`, `bcc`, `reply_to`. Returns a `message_id`. Vault credential `resend-api-key`. Use for run notifications, sending a generated artifact's link, or a human-in-the-loop hand-off (e.g. email the operator the PR link after `swe.solve`).
 
 ### Blog
 - `blog.publish` — Publish a post to a Ghost blog (live Admin API) OR write rendered markdown/HTML to the helmdeck artifact store. Two body modes: pass `body` directly OR pass `prompt+model` and the pack expands the body via the gateway LLM. Two formats: `markdown` (default; rendered via goldmark when Ghost wants HTML) or `html` (passes through). Vault credential `ghost-admin-key` (id:hexsecret) for Ghost destination. Composes naturally with `research.deep` (find sources) → `content.ground` (cite sources in the body) → `blog.publish` (ship it).

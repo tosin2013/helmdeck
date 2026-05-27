@@ -230,6 +230,26 @@ Use helmdeck__github-search to search {{TYPE}} for: {{QUERY}}.
 
 ---
 
+## Communication
+
+#### `email.send` — send a transactional email
+
+**Template**
+```
+Use helmdeck__email-send to email {{TO}} with subject "{{SUBJECT}}" and body:
+{{HTML}}
+```
+
+**Variables**
+- `{{TO}}` — recipient address (input `to`, required).
+- `{{SUBJECT}}` — subject line (input `subject`, optional).
+- `{{HTML}}` — HTML body (input `html`, optional).
+- `{{FROM}}` — sender address (input `from`, optional). Also `cc`, `bcc`, `reply_to`.
+
+**Notes** — sends via Resend; needs the `resend-api-key` vault credential. Returns a `message_id`.
+
+---
+
 ## Blog
 
 #### `blog.publish` — render/publish a post

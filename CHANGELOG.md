@@ -14,6 +14,7 @@ and the hard exit gates for each — see
 ### Added
 
 - **Pipeline runs reject unfilled `{{PLACEHOLDER}}` inputs.** An input whose value is still a literal prompt-template variable (e.g. `title` = `{{TITLE}}`, pasted from the prompt-template docs without substituting) now fails fast with a `caller_fixable` error that names the input and tells the agent to fill it — ask the user for a value, or propose one and confirm it — instead of silently running and producing a post titled `{{TITLE}}`.
+- **`helmdeck-debug` integration-debugger skill.** A second installable agent skill (`skills/helmdeck-debug/SKILL.md`) that sweeps every pipeline + pack — a static check of the definitions (oversold descriptions, unguarded inputs, schema-vs-handler drift, failure misclassification) plus a live end-to-end run sweep classified by `failure_class` — and drafts a ready-to-file GitHub issue per real bug, confirming before it files anything. Both installers now ship it: `scripts/configure-openclaw.sh` installs every `skills/*/SKILL.md`, and the new `scripts/configure-claude.sh` installs them into a project's `.claude/skills/`.
 
 ### Changed
 

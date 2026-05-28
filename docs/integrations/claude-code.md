@@ -96,6 +96,17 @@ echo >> CLAUDE.md && curl -fsSL https://raw.githubusercontent.com/tosin2013/helm
 
 For a project-wide skill that applies to every helmdeck-using repo, see Claude Code's `--append-system-prompt` flag.
 
+### Structured `.claude/skills/` install (from a checkout)
+
+If you have the helmdeck repo checked out, `scripts/configure-claude.sh` installs every skill as an invocable Claude Code skill under `<project>/.claude/skills/<name>/SKILL.md` (re-stamping `helmdeckVersion` from git HEAD), instead of pasting into `CLAUDE.md`:
+
+```bash
+# From the helmdeck checkout; --project defaults to $PWD:
+./scripts/configure-claude.sh --project /path/to/your/project
+```
+
+This installs both `helmdeck` (the pack catalog/contracts) and `helmdeck-debug` (an integration debugger you can invoke to audit pipelines + draft GitHub issues — see [helmdeck-debug.md](./helmdeck-debug)). Restart Claude Code so it picks up `.claude/skills/`.
+
 Verify: run `claude` in that directory and ask *"what helmdeck packs do you know about?"* — the model should list the full catalog (browser, web, repo, github, fs, cmd, git, http, doc, slides, vision, language). If it doesn't, the skill didn't load.
 
 Refresh after pulling a new helmdeck release — the catalog grows over time.

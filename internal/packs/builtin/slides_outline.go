@@ -45,6 +45,8 @@ const (
 	slidesOutlineMaxTokensFloor = 2048
 	slidesOutlineMaxTokensCeil  = 8192
 
+	slidesOutlineDefaultPersona = "general"
+
 	slidesOutlineSystemPrompt = `You are a presentation designer. Restate the user's content as a Marp slide deck.
 
 Rules:
@@ -52,16 +54,62 @@ Rules:
 - Separate EVERY slide with a line containing only three dashes: ---
 - Produce between 2 and %d slides. Cover the material faithfully; do not pad to hit a number and do not cram everything onto one slide.
 - Each slide: a short "#" or "##" title, then a few concise bullet points (not paragraphs).
-- Start with a title slide and end with a short summary/closing slide.%s`
+- REQUIRED: the FIRST slide is a TITLE slide — a single "#" deck title with NO bullets (add a one-line subtitle/byline only if an Author is given). The LAST slide is a CLOSING slide. These are not optional.
+- If an Author/byline is provided, put it as a one-line subtitle on the title slide.
+- Structure skeleton (--- are the slide separators):
+    # Deck Title
+
+    ---
+
+    ## A section
+    - a concise point
+
+    ---
+
+    ## Closing
+    - the closing for this audience%s%s`
 
 	slidesOutlineNarrationRule = "\n- After each slide's visible content, add an HTML comment with 1-3 sentences of spoken narration for that slide: <!-- narration here -->"
 )
+
+// slidesOutlinePersonas maps a known audience persona to a 1-2 line style
+// directive injected into the system prompt — it shapes tone, what to emphasize,
+// and what the closing slide should do. An unknown non-empty persona is treated
+// as a freeform audience hint (see resolvePersonaDirective), never rejected.
+var slidesOutlinePersonas = map[string]string{
+	"general":     "Audience: general. Use clear, jargon-light language. Closing slide: a concise recap of the key takeaways.",
+	"technical":   "Audience: technical/engineering. Be precise; keep concrete details, APIs, and trade-offs. Closing slide: a recap plus clear next steps / how to get started.",
+	"marketing":   "Audience: marketing/prospects. Lead with benefits and outcomes, not internals. Closing slide: a strong call-to-action (what to do next, where to learn more).",
+	"executive":   "Audience: executives. Emphasize impact, cost, risk, and decisions; minimize detail. Closing slide: the decision/ask and expected outcome.",
+	"educational": "Audience: learners. Build concepts step by step with simple examples. Closing slide: a recap plus suggested practice / further reading.",
+}
+
+// resolvePersonaDirective returns the style directive to inject into the prompt
+// and the canonical label to report in persona_used. Empty → the default
+// persona; a known key → its directive; an unknown non-empty string → a freeform
+// audience hint (so callers aren't limited to the fixed set).
+func resolvePersonaDirective(p string) (directive, used string) {
+	key := strings.ToLower(strings.TrimSpace(p))
+	if key == "" {
+		key = slidesOutlineDefaultPersona
+	}
+	if d, ok := slidesOutlinePersonas[key]; ok {
+		return d, key
+	}
+	trimmed := strings.TrimSpace(p)
+	return "Tailor tone, emphasis, and the closing slide for this audience: " + trimmed, trimmed
+}
 
 type slidesOutlineInput struct {
 	Text      string `json:"text"`
 	Model     string `json:"model"`
 	MaxSlides int    `json:"max_slides"`
 	Title     string `json:"title"`
+	// Author, when set, becomes the title-slide byline.
+	Author string `json:"author"`
+	// Persona shapes tone + the closing slide (general/technical/marketing/
+	// executive/educational, or any freeform audience string). Default general.
+	Persona string `json:"persona"`
 	// Narration is a *bool so absent means "default on" — emit `<!-- … -->`
 	// speaker notes (needed by slides.narrate; harmless for slides.render).
 	Narration *bool `json:"narration,omitempty"`
@@ -82,6 +130,8 @@ func SlidesOutline(d vision.Dispatcher) *packs.Pack {
 				"model":      "string",
 				"max_slides": "number",
 				"title":      "string",
+				"author":     "string",
+				"persona":    "string",
 				"narration":  "boolean",
 				"max_tokens": "number",
 			},
@@ -89,9 +139,11 @@ func SlidesOutline(d vision.Dispatcher) *packs.Pack {
 		OutputSchema: packs.BasicSchema{
 			Required: []string{"markdown", "slide_count", "model"},
 			Properties: map[string]string{
-				"markdown":    "string",
-				"slide_count": "number",
-				"model":       "string",
+				"markdown":        "string",
+				"slide_count":     "number",
+				"model":           "string",
+				"has_title_slide": "boolean",
+				"persona_used":    "string",
 			},
 		},
 		Handler: slidesOutlineHandler(d),
@@ -140,11 +192,21 @@ func slidesOutlineHandler(d vision.Dispatcher) packs.HandlerFunc {
 		if in.Narration != nil && !*in.Narration {
 			narrationRule = ""
 		}
-		system := fmt.Sprintf(slidesOutlineSystemPrompt, maxSlides, narrationRule)
+		personaDirective, personaUsed := resolvePersonaDirective(in.Persona)
+		system := fmt.Sprintf(slidesOutlineSystemPrompt, maxSlides, narrationRule, "\n- "+personaDirective)
 
-		user := in.Text
+		// Carry the title + author into the user message so the model places
+		// them on the title slide it generates.
+		var hdr []string
 		if t := strings.TrimSpace(in.Title); t != "" {
-			user = "Title: " + t + "\n\n" + in.Text
+			hdr = append(hdr, "Title: "+t)
+		}
+		if a := strings.TrimSpace(in.Author); a != "" {
+			hdr = append(hdr, "Author/byline: "+a)
+		}
+		user := in.Text
+		if len(hdr) > 0 {
+			user = strings.Join(hdr, "\n") + "\n\n" + in.Text
 		}
 
 		ec.Report(10, fmt.Sprintf("outlining into up to %d slides", maxSlides))
@@ -170,6 +232,27 @@ func slidesOutlineHandler(d vision.Dispatcher) packs.HandlerFunc {
 				Message: "gateway returned an empty deck"}
 		}
 
+		// Title-slide guarantee: when a title is provided and the model didn't
+		// lead with a matching title slide, prepend one (with the author byline).
+		// We don't invent a title when none was given — we rely on the prompt.
+		// Done BEFORE splitSlides so the prepended slide counts toward
+		// slide_count and the >=2 floor (a prepend can only raise the count).
+		heading, leadsWithTitle := slidesOutlineFirstHeading(deck)
+		hasTitleSlide := leadsWithTitle
+		if t := strings.TrimSpace(in.Title); t != "" {
+			matches := leadsWithTitle && strings.Contains(heading, strings.ToLower(t))
+			if !matches {
+				var b strings.Builder
+				b.WriteString("# " + t + "\n")
+				if a := strings.TrimSpace(in.Author); a != "" {
+					b.WriteString("\n" + a + "\n")
+				}
+				b.WriteString("\n---\n\n")
+				deck = b.String() + deck
+			}
+			hasTitleSlide = true
+		}
+
 		// Validate it's a real multi-slide deck using the SAME splitter
 		// slides.render / slides.narrate use — so the count we guarantee here
 		// is exactly what they'll see downstream.
@@ -181,12 +264,39 @@ func slidesOutlineHandler(d vision.Dispatcher) packs.HandlerFunc {
 		}
 
 		out := map[string]any{
-			"markdown":    deck,
-			"slide_count": len(slides),
-			"model":       in.Model,
+			"markdown":        deck,
+			"slide_count":     len(slides),
+			"model":           in.Model,
+			"has_title_slide": hasTitleSlide,
+			"persona_used":    personaUsed,
 		}
 		return json.Marshal(out)
 	}
+}
+
+// slidesOutlineFirstHeading returns the lowercased heading text of the deck's
+// FIRST slide when that slide leads with a Markdown heading (a title-slide
+// shape), and whether it found one. Used to decide whether the deck already
+// opens with a title slide — so the title-slide guarantee never duplicates one
+// the model produced. The match is intentionally loose (substring); the worst
+// case is a suppressed prepend or a benign extra title slide, never an invalid
+// deck.
+func slidesOutlineFirstHeading(deck string) (string, bool) {
+	slides := splitSlides(stripFrontmatter(deck))
+	if len(slides) == 0 {
+		return "", false
+	}
+	for _, line := range strings.Split(slides[0], "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "#") {
+			return "", false // first content isn't a heading → not a title slide
+		}
+		return strings.ToLower(strings.TrimSpace(strings.TrimLeft(line, "# "))), true
+	}
+	return "", false
 }
 
 // unwrapCodeFence strips a single ```…``` fence wrapping the entire string —

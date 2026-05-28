@@ -101,6 +101,7 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 - `content.ground` — Extract claims from markdown and insert source citation links. **Two modes:** pass `text` directly (no session needed) OR pass `clone_path` + `path` for a file in a cloned repo. Always use the `text` field when the user provides markdown inline — do NOT ask for a file path. Produces a downloadable `grounded.md` artifact. **Requires Firecrawl overlay.**
 
 ### Slides
+- `slides.outline` — Restate prose/markdown (a README, a research synthesis, scraped text) as a STRUCTURED Marp deck (`---`-separated slides with titles, bullets, speaker notes), ready for `slides.render`/`slides.narrate`. Feed prose through this FIRST — `slides.render`/`narrate` split only on `---`, so raw prose collapses onto one slide. Accepts `title`, `author`, and `persona` (see "Presentation structure & personas" below).
 - `slides.render` — Convert Marp markdown to PDF, PPTX, or HTML.
 - `slides.narrate` — Convert Marp markdown to a narrated MP4 video with ElevenLabs TTS and YouTube metadata. Speaker notes (`<!-- ... -->`) become narration. **CRITICAL: Pass the markdown EXACTLY as the user provides it — preserve `---` slide delimiters, `<!-- -->` HTML comments, and newlines. Do NOT escape or strip any formatting.** The markdown field must start with `---\nmarp: true\n---` frontmatter.
   - **Resource scaling**: encoding is sequential, so memory is bounded per-segment — not per-deck. Slide count scales **time** (~10-30s per slide) and **disk in `/tmp`** (~30-50 MB per segment MP4 until concat); it does **NOT** scale memory. The memory knob is `resolution`: default `1920x1080` needs ~1.1 GB for ffmpeg + ~700 MB for the Chromium baseline, which the session's 2 GB cap covers. Larger resolutions (e.g. `3840x2160`) may OOM — drop to `1280x720` if the user reports exit 137 from ffmpeg. Decks of 20-25 slides at 1080p are the tested default; anything much longer just takes longer, not more memory.
@@ -111,6 +112,16 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
     - **150-200 words/slide** → 15-20 min (long-form, viable for deep-dive content)
     - **250+ words/slide** → 25+ min (risky on retention unless the content is dense / entertainment-grade)
   When the user asks for a video about topic X without specifying a target length, default to **~100 words per slide** aiming for the 8-12 min sweet spot. When the user says "make me a 10-minute video from N slides," compute `target_words_per_slide ≈ (600 / N) * (150/60) ≈ 1500/N` and shape speaker notes to that word count. Trust `total_duration_s` in the result — that's the authoritative timing after ElevenLabs has actually synthesized.
+
+#### Presentation structure & personas
+
+Every deck should **open with a title slide** (a single `#` deck title, plus a one-line author byline if you have one) and **end with a closing slide**. Body slides use **bullets, not paragraphs**. For narrated decks, size speaker notes per the words-per-slide table above. Weak models often skip the title/closing slides, so don't rely on the model alone — use `slides.outline`'s inputs:
+
+- **`title`** — when you pass it, `slides.outline` *guarantees* a title slide: it prepends `# <title>` if the model omitted one, and won't duplicate one the model already wrote.
+- **`author`** — becomes the title-slide byline.
+- **`persona`** — shapes tone and the closing slide. Built-in personas: `general` (default), `technical` (precise; closing = next steps), `marketing` (benefits-led; closing = call-to-action), `executive` (impact/decision; closing = the ask), `educational` (step-by-step; closing = practice/further reading). Any other string is accepted as a freeform audience hint. The output echoes `persona_used` and `has_title_slide`.
+
+**Before you generate a deck, ASK THE USER for the title, author/byline, and target persona** (or propose sensible values and confirm them) — don't guess. Then pass them to `slides.outline`. The built-in deck pipelines (`grounded-deck`, `research-deck`, `repo-presentation`, …) don't take these as run inputs; to bake a persona into a saved workflow, **clone** the pipeline and set a literal `"persona":"…"` / `"author":"…"` in its `slides.outline` step.
 
 ### GitHub
 - `github.create_issue` — Create an issue on a GitHub repo.

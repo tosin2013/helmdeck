@@ -43,7 +43,9 @@ The output is bounded, not open-ended:
 | `text` | `string` | yes | — | The prose/markdown to restructure into slides. |
 | `model` | `string` | yes | — | Gateway model id (`provider/model`; see `helmdeck://models`). |
 | `max_slides` | `number` | no | 18 (cap 30) | Upper bound on slide count. |
-| `title` | `string` | no | — | Prepended as a deck title hint for the model. |
+| `title` | `string` | no | — | Deck title. Passed to the model AND used by the title-slide guarantee (see below). |
+| `author` | `string` | no | — | Author byline placed on the title slide. |
+| `persona` | `string` | no | `general` | Audience persona — shapes tone + the closing slide. Known: `general`, `technical`, `marketing`, `executive`, `educational`; any other string is a freeform audience hint. |
 | `narration` | `boolean` | no | `true` | Emit a `<!-- … -->` speaker note per slide (needed by `slides.narrate`; harmless for `slides.render`). |
 | `max_tokens` | `number` | no | derived | Completion-token budget (clamped to [2048, 8192]). |
 
@@ -54,6 +56,26 @@ The output is bounded, not open-ended:
 | `markdown` | `string` | The Marp deck — `---`-separated slides with titles, bullets, and (when `narration`) notes. |
 | `slide_count` | `number` | Number of slides the deck parses to (≥ 2). |
 | `model` | `string` | The model used. |
+| `has_title_slide` | `boolean` | Whether the deck opens with a title slide (always `true` when `title` was provided). |
+| `persona_used` | `string` | The persona applied (canonical key, or the freeform hint). |
+
+## Title-slide guarantee & personas
+
+The system prompt requires the model to open with a **title slide** and end with a
+**closing slide**, but weak models skip them. So when you pass **`title`**, the
+pack *guarantees* the title slide: it prepends `# <title>` (with the `author` as a
+byline) when the model didn't already lead with a matching title, and won't
+duplicate one it did write. Without a `title` input the pack doesn't invent one —
+it relies on the prompt. The **closing** slide is strongly prompted (and shaped by
+the persona) rather than force-appended, since a good closing needs the model's
+content.
+
+**`persona`** injects an audience-appropriate style directive and tells the model
+what the closing slide should do — `marketing` → a call-to-action, `executive` →
+the decision/ask, `technical` → next steps, etc. Agents should ask the user for
+the title, author, and persona (or propose + confirm) before generating. To bake a
+persona into a built-in pipeline, clone it and set a literal `"persona"`/`"author"`
+in its `slides.outline` step (built-ins don't expose these as run inputs).
 
 ## Async behavior
 

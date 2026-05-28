@@ -21,12 +21,21 @@
 #   - OpenRouter auth profile present in
 #     /root/.openclaw/agents/main/agent/auth-profiles.json
 #
+# After the per-pack round trips, it also runs every builtin pipeline
+# (ADR 041) end-to-end through the pipeline REST API and judges each by
+# the run's failure_class: a pack_bug failure fails the run; a
+# caller_fixable/transient/state_changed failure is reported but does NOT
+# fail (the pipeline wiring worked — the input/world/env was the cause).
+#
 # Usage:
-#   ./scripts/validate-openclaw.sh                       # full run
-#   ./scripts/validate-openclaw.sh --pack browser.screenshot_url  # one
+#   ./scripts/validate-openclaw.sh                       # packs + pipelines
+#   ./scripts/validate-openclaw.sh --pack browser.screenshot_url  # one pack
+#   ./scripts/validate-openclaw.sh --pipeline builtin.research-blog # one pipeline
+#   ./scripts/validate-openclaw.sh --pipelines-only      # skip packs
+#   ./scripts/validate-openclaw.sh --skip-pipelines      # packs only
 #   ./scripts/validate-openclaw.sh --skip-mcp-rewrite    # don't re-mint JWT
 #
-# Exits 0 if every test passed, 1 if any failed.
+# Exits 0 if every pack passed and no pipeline hit a pack_bug; 1 otherwise.
 
 set -euo pipefail
 
@@ -37,16 +46,27 @@ OPENCLAW_GATEWAY_CONTAINER="${OPENCLAW_GATEWAY_CONTAINER:-openclaw-openclaw-gate
 OPENCLAW_COMPOSE="${OPENCLAW_COMPOSE:-/root/openclaw/docker-compose.yml}"
 SIDECAR_OVERLAY="${SIDECAR_OVERLAY:-/root/helmdeck/deploy/compose/compose.openclaw-sidecar.yml}"
 HELMDECK_NETWORK="${HELMDECK_NETWORK:-baas-net}"
+# Pipeline validation knobs. Pipelines chain several packs (some heavy:
+# narrate renders video), so they poll to a generous deadline.
+PIPELINE_TIMEOUT="${PIPELINE_TIMEOUT:-900}"   # seconds to reach a terminal run state
+PIPELINE_POLL="${PIPELINE_POLL:-5}"           # seconds between run-status polls
 
 # CLI flags
 ONE_PACK=""
+ONE_PIPELINE=""
 SKIP_REWRITE=false
+SKIP_PACKS=false
+SKIP_PIPELINES=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pack) ONE_PACK="$2"; shift 2 ;;
+    --pipeline) ONE_PIPELINE="$2"; shift 2 ;;
     --skip-mcp-rewrite) SKIP_REWRITE=true; shift ;;
+    --skip-packs) SKIP_PACKS=true; shift ;;
+    --skip-pipelines) SKIP_PIPELINES=true; shift ;;
+    --pipelines-only) SKIP_PACKS=true; shift ;;
     -h|--help)
-      sed -n '2,30p' "$0" | sed 's|^# \?||'
+      sed -n '2,40p' "$0" | sed 's|^# \?||'
       exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 64 ;;
   esac
@@ -186,6 +206,78 @@ run_test() {
   fi
 }
 
+# Extract a top-level string field from a run-status JSON blob.
+run_field() {
+  python3 -c "import sys,json; print(json.load(sys.stdin).get('$1',''))" 2>/dev/null
+}
+
+# Run a builtin pipeline end-to-end via the REST API and judge it by the
+# run's failure_class — leaning on the pipeline failure-attribution
+# (ADR 044) the runner already produces:
+#
+#   succeeded                          → PASS (rc 0)
+#   failed + failure_class=pack_bug    → FAIL (rc 1)  — a real helmdeck bug
+#   failed + caller_fixable/transient/ → "ran, not a bug" (rc 2)  — the
+#     state_changed                       pipeline machinery worked; the
+#                                          input/world/env didn't cooperate
+#     (e.g. a Firecrawl overlay that's down, or a query with no sources).
+#
+# This is deliberately NOT driven through OpenClaw's LLM: a multi-step
+# pipeline started + polled by an agent prompt is too flaky to assert on.
+# We hit helmdeck's pipeline REST API directly (same JWT) so the result
+# reflects the pipeline, not the model's tool-use.
+#   $1 — display name   $2 — pipeline id   $3 — inputs JSON object
+run_pipeline_test() {
+  local name="$1" pid="$2" inputs="$3"
+  blue "── pipeline: $name ($pid)"
+
+  local resp run_id
+  if ! resp=$(curl -fsS -X POST "$HELMDECK_URL/api/v1/pipelines/$pid/run" \
+      -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+      -d "{\"inputs\":$inputs}" 2>&1); then
+    red "  ✗ failed to start run: $resp"
+    return 1
+  fi
+  run_id=$(printf '%s' "$resp" | run_field run_id)
+  if [[ -z "$run_id" ]]; then
+    red "  ✗ no run_id in start response: $resp"
+    return 1
+  fi
+  echo "  run_id=$run_id — polling up to ${PIPELINE_TIMEOUT}s"
+
+  local status="" fclass="" freason="" run
+  local deadline=$((SECONDS + PIPELINE_TIMEOUT))
+  while (( SECONDS < deadline )); do
+    if run=$(curl -fsS -H "Authorization: Bearer $JWT" \
+        "$HELMDECK_URL/api/v1/pipelines/$pid/runs/$run_id" 2>/dev/null); then
+      status=$(printf '%s' "$run" | run_field status)
+      if [[ "$status" == "succeeded" || "$status" == "failed" ]]; then
+        fclass=$(printf '%s' "$run" | run_field failure_class)
+        freason=$(printf '%s' "$run" | run_field failure_reason)
+        break
+      fi
+    fi
+    sleep "$PIPELINE_POLL"
+  done
+
+  case "$status" in
+    succeeded)
+      green "  ✓ pipeline succeeded (all steps ran)"
+      return 0 ;;
+    failed)
+      if [[ "$fclass" == "pack_bug" ]]; then
+        red "  ✗ FAILED — pack_bug (a real helmdeck bug): $freason"
+        return 1
+      fi
+      yellow "  ⚠ failed but NOT a pack bug (class=${fclass:-unknown}) — pipeline wiring is fine, the input/world/env is the cause:"
+      yellow "      $freason"
+      return 2 ;;
+    *)
+      red "  ✗ run did not reach a terminal state within ${PIPELINE_TIMEOUT}s (last status=${status:-none})"
+      return 1 ;;
+  esac
+}
+
 # ── pre-flight ────────────────────────────────────────────────────
 
 require_cmd docker
@@ -285,23 +377,82 @@ declare -a SKIPS=(
 PASS=0
 FAIL=0
 FAILED=()
-for entry in "${TESTS[@]}"; do
-  IFS='|' read -r name pack prompt <<<"$entry"
-  if [[ -n "$ONE_PACK" && "$pack" != "$ONE_PACK" ]]; then continue; fi
-  if run_test "$name" "$pack" "$prompt"; then
-    PASS=$((PASS + 1))
-  else
-    FAIL=$((FAIL + 1))
-    FAILED+=("$pack")
-  fi
+if [[ "$SKIP_PACKS" != true ]]; then
+  for entry in "${TESTS[@]}"; do
+    IFS='|' read -r name pack prompt <<<"$entry"
+    if [[ -n "$ONE_PACK" && "$pack" != "$ONE_PACK" ]]; then continue; fi
+    if run_test "$name" "$pack" "$prompt"; then
+      PASS=$((PASS + 1))
+    else
+      FAIL=$((FAIL + 1))
+      FAILED+=("$pack")
+    fi
+    echo
+  done
+fi
+
+# ── builtin pipelines (ADR 041) ───────────────────────────────────
+# Each runs end-to-end through the pipeline REST API and is judged by
+# the run's failure_class (see run_pipeline_test): pack_bug is a real
+# helmdeck bug and fails the run; caller_fixable/transient/state_changed
+# mean the pipeline wiring worked but the env/input didn't, so they're
+# reported, not failed. Inputs use the seed's baked openrouter/auto +
+# allow_silent_output, so most run with just the right service overlays
+# (Firecrawl for research/scrape, Docling for doc, hyperframes for video)
+# and no extra credentials. Queries are kept short/focused so research
+# steps actually find sources.
+declare -a PIPELINES=(
+  "grounded-deck|builtin.grounded-deck|{\"markdown\":\"# Helmdeck\\n\\nHelmdeck runs browser automation and capability packs inside sandboxed containers.\"}"
+  "grounded-blog|builtin.grounded-blog|{\"markdown\":\"# Helmdeck\\n\\nHelmdeck runs browser automation in sandboxed containers.\",\"title\":\"Helmdeck overview\"}"
+  "research-deck|builtin.research-deck|{\"query\":\"mnemonics memory techniques\"}"
+  "research-narrate|builtin.research-narrate|{\"query\":\"mnemonics memory techniques\"}"
+  "research-podcast|builtin.research-podcast|{\"query\":\"mnemonics memory techniques\"}"
+  "scrape-ground-blog|builtin.scrape-ground-blog|{\"url\":\"https://example.com\",\"title\":\"Example\"}"
+  "research-ground-deck|builtin.research-ground-deck|{\"query\":\"mnemonics memory techniques\"}"
+  "doc-ground-blog|builtin.doc-ground-blog|{\"source_url\":\"https://example.com\",\"title\":\"Example\"}"
+  "scrape-deck|builtin.scrape-deck|{\"url\":\"https://example.com\"}"
+  "research-blog|builtin.research-blog|{\"query\":\"mnemonics memory techniques\",\"title\":\"Mnemonics\"}"
+  "repo-readme-narrate|builtin.repo-readme-narrate|{\"repo_url\":\"https://github.com/octocat/Hello-World.git\"}"
+  "repo-readme-podcast|builtin.repo-readme-podcast|{\"repo_url\":\"https://github.com/octocat/Hello-World.git\"}"
+  "html-video|builtin.html-video|{\"composition_html\":\"<html><body><h1>Hello from helmdeck</h1></body></html>\"}"
+)
+
+PIPE_PASS=0
+PIPE_BUG=0
+PIPE_NONBUG=0
+PIPE_FAILED=()
+if [[ "$SKIP_PIPELINES" != true ]]; then
   echo
-done
+  blue "════ builtin pipelines — end-to-end via REST, fail only on pack_bug ════"
+  echo
+  for entry in "${PIPELINES[@]}"; do
+    IFS='|' read -r name pid inputs <<<"$entry"
+    if [[ -n "$ONE_PIPELINE" && "$pid" != "$ONE_PIPELINE" && "$name" != "$ONE_PIPELINE" ]]; then continue; fi
+    set +e
+    run_pipeline_test "$name" "$pid" "$inputs"
+    rc=$?
+    set -e
+    case "$rc" in
+      0) PIPE_PASS=$((PIPE_PASS + 1)) ;;
+      2) PIPE_NONBUG=$((PIPE_NONBUG + 1)) ;;
+      *) PIPE_BUG=$((PIPE_BUG + 1)); PIPE_FAILED+=("$pid") ;;
+    esac
+    echo
+  done
+fi
 
 echo
 blue "── results"
-green "  passed: $PASS"
+green "  packs passed:        $PASS"
 if [[ "$FAIL" -gt 0 ]]; then
-  red "  failed: $FAIL (${FAILED[*]})"
+  red "  packs failed:        $FAIL (${FAILED[*]})"
+fi
+green "  pipelines ok:        $PIPE_PASS"
+if [[ "$PIPE_NONBUG" -gt 0 ]]; then
+  yellow "  pipelines ran, non-bug failure: $PIPE_NONBUG (env/input — not a helmdeck bug)"
+fi
+if [[ "$PIPE_BUG" -gt 0 ]]; then
+  red "  pipelines pack_bug:  $PIPE_BUG (${PIPE_FAILED[*]})"
 fi
 echo
 yellow "── intentionally skipped (not bugs):"
@@ -310,4 +461,7 @@ for entry in "${SKIPS[@]}"; do
   printf '  %-35s %s\n' "$pack" "$reason"
 done
 
-[[ "$FAIL" -eq 0 ]]
+# Exit non-zero on any pack failure OR any pipeline pack_bug. A non-bug
+# pipeline failure (caller_fixable/transient/state_changed) does NOT fail
+# the run — the machinery worked; the input/world/env was the cause.
+[[ "$FAIL" -eq 0 && "$PIPE_BUG" -eq 0 ]]

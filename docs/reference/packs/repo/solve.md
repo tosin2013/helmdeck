@@ -22,6 +22,44 @@ gateway via litellm. The resolved git credential and the gateway API key are
 `repo.push`, and they never appear in the trajectory, the diff, the logs, or
 the pack output.
 
+## Why it works this way (design + what's novel)
+
+**Host, don't rebuild.** helmdeck doesn't ship its own coding agent — it runs
+the open-source [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent)
+loop and wraps it with what a hosted control plane already does well:
+credential injection, sandboxing, audit, and artifact capture. The pack is the
+*integration*, not the agent — the same "host upstream tools, don't reimplement
+them" stance as `research.deep` (Firecrawl) and `slides.render` (Marp).
+
+**The agent is credential-blind — this is the load-bearing property.** The
+agent process gets exactly two things: a writable clone and an
+OpenAI-compatible endpoint. The git token and the gateway key are injected
+out-of-band (`GIT_ASKPASS` / `GIT_SSH_COMMAND` / stdin → `OPENAI_API_KEY` set
+in the sidecar only) and never enter the agent's argv, the environment it can
+read back, the trajectory, the diff, the logs, or the pack output. An agent
+that goes off the rails can't exfiltrate a secret it never saw — the usual
+worry about "letting an LLM run `git`/`bash`" is structurally removed.
+
+**It runs in a throwaway sidecar, not on your host.** The loop executes inside
+a per-call mini-swe sidecar (2 GiB, 20-minute budget) over the clone, so any
+`bash` the agent decides to run is contained and the session is torn down
+after — the same isolation `repo.fetch` and the language packs rely on.
+
+**It never merges its own work.** `branch`/`pull_request` modes always cut a
+fresh `helmdeck/swe-solve-<sha>` branch and stop at a PR for a human to review.
+There is no auto-merge path; the invariant is enforced by a unit test (see
+[Never pushes to the default branch](#never-pushes-to-the-default-branch)).
+
+**Label an issue, get a PR.** The headline workflow ([auto-trigger](#auto-trigger-from-github-issues-adr-033-233-phase-6))
+closes the loop end-to-end — a labeled GitHub issue dispatches `swe.solve` in
+`pull_request` mode on a background context and comments the resulting PR back,
+with no human keystroke between "file the issue" and "review the patch."
+
+**Failures stay legible.** A run that fails is attributed like any pack: a bad
+`repo_url`/`task`, or an agent that produced no change, is `invalid_input`
+(caller-fixable — fix and re-run), not a `pack_bug` you should file an issue
+for. See [Error codes](#error-codes).
+
 ## Inputs
 
 | Field | Type | Required | Default | Notes |
@@ -111,7 +149,22 @@ extends the Python sidecar with `mini-swe-agent` (pinned, per ADR 037),
 
 ## Use it from your agent (OpenClaw chat-UI worked example)
 
-> *OpenClaw chat capture pending.*
+In the OpenClaw chat UI (which loads the `helmdeck__*` MCP tools), ask in plain
+language — the agent maps it to the `helmdeck__swe_solve` tool:
+
+> **You:** Use helmdeck swe.solve to clone
+> `https://github.com/octocat/Hello-World.git` and add a top-level
+> `CONTRIBUTING.md` with a one-paragraph intro. Use `mode: patch` so nothing is
+> pushed — just show me the diff.
+
+`swe.solve` is async, so the agent gets a task envelope back, polls it, and then
+reports the run's `summary` and `patch` (the unified diff). Review the diff in
+chat; nothing has touched the remote.
+
+To open a PR instead, point it at a repo you hold a `github-token` for and say
+*"…use `mode: pull_request`"* — the reply then includes the `pr_url` for a human
+to review and merge. (Tool-calling currently works through the **chat UI**, not
+the `openclaw agent` CLI — see [the OpenClaw integration note](/integrations/openclaw).)
 
 ## Developer reference (`curl`)
 

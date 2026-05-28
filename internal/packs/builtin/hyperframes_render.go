@@ -178,6 +178,39 @@ func resolvePreset(resolution, aspectRatio string) (resolutionPresetValue, error
 	return v, nil
 }
 
+// hyperframesCallerInputMarkers are stderr substrings the hyperframes CLI
+// emits when the failure is in the CALLER's composition, not in helmdeck —
+// a malformed root element, an unregistered timeline, or an output preset
+// whose orientation doesn't match the composition's own dimensions. Matched
+// case-insensitively. Kept narrow on purpose: a browser crash or ffmpeg
+// error contains none of these, so it stays handler_failed (a real pack bug).
+var hyperframesCallerInputMarkers = []string{
+	"does not match the aspect ratio", // output preset vs composition orientation
+	"data-composition-id",             // root_missing_composition_id
+	"data-width",                      // root_missing_dimensions
+	"data-height",
+	"__timelines", // missing_timeline_registry
+	"composition is missing",
+	"missing composition",
+	"unknown composition",
+}
+
+// hyperframesErrorCode picks the PackError code for a non-zero hyperframes
+// exit by inspecting stderr. Caller-input failures (a bad composition or a
+// mismatched preset) return CodeInvalidInput so the pipeline classifier
+// (ADR 044) reports them caller_fixable — "fix your composition and re-run" —
+// instead of pack_bug, which wrongly told callers to file a GitHub issue.
+// Anything else (the CLI crashed, ffmpeg blew up) stays CodeHandlerFailed.
+func hyperframesErrorCode(stderr string) packs.ErrorCode {
+	s := strings.ToLower(stderr)
+	for _, m := range hyperframesCallerInputMarkers {
+		if strings.Contains(s, m) {
+			return packs.CodeInvalidInput
+		}
+	}
+	return packs.CodeHandlerFailed
+}
+
 func hyperframesRenderHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
 	var in hyperframesRenderInput
 	if err := json.Unmarshal(ec.Input, &in); err != nil {
@@ -259,7 +292,21 @@ func hyperframesRenderHandler(ctx context.Context, ec *packs.ExecutionContext) (
 	renderRes, err := ec.Exec(ctx, session.ExecRequest{Cmd: args})
 	if err != nil || renderRes.ExitCode != 0 {
 		stderr := strings.TrimSpace(string(renderRes.Stderr))
-		return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+		// A non-zero exit splits two ways: a malformed COMPOSITION (caller
+		// input — missing data-composition-id/data-width/data-height, an
+		// unregistered timeline, or an output preset whose orientation
+		// doesn't match the composition's dimensions) vs a genuine
+		// render/encode failure (browser crash, ffmpeg error). Only the
+		// latter is a pack bug. Blanket CodeHandlerFailed classified bad
+		// compositions as pack_bug in pipelines — telling callers to file a
+		// GitHub issue for "fix your HTML." Map the known caller-input
+		// signatures to invalid_input → caller_fixable. (Transport errors,
+		// err != nil, stay handler_failed — the exec itself broke.)
+		code := packs.CodeHandlerFailed
+		if err == nil {
+			code = hyperframesErrorCode(stderr)
+		}
+		return nil, &packs.PackError{Code: code,
 			Message: fmt.Sprintf("hyperframes render failed (exit %d): %s",
 				renderRes.ExitCode, truncStr(stderr, 4096))}
 	}

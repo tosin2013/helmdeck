@@ -16,6 +16,12 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-05-28
+
+### Fixed
+
+- **Pipelines page "Copy prompt" button now works over plain HTTP.** `navigator.clipboard` only exists in a secure context (HTTPS or `localhost`), so on a Management UI served over plain HTTP on a LAN host the button hit an undefined clipboard, threw, and was silently swallowed — nothing reached the clipboard. It now falls back to a hidden-`<textarea>` + `execCommand('copy')` in non-secure contexts and reflects the real result (`Copied` / `Copy failed`), so it can never silently do nothing.
+
 ## [0.19.0] - 2026-05-28
 
 **Theme:** Repo presentations worth watching. `builtin.repo-presentation` (replacing `repo-readme-narrate`) builds a narrated deck from a repo's README **plus its docs and code structure** — not a paraphrase of the front page — backed by a new `repo.fetch` `docs` output.

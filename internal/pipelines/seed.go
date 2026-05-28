@@ -19,7 +19,7 @@ import "encoding/json"
 func Builtins() []*Pipeline {
 	return []*Pipeline{
 		pipe("builtin.grounded-deck", "Grounded slide deck",
-			"Fact-check + add citations to markdown (content.ground), structure it into a deck (slides.outline), then render a PDF.",
+			"Cite markdown's factual claims against web sources (content.ground), structure it into a deck (slides.outline), then render a PDF.",
 			// rewrite:false — citation-only grounding (a full-document
 			// rewrite is wasted here since slides.outline restructures the
 			// text into slides next). Blog pipelines keep rewrite:true.
@@ -28,7 +28,7 @@ func Builtins() []*Pipeline {
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.grounded-blog", "Grounded blog post",
-			"Fact-check + rewrite markdown, then publish it as a blog post.",
+			"Cite markdown's factual claims against web sources and strengthen the cited sentences (content.ground), then save the result as a blog-post artifact. Note: this grounds and cites — it does NOT rewrite into a new voice/structure — and it saves a markdown file by default; clone it with a Ghost credential to publish to a blog.",
 			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":true}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
@@ -50,13 +50,13 @@ func Builtins() []*Pipeline {
 			step("podcast", "podcast.generate", `{"source_text":"${{ steps.research.output.synthesis }}","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
 		),
 		pipe("builtin.scrape-ground-blog", "Scrape → ground → blog",
-			"Scrape a URL to markdown, fact-check + rewrite it, then publish a blog post.",
+			"Scrape a URL to markdown, cite its factual claims against web sources and strengthen the cited sentences (content.ground), then save the result as a blog-post artifact (clone with a Ghost credential to publish).",
 			step("scrape", "web.scrape", `{"url":"${{ inputs.url }}"}`),
 			step("ground", "content.ground", `{"text":"${{ steps.scrape.output.markdown }}","model":"openrouter/auto","rewrite":true}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
 		pipe("builtin.research-ground-deck", "Research → ground → deck",
-			"Deep-research a topic, fact-check + cite the synthesis, structure it into a deck (slides.outline), then render.",
+			"Deep-research a topic, cite the synthesis against web sources (content.ground), structure it into a deck (slides.outline), then render.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
 			// rewrite:false — citation-only; slides.outline structures the
 			// cited synthesis into slides next, so a prose rewrite is wasted.
@@ -65,7 +65,7 @@ func Builtins() []*Pipeline {
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.doc-ground-blog", "Document → ground → blog",
-			"Parse a document (PDF/DOCX/…) to markdown, fact-check + rewrite, then publish.",
+			"Parse a document (PDF/DOCX/…) to markdown, cite its factual claims against web sources and strengthen the cited sentences (content.ground), then save the result as a blog-post artifact (clone with a Ghost credential to publish).",
 			step("parse", "doc.parse", `{"source_url":"${{ inputs.source_url }}"}`),
 			step("ground", "content.ground", `{"text":"${{ steps.parse.output.markdown }}","model":"openrouter/auto","rewrite":true}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
@@ -77,7 +77,7 @@ func Builtins() []*Pipeline {
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.research-blog", "Research → blog",
-			"Deep-research a topic, then publish the synthesis directly as a blog post.",
+			"Deep-research a topic, then save the synthesis as a blog-post artifact (clone with a Ghost credential to publish to a blog).",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.research.output.synthesis }}"}`),
 		),

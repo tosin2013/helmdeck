@@ -8,11 +8,61 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
 )
+
+// unfilledPlaceholderRE matches a value that is *entirely* an
+// unsubstituted prompt-template variable like {{TITLE}} or {{REPO_URL}}
+// — the UPPER_SNAKE convention the docs use for "fill this in". We
+// anchor to the whole (trimmed) value on purpose: a short input whose
+// only content is {{TITLE}} is almost certainly a template the caller
+// pasted without substituting (the reported failure: title="{{TITLE}}"
+// silently published a post literally titled "{{TITLE}}"). Matching the
+// whole value — not any {{…}} substring — keeps real content (a markdown
+// body that happens to mention {{API_KEY}}) from false-positiving.
+var unfilledPlaceholderRE = regexp.MustCompile(`^\s*\{\{\s*[A-Z][A-Z0-9_]*\s*\}\}\s*$`)
+
+// validateInputsFilled rejects pipeline inputs whose value is still an
+// unfilled {{UPPER_SNAKE}} template placeholder, before the run starts.
+// The error is caller-fixable and prescribes the recovery so an agent
+// that forgot to substitute a variable is told what to do — ask the user
+// for a value, or propose one and confirm it — rather than running with
+// the literal placeholder and producing "{{TITLE}}" output. Shape errors
+// (inputs not an object) are left to the runner's own unmarshal.
+func validateInputsFilled(inputs json.RawMessage) error {
+	if len(inputs) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(inputs, &m); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic error across re-runs
+	for _, k := range keys {
+		s, ok := m[k].(string)
+		if !ok {
+			continue
+		}
+		if ph := strings.TrimSpace(s); unfilledPlaceholderRE.MatchString(s) {
+			return fmt.Errorf(
+				"input %q is still the template placeholder %s — fill it in before running "+
+					"(ask the user for a value, or propose one and confirm it), then re-run",
+				k, ph)
+		}
+	}
+	return nil
+}
 
 // runRegistry holds live run snapshots in memory (mirrors the MCP async
 // jobRegistry). Terminal runs are evicted after runTTL; durable history
@@ -81,6 +131,12 @@ func (r *Runner) StartRun(ctx context.Context, pipelineID string, inputs json.Ra
 	// Re-validate against the live registry — a referenced pack may have
 	// been unregistered since the pipeline was created.
 	if err := Validate(p, func(name, ver string) bool { _, e := r.resolve(name, ver); return e == nil }); err != nil {
+		return "", err
+	}
+	// Reject inputs the caller pasted from a prompt template but never
+	// filled (e.g. title="{{TITLE}}") — fail fast with a fixable message
+	// instead of running with the literal placeholder.
+	if err := validateInputsFilled(inputs); err != nil {
 		return "", err
 	}
 

@@ -16,6 +16,14 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Added
+
+- **Pipeline runs reject unfilled `{{PLACEHOLDER}}` inputs.** An input whose value is still a literal prompt-template variable (e.g. `title` = `{{TITLE}}`, pasted from the prompt-template docs without substituting) now fails fast with a `caller_fixable` error that names the input and tells the agent to fill it — ask the user for a value, or propose one and confirm it — instead of silently running and producing a post titled `{{TITLE}}`.
+
+### Changed
+
+- **Honest descriptions for the ground/blog built-in pipelines.** `grounded-blog`, `scrape-ground-blog`, `doc-ground-blog`, `research-blog`, `grounded-deck`, and `research-ground-deck` no longer say "fact-check + rewrite … publish." `content.ground` *cites* claims against web sources (and, in rewrite mode, strengthens the cited sentences) — it does not rewrite a post into a new voice or structure — and `blog.publish` *saves a markdown artifact by default* (publishing to Ghost requires cloning the pipeline with a credential + host). The descriptions and prompt-template docs now say so.
+
 ## [0.19.1] - 2026-05-28
 
 ### Fixed

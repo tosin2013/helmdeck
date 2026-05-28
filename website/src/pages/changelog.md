@@ -16,6 +16,10 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-05-28
+
+**Theme:** Repo presentations worth watching. `builtin.repo-presentation` (replacing `repo-readme-narrate`) builds a narrated deck from a repo's README **plus its docs and code structure** — not a paraphrase of the front page — backed by a new `repo.fetch` `docs` output.
+
 ### Added
 
 - **`repo.fetch` now surfaces a `docs` output** — concatenated markdown/adoc/rst from the repo's doc dirs (`docs/`, `doc/`, `content/`, …) plus top-level design docs (`ARCHITECTURE.md`, `DESIGN.md`, …), bounded to 16 KB with a path header per file (empty when the repo has none). Lets presentation/grounding pipelines ground on a project's real docs, not just its README.

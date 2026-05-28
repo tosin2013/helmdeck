@@ -16,6 +16,10 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.17.2] - 2026-05-28
+
+**Theme:** Honest failures — pipeline runs attribute failures correctly. A malformed input or a still-booting overlay no longer masquerades as a helmdeck `pack_bug` you should file an issue for: input problems are `caller_fixable`, and overlay-backed packs ride out a cold start instead of failing the first call. Plus the v0.17.1 `tts_chars` schema regression that broke every `slides.narrate`/`podcast.generate` run.
+
 ### Changed
 
 - **Overlay-backed packs now retry a still-booting service instead of failing on the first hit.** `research.deep` / `content.ground` / `web.scrape` (Firecrawl) and `doc.parse` (Docling) wrap their HTTP round-trip in a bounded cold-start retry: a connection-refused/reset or a 502/503/504 is treated as "still starting" and retried with exponential backoff (4 attempts, ~3.5s worst case). So the first pack or pipeline call from the OpenClaw chat UI after the stack — or an individual overlay — comes up waits a few seconds for readiness instead of surfacing a failed run. Genuine application errors (4xx/500) and successes return immediately and unchanged, so the pipeline failure classifier behaves exactly as before once the service is actually up.

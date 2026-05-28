@@ -50,6 +50,11 @@ HELMDECK_NETWORK="${HELMDECK_NETWORK:-baas-net}"
 # narrate renders video), so they poll to a generous deadline.
 PIPELINE_TIMEOUT="${PIPELINE_TIMEOUT:-900}"   # seconds to reach a terminal run state
 PIPELINE_POLL="${PIPELINE_POLL:-5}"           # seconds between run-status polls
+# Warm-up: give pipeline-backing services time to load before the loop so a
+# cold start isn't mistaken for a transient failure. Best-effort + bounded.
+WARMUP="${WARMUP:-true}"
+FIRECRAWL_CONTAINER="${FIRECRAWL_CONTAINER:-helmdeck-firecrawl}"
+FIRECRAWL_WARMUP_TIMEOUT="${FIRECRAWL_WARMUP_TIMEOUT:-90}"
 
 # CLI flags
 ONE_PACK=""
@@ -61,6 +66,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --pack) ONE_PACK="$2"; shift 2 ;;
     --pipeline) ONE_PIPELINE="$2"; shift 2 ;;
+    --no-warmup) WARMUP=false; shift ;;
     --skip-mcp-rewrite) SKIP_REWRITE=true; shift ;;
     --skip-packs) SKIP_PACKS=true; shift ;;
     --skip-pipelines) SKIP_PIPELINES=true; shift ;;
@@ -278,6 +284,49 @@ run_pipeline_test() {
   esac
 }
 
+# warm_up_pipeline_services gives the pipeline-backing services a chance to
+# finish loading before the loop hammers them, so a cold start doesn't show
+# up as a spurious `transient` failure. Best-effort and bounded — it never
+# blocks the run if a service simply isn't deployed (those pipelines just
+# report caller_fixable, which the gate doesn't count as a failure).
+#
+#   - Session sidecar: ensure the runtime's default image is present so the
+#     first session-backed pipeline (repo.fetch, slides.narrate, …) doesn't
+#     eat a cold image pull mid-run. The compose `sidecar-warm` one-shot
+#     normally does this; we re-assert in case the script runs standalone.
+#   - Firecrawl (research/scrape/doc pipelines): if its container exists,
+#     wait for the compose healthcheck to report healthy. If it's not
+#     deployed, skip — those pipelines surface caller_fixable, not a bug.
+warm_up_pipeline_services() {
+  if [[ "$WARMUP" != true ]]; then return; fi
+  blue "── warming pipeline services (best-effort, bounded)"
+
+  local sidecar="ghcr.io/tosin2013/helmdeck-sidecar:${HELMDECK_VERSION:-latest}"
+  if docker image inspect "$sidecar" >/dev/null 2>&1; then
+    green "  ✓ session sidecar image present"
+  else
+    yellow "  ⏳ pulling session sidecar image (cold first-run): $sidecar"
+    docker pull "$sidecar" >/dev/null 2>&1 \
+      && green "  ✓ session sidecar image pulled" \
+      || yellow "    (pull failed — first session-backed pipeline may be slow)"
+  fi
+
+  if docker ps -a --format '{{.Names}}' | grep -q "^${FIRECRAWL_CONTAINER}$"; then
+    yellow "  ⏳ waiting for Firecrawl to report healthy (up to ${FIRECRAWL_WARMUP_TIMEOUT}s)"
+    local deadline=$((SECONDS + FIRECRAWL_WARMUP_TIMEOUT)) st=""
+    while (( SECONDS < deadline )); do
+      st=$(docker inspect "$FIRECRAWL_CONTAINER" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || echo "")
+      [[ "$st" == "healthy" || "$st" == "none" ]] && break
+      sleep 3
+    done
+    if [[ "$st" == "healthy" ]]; then green "  ✓ Firecrawl healthy"
+    elif [[ "$st" == "none" ]]; then yellow "  • Firecrawl running (no healthcheck) — proceeding"
+    else yellow "  • Firecrawl not healthy after ${FIRECRAWL_WARMUP_TIMEOUT}s (status=${st:-unknown}) — its pipelines may report transient"; fi
+  else
+    yellow "  • Firecrawl overlay not deployed — research/scrape/doc pipelines will report caller_fixable (not a bug)"
+  fi
+}
+
 # ── pre-flight ────────────────────────────────────────────────────
 
 require_cmd docker
@@ -424,6 +473,8 @@ PIPE_FAILED=()
 if [[ "$SKIP_PIPELINES" != true ]]; then
   echo
   blue "════ builtin pipelines — end-to-end via REST, fail only on pack_bug ════"
+  echo
+  warm_up_pipeline_services
   echo
   for entry in "${PIPELINES[@]}"; do
     IFS='|' read -r name pid inputs <<<"$entry"

@@ -21,7 +21,7 @@ straight into them collapsed the whole document onto **one slide** — a degener
 ~7-second video that still reported success. `slides.outline` is the missing
 transform: it turns prose into an actual multi-slide deck. The built-in deck/narrate
 pipelines (`grounded-deck`, `research-deck`, `research-narrate`, `research-ground-deck`,
-`scrape-deck`, `repo-readme-narrate`) now insert it before rendering.
+`scrape-deck`, `repo-presentation`) now insert it before rendering.
 
 ## Deterministic bounds
 

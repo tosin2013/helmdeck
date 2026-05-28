@@ -81,10 +81,17 @@ func Builtins() []*Pipeline {
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.research.output.synthesis }}"}`),
 		),
-		pipe("builtin.repo-readme-narrate", "Repo → narrated deck",
-			"Clone a repo, structure its README into a deck (slides.outline), then render a narrated video.",
+		pipe("builtin.repo-presentation", "Repo → presentation video",
+			"Clone a repo, map its code structure (repo.map) and gather its docs, outline a deck from the README + docs + structure (slides.outline), then render a narrated video — a fuller picture than the README alone.",
 			step("fetch", "repo.fetch", `{"url":"${{ inputs.repo_url }}"}`),
-			step("outline", "slides.outline", `{"text":"${{ steps.fetch.output.readme.content }}","model":"openrouter/auto"}`),
+			// repo.map reuses repo.fetch's session (the runner auto-threads
+			// _session_id) so it reads the same clone and returns a symbol map.
+			step("map", "repo.map", `{"clone_path":"${{ steps.fetch.output.clone_path }}"}`),
+			// Feed the LLM the README + the repo's own docs + its code
+			// structure, so the deck reflects what the project is AND how it's
+			// built — not a paraphrase of the front page. docs.content is "" when
+			// the repo has none (repo.fetch always emits it), so this resolves.
+			step("outline", "slides.outline", `{"text":"# README\n${{ steps.fetch.output.readme.content }}\n\n# Project docs\n${{ steps.fetch.output.docs.content }}\n\n# Code structure (symbol map)\n${{ steps.map.output.map }}","model":"openrouter/auto"}`),
 			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":true}`),
 		),
 		pipe("builtin.repo-readme-podcast", "Repo → podcast",

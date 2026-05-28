@@ -28,7 +28,7 @@ func TestBuiltins_Valid(t *testing.T) {
 		}
 	}
 	// The two the user explicitly asked for must exist.
-	for _, want := range []string{"builtin.grounded-deck", "builtin.grounded-blog", "builtin.repo-readme-narrate"} {
+	for _, want := range []string{"builtin.grounded-deck", "builtin.grounded-blog", "builtin.repo-presentation"} {
 		if !ids[want] {
 			t.Errorf("missing expected starter %q", want)
 		}

@@ -96,6 +96,7 @@ func RepoFetch(v *vault.Store, eg *security.EgressGuard) *packs.Pack {
 				"tree_total":     "number",
 				"tree_truncated": "boolean",
 				"readme":         "object",
+				"docs":           "object",
 				"entrypoints":    "array",
 				"doc_hints":      "array",
 				"signals":        "object",
@@ -603,6 +604,39 @@ signals = {
     "sparse":          (doc_file_count + code_file_count) < 3,
 }
 
+# Docs content: concatenate the markdown/adoc/rst under known doc dirs (plus a
+# couple of top-level design docs), bounded, with a path header per file, so a
+# presentation pipeline can ground on the project's real docs — not just the
+# README. Always emitted (content "" when there are no docs) so a pipeline's
+# ${{ ...docs.content }} reference always resolves.
+DOCS_CONTENT_CAP = 16384
+readme_path_low = readme["path"].lower() if readme else ""
+TOP_DOCS = ("architecture.md", "design.md", "overview.md", "contributing.md")
+doc_paths = [
+    f for f in tree_all
+    if f.lower().endswith(DOC_EXTS)
+    and (f.split("/", 1)[0].lower() in DOC_DIRS or ("/" not in f and f.lower() in TOP_DOCS))
+    and f.lower() != readme_path_low
+]
+docs_parts, docs_used = [], 0
+for dp in sorted(doc_paths):
+    if docs_used >= DOCS_CONTENT_CAP:
+        break
+    try:
+        with open(dp, "rb") as fh:
+            chunk = fh.read(DOCS_CONTENT_CAP - docs_used).decode("utf-8", errors="replace")
+    except OSError:
+        continue
+    if not chunk.strip():
+        continue
+    docs_parts.append("## " + dp + "\n\n" + chunk)
+    docs_used += len(chunk)
+docs = {
+    "content":    "\n\n".join(docs_parts),
+    "file_count": len(doc_paths),
+    "truncated":  docs_used >= DOCS_CONTENT_CAP,
+}
+
 envelope = {
     "clone_path":     clone_path,
     "commit":         commit,
@@ -612,6 +646,7 @@ envelope = {
     "tree_total":     len(tree_all),
     "tree_truncated": tree_truncated,
     "readme":         readme,
+    "docs":           docs,
     "entrypoints":    entrypoints,
     "doc_hints": [
         "README*",

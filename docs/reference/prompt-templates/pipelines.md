@@ -59,12 +59,12 @@ edit the step input, and `POST` it back. The server gives the clone a fresh
 `${{ inputs.* }}` / `${{ steps.* }}` wiring) carries over unchanged.
 
 ```bash
-# Clone builtin.repo-readme-narrate and add a credential so it can clone a
+# Clone builtin.repo-presentation and add a credential so it can clone a
 # private repo. (JWT minted as in the swe.solve reference.)
 curl -fsS -H "Authorization: Bearer $JWT" \
-  http://localhost:3000/api/v1/pipelines/builtin.repo-readme-narrate \
+  http://localhost:3000/api/v1/pipelines/builtin.repo-presentation \
 | jq 'del(.id, .builtin, .created_at, .updated_at)
-      | .name = "repo-readme-narrate (private)"
+      | .name = "repo-presentation (private)"
       | .steps[0].input.credential = "github-token"' \
 | curl -fsS -X POST http://localhost:3000/api/v1/pipelines \
     -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' -d @-
@@ -224,18 +224,18 @@ title = {{TITLE}}
 
 ## Repo & video pipelines
 
-#### `builtin.repo-readme-narrate` — clone a repo, narrate a deck from its README
+#### `builtin.repo-presentation` — clone a repo, narrate a deck from its README + docs + structure
 
 **Template**
 ```
-Use helmdeck__pipeline-run to run the builtin.repo-readme-narrate pipeline with inputs:
+Use helmdeck__pipeline-run to run the builtin.repo-presentation pipeline with inputs:
 repo_url = {{REPO_URL}}
 ```
 
 **Variables**
 - `{{REPO_URL}}` — the git repo to clone (input `repo_url`, required). Public repos work as-is; for private, clone the pipeline and add a `credential`.
 
-**Notes** — `repo.fetch` → `slides.narrate` from the README. Silent without an `elevenlabs-key`.
+**Notes** — `repo.fetch` → `repo.map` → `slides.outline` → `slides.narrate`. Builds the deck from the README **plus the repo's docs and code structure** (a fuller picture than the README alone). Silent without an `elevenlabs-key`.
 
 #### `builtin.repo-readme-podcast` — clone a repo, generate a podcast about it
 

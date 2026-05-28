@@ -560,8 +560,10 @@ print_summary() {
   echo
   printf "  %sLoad the agent skills (required for the model to know which packs to call):%s\n" "${C_BOLD}" "${C_RESET}"
   printf "    Skill bundle (catalog + contracts): %sdocs/integrations/SKILLS.md%s\n" "${C_DIM}" "${C_RESET}"
-  printf "    OpenClaw users: already stamped by %sscripts/configure-openclaw.sh%s\n" "${C_DIM}" "${C_RESET}"
-  printf "    Other clients:  per-integration doc above has a %sLoad the agent skills%s subsection\n" "${C_DIM}" "${C_RESET}"
+  printf "    Both installers also add %shelmdeck-debug%s — invoke it to audit pipelines/integrations + draft GitHub issues.\n" "${C_DIM}" "${C_RESET}"
+  printf "    OpenClaw users:    %sscripts/configure-openclaw.sh%s stamps all skills\n" "${C_DIM}" "${C_RESET}"
+  printf "    Claude Code users: %sscripts/configure-claude.sh --project <dir>%s installs all skills into .claude/skills/\n" "${C_DIM}" "${C_RESET}"
+  printf "    Other clients:     per-integration doc above has a %sLoad the agent skills%s subsection\n" "${C_DIM}" "${C_RESET}"
   echo
   printf "  %sFirst session note:%s\n" "${C_BOLD}" "${C_RESET}"
   printf "    The browser sidecar image was just built. Your first session create call\n"

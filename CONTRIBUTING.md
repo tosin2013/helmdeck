@@ -135,6 +135,10 @@ the project also welcomes:
   are `{{UPPERCASE}}` and must map to real inputs.
 - **Bug fixes** — file an issue first if it's non-trivial; small
   fixes (typos, obvious bugs) can come straight as a PR.
+- **Integration-debugger heuristics** — the `helmdeck-debug` skill
+  (`skills/helmdeck-debug/SKILL.md`) sweeps every pipeline/pack for known
+  bug classes. When you fix a new *class* of bug, add a check for it to the
+  skill's static pass so the debugger catches the next instance.
 - **ADR drafts** for design decisions you think the project should
   formalize. ADRs live in `docs/adrs/` and follow the existing
   numbered template.

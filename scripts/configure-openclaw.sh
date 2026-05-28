@@ -17,6 +17,7 @@
 # Usage:
 #   ./scripts/configure-openclaw.sh                           # configure agents.defaults
 #   ./scripts/configure-openclaw.sh --agent coder             # configure agents.coder only
+#   ./scripts/configure-openclaw.sh --skill helmdeck-debug    # install just one skill (default: all)
 #   ./scripts/configure-openclaw.sh --seed-identity           # also seed IDENTITY/USER/SOUL
 #   ./scripts/configure-openclaw.sh --rotate-jwt              # force fresh JWT
 #   ./scripts/configure-openclaw.sh --model <id>              # pin a different primary model
@@ -45,6 +46,7 @@ ROTATE_JWT="false"
 SKIP_MCP="false"
 SKIP_SKILLS="false"
 DO_SMOKE="false"
+SKILL_ONLY=""
 
 HELMDECK_ROOT="${HELMDECK_ROOT:-/root/helmdeck}"
 HELMDECK_ENV_FILE="${HELMDECK_ENV_FILE:-${HELMDECK_ROOT}/deploy/compose/.env.local}"
@@ -63,8 +65,9 @@ JWT_TTL_DAYS="${JWT_TTL_DAYS:-7}"
 JWT_REFRESH_WINDOW_HOURS="${JWT_REFRESH_WINDOW_HOURS:-24}"
 
 SKILLS_FILE="${SKILLS_FILE:-${HELMDECK_ROOT}/docs/integrations/SKILLS.md}"
-SKILL_FILE="${SKILL_FILE:-${HELMDECK_ROOT}/skills/helmdeck/SKILL.md}"
-SKILL_NAME="${SKILL_NAME:-helmdeck}"
+# Every skills/<name>/SKILL.md under this root is installed (helmdeck +
+# helmdeck-debug + any future skill). --skill <name> narrows to one.
+SKILLS_ROOT="${SKILLS_ROOT:-${HELMDECK_ROOT}/skills}"
 # Path inside the container where OpenClaw scans for machine-managed
 # skills (see /app/docs/tools/skills.md load precedence — managed
 # local skills live at ~/.openclaw/skills and are visible to every
@@ -81,6 +84,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--agent)          AGENT="$2"; shift 2 ;;
+		--skill)          SKILL_ONLY="$2"; shift 2 ;;
 		--model)          MODEL="$2"; shift 2 ;;
 		--fallbacks)      FALLBACKS_CSV="$2"; shift 2 ;;
 		--seed-identity)  SEED_IDENTITY="true"; shift ;;
@@ -282,53 +286,67 @@ fi
 # --- 4. install helmdeck as a native OpenClaw Skill ----------------------
 
 if [[ "$SKIP_SKILLS" == "true" ]]; then
-	log "skills: --skip-skills set, leaving skill and systemPromptOverride untouched"
+	log "skills: --skip-skills set, leaving skills and systemPromptOverride untouched"
 else
-	[[ -f "$SKILL_FILE" ]] || die "SKILL.md not found at $SKILL_FILE — run from a helmdeck checkout"
-	log "skills: installing $SKILL_NAME skill from $SKILL_FILE ($(wc -c < "$SKILL_FILE") bytes)"
+	# install_openclaw_skill re-stamps the helmdeckVersion frontmatter
+	# with the current git HEAD short-hash (so the installed skill points
+	# at whatever the operator has checked out, not the always-one-commit-
+	# stale baked-in stamp), copies SKILL.md into the managed-skill root
+	# (OpenClaw's loader finds it via the documented precedence), fixes
+	# ownership (docker cp lands as root; openclaw runs as `node`), and
+	# marks the skill enabled. The per-skill tmp file is removed at the end
+	# of each call so the loop below doesn't leak temp files.
+	install_openclaw_skill() {
+		local skill_name="$1" skill_file="$2"
+		log "skills: installing ${skill_name} from ${skill_file} ($(wc -c < "$skill_file") bytes)"
 
-	# Re-stamp the helmdeckVersion frontmatter with the current git
-	# HEAD short-hash before copying, so the installed skill points
-	# at whatever the operator has checked out — NOT whatever hash
-	# was baked in at commit time (which is always one commit stale
-	# for the SKILL.md file itself). Fall back to the committed
-	# stamp if we're not in a git checkout or git isn't installed.
-	stamp_tmp="$(mktemp -t helmdeck-skill.XXXXXX.md)"
-	# shellcheck disable=SC2064
-	trap "rm -f '$stamp_tmp'" EXIT
-	if git_hash="$(cd "$HELMDECK_ROOT" && git rev-parse --short HEAD 2>/dev/null)"; then
-		sed -E 's/(helmdeckVersion: *")[^"]*(")/\1'"$git_hash"'\2/' \
-			"$SKILL_FILE" > "$stamp_tmp"
-	else
-		cp "$SKILL_FILE" "$stamp_tmp"
-	fi
+		local stamp_tmp
+		stamp_tmp="$(mktemp -t helmdeck-skill.XXXXXX.md)"
+		if git_hash="$(cd "$HELMDECK_ROOT" && git rev-parse --short HEAD 2>/dev/null)"; then
+			sed -E 's/(helmdeckVersion: *")[^"]*(")/\1'"$git_hash"'\2/' "$skill_file" > "$stamp_tmp"
+		else
+			cp "$skill_file" "$stamp_tmp"
+		fi
 
-	# Copy SKILL.md into the managed-skill root so OpenClaw's loader
-	# finds it via the documented precedence. We provision the
-	# directory first so docker cp has a target (cp won't create
-	# intermediate dirs).
-	docker exec "$OPENCLAW_CONTAINER" mkdir -p "${OPENCLAW_SKILL_ROOT}/${SKILL_NAME}"
-	docker cp "$stamp_tmp" \
-		"${OPENCLAW_CONTAINER}:${OPENCLAW_SKILL_ROOT}/${SKILL_NAME}/SKILL.md"
-	# docker cp preserves the copier's uid (typically root on the host),
-	# but the openclaw process runs as `node` and can't read root-owned
-	# files. Fix ownership + mode so the skills loader can read the
-	# freshly-installed SKILL.md. Using -u root so chown has privilege
-	# regardless of the gateway entrypoint's default user.
-	docker exec -u root "$OPENCLAW_CONTAINER" sh -c \
-		"chown -R node:node '${OPENCLAW_SKILL_ROOT}/${SKILL_NAME}' && chmod 644 '${OPENCLAW_SKILL_ROOT}/${SKILL_NAME}/SKILL.md'"
+		# Provision the dir first (docker cp won't create intermediate dirs).
+		docker exec "$OPENCLAW_CONTAINER" mkdir -p "${OPENCLAW_SKILL_ROOT}/${skill_name}"
+		docker cp "$stamp_tmp" \
+			"${OPENCLAW_CONTAINER}:${OPENCLAW_SKILL_ROOT}/${skill_name}/SKILL.md"
+		# -u root so chown has privilege regardless of the gateway
+		# entrypoint's default user.
+		docker exec -u root "$OPENCLAW_CONTAINER" sh -c \
+			"chown -R node:node '${OPENCLAW_SKILL_ROOT}/${skill_name}' && chmod 644 '${OPENCLAW_SKILL_ROOT}/${skill_name}/SKILL.md'"
+		# Empty object means "enabled with default settings" — keeps a later
+		# explicit allowlist from accidentally hiding the skill.
+		docker exec "$OPENCLAW_CONTAINER" \
+			openclaw config set "skills.entries.${skill_name}" '{"enabled":true}' >/dev/null
 
-	# Mark the skill enabled in skills.entries so an explicit
-	# allowlist later doesn't accidentally hide it. Empty object
-	# means "enabled with default settings."
-	docker exec "$OPENCLAW_CONTAINER" \
-		openclaw config set "skills.entries.${SKILL_NAME}" '{"enabled":true}' >/dev/null
+		local stamp
+		stamp="$(grep -oE 'helmdeckVersion: *"[^"]+"' "$stamp_tmp" | head -1 | sed 's/.*"\([^"]*\)".*/\1/' || true)"
+		[[ -n "$stamp" ]] && log "skills: ${skill_name} stamped helmdeck version ${stamp}"
+		rm -f "$stamp_tmp"
+	}
 
-	# Clear any stale systemPromptOverride left over from the
-	# pre-skill era of this script. Two copies of the same prompt
-	# (one in systemPromptOverride, one loaded via the skill) would
-	# double the token bill and confuse the agent on conflicts.
-	# Using config unset so the key is removed, not set-to-empty.
+	[[ -d "$SKILLS_ROOT" ]] || die "skills root not found at $SKILLS_ROOT — run from a helmdeck checkout"
+	installed_any="false"
+	for skill_dir in "$SKILLS_ROOT"/*/; do
+		[[ -d "$skill_dir" ]] || continue
+		skill_name="$(basename "$skill_dir")"
+		skill_file="${skill_dir}SKILL.md"
+		[[ -f "$skill_file" ]] || { warn "skills: no SKILL.md in ${skill_dir}, skipping"; continue; }
+		if [[ -n "$SKILL_ONLY" && "$SKILL_ONLY" != "$skill_name" ]]; then
+			continue
+		fi
+		install_openclaw_skill "$skill_name" "$skill_file"
+		installed_any="true"
+	done
+	[[ "$installed_any" == "true" ]] || die "no skills installed (looked under ${SKILLS_ROOT}/*/SKILL.md; --skill='${SKILL_ONLY}')"
+
+	# Clear any stale systemPromptOverride left over from the pre-skill era
+	# of this script (global, runs once after all skills). Two copies of the
+	# same prompt (one in systemPromptOverride, one loaded via the skill)
+	# would double the token bill and confuse the agent on conflicts. Using
+	# config unset so the key is removed, not set-to-empty.
 	if docker exec "$OPENCLAW_CONTAINER" \
 		 openclaw config get "agents.${AGENT}.systemPromptOverride" 2>/dev/null \
 		 | grep -q 'helmdeck'; then
@@ -336,9 +354,6 @@ else
 			openclaw config unset "agents.${AGENT}.systemPromptOverride" >/dev/null 2>&1 || true
 		log "skills: cleared stale agents.${AGENT}.systemPromptOverride (migrated to skill)"
 	fi
-
-	stamp="$(grep -oE 'helmdeckVersion: *"[^"]+"' "$stamp_tmp" | head -1 | sed 's/.*"\([^"]*\)".*/\1/')"
-	[[ -n "$stamp" ]] && log "skills: stamped helmdeck version ${stamp}"
 fi
 
 # --- 5. pin a tool-capable model + fallback chain ------------------------

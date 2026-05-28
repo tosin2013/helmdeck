@@ -486,18 +486,44 @@ function buildPipelinePrompt(p: Pipeline): string {
   return `${header} with inputs:\n${lines}\n\nThen poll helmdeck__pipeline-run-status with the run_id until it's terminal.`;
 }
 
+// copyText writes to the clipboard, returning whether it succeeded. The async
+// Clipboard API only exists in a secure context (HTTPS or localhost); the
+// Management UI is frequently served over plain HTTP on a LAN host, where
+// navigator.clipboard is undefined. Fall back to a hidden-textarea +
+// execCommand('copy'), which works in non-secure contexts.
+async function copyText(text: string): Promise<boolean> {
+  if (window.isSecureContext && navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      /* fall through to the legacy path */
+    }
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 // CopyPromptButton copies an agent prompt for the pipeline to the clipboard.
 function CopyPromptButton({ pipeline }: { pipeline: Pipeline }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
   async function copy(e: MouseEvent) {
     e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(buildPipelinePrompt(pipeline));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable (e.g. non-secure context) — no-op */
-    }
+    const ok = await copyText(buildPipelinePrompt(pipeline));
+    setState(ok ? 'copied' : 'failed');
+    setTimeout(() => setState('idle'), 1500);
   }
   return (
     <Button
@@ -506,8 +532,8 @@ function CopyPromptButton({ pipeline }: { pipeline: Pipeline }) {
       title="Copy an agent prompt to run this pipeline"
       onClick={copy}
     >
-      {copied ? <Check className="mr-1 h-3 w-3" /> : <ClipboardCopy className="mr-1 h-3 w-3" />}
-      {copied ? 'Copied' : 'Copy prompt'}
+      {state === 'copied' ? <Check className="mr-1 h-3 w-3" /> : <ClipboardCopy className="mr-1 h-3 w-3" />}
+      {state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed' : 'Copy prompt'}
     </Button>
   );
 }

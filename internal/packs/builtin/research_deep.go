@@ -205,15 +205,19 @@ func callFirecrawlSearch(ctx context.Context, base string, body firecrawlSearchR
 	}
 	httpCtx, cancel := context.WithTimeout(ctx, researchTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(httpCtx, "POST", base+"/v1/search", bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, &packs.PackError{Code: packs.CodeInternal, Message: err.Error(), Cause: err}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
 	client := &http.Client{Timeout: researchTimeout}
-	resp, err := client.Do(req)
+	// Retry while Firecrawl is still booting (cold start / restart) so the
+	// first call from the chat UI doesn't fail on a few-seconds readiness
+	// gap. reqFn rebuilds the request each attempt (the body is consumed).
+	resp, err := coldStartRetry(httpCtx, client, func() (*http.Request, error) {
+		r, e := http.NewRequestWithContext(httpCtx, "POST", base+"/v1/search", bytes.NewReader(bodyBytes))
+		if e != nil {
+			return nil, e
+		}
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Accept", "application/json")
+		return r, nil
+	})
 	if err != nil {
 		return nil, &packs.PackError{
 			Code:    packs.CodeHandlerFailed,

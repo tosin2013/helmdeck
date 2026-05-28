@@ -16,6 +16,10 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Changed
+
+- **Overlay-backed packs now retry a still-booting service instead of failing on the first hit.** `research.deep` / `content.ground` / `web.scrape` (Firecrawl) and `doc.parse` (Docling) wrap their HTTP round-trip in a bounded cold-start retry: a connection-refused/reset or a 502/503/504 is treated as "still starting" and retried with exponential backoff (4 attempts, ~3.5s worst case). So the first pack or pipeline call from the OpenClaw chat UI after the stack — or an individual overlay — comes up waits a few seconds for readiness instead of surfacing a failed run. Genuine application errors (4xx/500) and successes return immediately and unchanged, so the pipeline failure classifier behaves exactly as before once the service is actually up.
+
 ### Fixed
 
 - **`slides.narrate` / `podcast.generate` failed every real run with `invalid_output: field "tts_chars": expected number, got object`** (regression from v0.17.1). #299 declared the `tts_chars` cost-output field as `number`, but both handlers emit a per-speaker/per-slide breakdown *map* (with a `_total` key, see `computeTTSChars`/`computeSlideTTSChars`). The engine validates handler output against the declared OutputSchema on every `Execute`, so the mismatch failed `slides.narrate`, `podcast.generate`, and any pipeline using them (e.g. `builtin.repo-readme-narrate`). Corrected the declaration to `object`. The unit tests missed it because they call the pack handler directly, bypassing the engine's output validation — a new output-schema contract test now validates each pack's real output against its declared schema, so this class of drift fails in CI.

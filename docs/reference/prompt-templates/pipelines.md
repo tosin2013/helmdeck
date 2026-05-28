@@ -15,6 +15,13 @@ pipelines? Read [How a pipeline run works](#how-a-pipeline-run-works) just
 below; see [SKILL.md](/integrations/SKILLS) for when to run a pipeline vs. call
 packs directly.
 
+> **Fill every `{{VARIABLE}}` before running.** They are placeholders, not
+> defaults — an agent should ask the user for each value, or propose one (e.g.
+> a generated `title`) and confirm it, before calling `helmdeck__pipeline-run`.
+> An input left as a literal `{{TITLE}}` is **rejected** with a `caller_fixable`
+> error (the run never starts), rather than silently producing a post titled
+> "{{TITLE}}". Fill it in and re-run.
+
 > Provider-dependent steps degrade gracefully: podcast/narrate pipelines run
 > silently without an `elevenlabs-key`; grounding/research need the Firecrawl
 > overlay; `blog.publish` defaults to an artifact (no Ghost needed).
@@ -91,7 +98,7 @@ markdown = {{MARKDOWN}}
 
 **Notes** — runs `content.ground` (rewrite) → `slides.render` (PDF). Needs the Firecrawl overlay for grounding.
 
-#### `builtin.grounded-blog` — fact-check markdown, then publish a blog post
+#### `builtin.grounded-blog` — cite markdown's claims, then save it as a blog-post artifact
 
 **Template**
 ```
@@ -101,10 +108,10 @@ title = {{TITLE}}
 ```
 
 **Variables**
-- `{{MARKDOWN}}` — the markdown to ground + publish (input `markdown`, required).
+- `{{MARKDOWN}}` — the markdown to ground (input `markdown`, required).
 - `{{TITLE}}` — blog post title (input `title`, required).
 
-**Notes** — `content.ground` (rewrite) → `blog.publish` (markdown artifact by default).
+**Notes** — `content.ground` (rewrite) → `blog.publish` (markdown artifact by default). `content.ground` adds `[source](url)` citations to the claims it can verify and tightens those sentences — it does **not** rewrite the post into a new voice or structure, and unverified claims are reported (in `skipped`) and left as-is. `blog.publish` saves a markdown file by default; to publish to a Ghost blog, clone the pipeline and add a `credential` + `host` (see [Customizing a built-in](#customizing-a-built-in-private-repos-models-voices)).
 
 #### `builtin.research-deck` — research a topic, render it as a deck
 
@@ -158,7 +165,7 @@ query = {{QUERY}}
 
 **Notes** — `research.deep` → `content.ground` (rewrite) → `slides.render`.
 
-#### `builtin.research-blog` — research a topic, publish the synthesis as a blog post
+#### `builtin.research-blog` — research a topic, save the synthesis as a blog-post artifact
 
 **Template**
 ```
@@ -171,7 +178,7 @@ title = {{TITLE}}
 - `{{QUERY}}` — the topic to research (input `query`, required).
 - `{{TITLE}}` — blog post title (input `title`, required).
 
-**Notes** — `research.deep` → `blog.publish`.
+**Notes** — `research.deep` → `blog.publish`. Saves a markdown artifact by default; clone with a `credential` + `host` to publish to Ghost.
 
 ---
 
@@ -190,7 +197,7 @@ url = {{URL}}
 
 **Notes** — `web.scrape` → `slides.render`. Needs the Firecrawl overlay.
 
-#### `builtin.scrape-ground-blog` — scrape a URL, fact-check, publish a blog post
+#### `builtin.scrape-ground-blog` — scrape a URL, cite its claims, save a blog-post artifact
 
 **Template**
 ```
@@ -203,9 +210,9 @@ title = {{TITLE}}
 - `{{URL}}` — the page to scrape (input `url`, required).
 - `{{TITLE}}` — blog post title (input `title`, required).
 
-**Notes** — `web.scrape` → `content.ground` (rewrite) → `blog.publish`. Needs Firecrawl.
+**Notes** — `web.scrape` → `content.ground` (rewrite) → `blog.publish`. Needs Firecrawl. `content.ground` cites + tightens verified claims (not a voice/structure rewrite); `blog.publish` saves a markdown artifact by default — clone with a `credential` + `host` to publish to Ghost.
 
-#### `builtin.doc-ground-blog` — parse a document, fact-check, publish a blog post
+#### `builtin.doc-ground-blog` — parse a document, cite its claims, save a blog-post artifact
 
 **Template**
 ```
@@ -218,7 +225,7 @@ title = {{TITLE}}
 - `{{SOURCE_URL}}` — URL of the document (PDF/DOCX/PPTX/…) to parse (input `source_url`, required).
 - `{{TITLE}}` — blog post title (input `title`, required).
 
-**Notes** — `doc.parse` → `content.ground` (rewrite) → `blog.publish`. Needs the Docling overlay (parse) + Firecrawl (ground).
+**Notes** — `doc.parse` → `content.ground` (rewrite) → `blog.publish`. Needs the Docling overlay (parse) + Firecrawl (ground). `content.ground` cites + tightens verified claims (not a voice/structure rewrite); `blog.publish` saves a markdown artifact by default — clone with a `credential` + `host` to publish to Ghost.
 
 ---
 

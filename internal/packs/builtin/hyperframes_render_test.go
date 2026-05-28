@@ -441,3 +441,32 @@ func TestHyperframesRender_NeedsSession(t *testing.T) {
 		t.Error("SessionSpec.Image must be set so the engine picks the right sidecar")
 	}
 }
+
+// TestHyperframesErrorCode_CallerInputVsPackBug guards the classification
+// added for the html-video pipeline failure: a malformed composition or a
+// preset/orientation mismatch is caller_fixable (CodeInvalidInput), not a
+// pack bug. Genuine render/encode crashes stay CodeHandlerFailed. (The
+// aspect-mismatch string is the verbatim stderr from a real failed run.)
+func TestHyperframesErrorCode_CallerInputVsPackBug(t *testing.T) {
+	callerInput := []string{
+		"outputResolution landscape (1920×1080) does not match the aspect ratio of the composition (1080×1920). Pick a preset whose orientation matches.",
+		"Root composition is missing `data-composition-id`.",
+		"Root composition is missing `data-width` or `data-height`.",
+		"Missing `window.__timelines` registration.",
+	}
+	for _, s := range callerInput {
+		if got := hyperframesErrorCode(s); got != packs.CodeInvalidInput {
+			t.Errorf("caller-input stderr classified %q, want invalid_input:\n  %s", got, s)
+		}
+	}
+	packBug := []string{
+		"Error: Failed to launch the browser process! /usr/bin/chromium: error while loading shared libraries",
+		"ffmpeg exited with code 139 (segfault)",
+		"page crashed",
+	}
+	for _, s := range packBug {
+		if got := hyperframesErrorCode(s); got != packs.CodeHandlerFailed {
+			t.Errorf("genuine-failure stderr classified %q, want handler_failed:\n  %s", got, s)
+		}
+	}
+}

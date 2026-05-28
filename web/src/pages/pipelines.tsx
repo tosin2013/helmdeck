@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Bug, GitBranch, Play, RotateCw, Workflow } from 'lucide-react';
+import { Bug, Check, ClipboardCopy, GitBranch, Play, RotateCw, Workflow } from 'lucide-react';
 
 import {
   Card,
@@ -36,6 +36,9 @@ interface Step {
   id: string;
   pack: string;
   version?: string;
+  // Raw step input; may contain ${{ inputs.* }} refs we scan to build the
+  // copy-prompt template. The API returns it on the list response.
+  input?: unknown;
 }
 
 interface Pipeline {
@@ -78,6 +81,18 @@ export function PipelinesPage() {
     ['pipelines'],
     '/api/v1/pipelines',
   );
+  // One cheap poll across all pipelines tells us which ones are running now,
+  // so the list shows live activity without expanding each row.
+  const { data: allRuns } = useApi<Run[]>(
+    ['pipeline-runs-all'],
+    '/api/v1/pipeline-runs',
+    { refetchInterval: 3_000 },
+  );
+  const activeIds = new Set(
+    (allRuns ?? [])
+      .filter((r) => r.status === 'running' || r.status === 'pending')
+      .map((r) => r.pipeline_id),
+  );
   const [selected, setSelected] = useState<Pipeline | null>(null);
   const [runOpen, setRunOpen] = useState<Pipeline | null>(null);
 
@@ -91,10 +106,18 @@ export function PipelinesPage() {
             to run; agents create more via the <code className="rounded bg-muted px-1.5 py-0.5">helmdeck__pipeline-*</code> MCP tools.
           </p>
         </div>
-        <Badge variant="outline">
-          <Workflow className="mr-1 h-3 w-3" />
-          {pipelines?.length ?? 0} pipelines
-        </Badge>
+        <div className="flex items-center gap-2">
+          {activeIds.size > 0 && (
+            <Badge variant="warning">
+              <span className="mr-1 inline-block h-2 w-2 animate-pulse rounded-full bg-current" />
+              {activeIds.size} running
+            </Badge>
+          )}
+          <Badge variant="outline">
+            <Workflow className="mr-1 h-3 w-3" />
+            {pipelines?.length ?? 0} pipelines
+          </Badge>
+        </div>
       </div>
 
       {error && (
@@ -145,7 +168,15 @@ export function PipelinesPage() {
                     onClick={() => setSelected(p)}
                   >
                     <TableCell>
-                      <div className="font-medium">{p.name}</div>
+                      <div className="flex items-center gap-2 font-medium">
+                        {p.name}
+                        {activeIds.has(p.id) && (
+                          <Badge variant="warning" className="gap-1">
+                            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+                            running
+                          </Badge>
+                        )}
+                      </div>
                       {p.description && (
                         <div className="text-xs text-muted-foreground">{p.description}</div>
                       )}
@@ -162,17 +193,20 @@ export function PipelinesPage() {
                       {formatRelative(p.updated_at)}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setRunOpen(p);
-                        }}
-                      >
-                        <Play className="mr-1 h-3 w-3" />
-                        Run
-                      </Button>
+                      <div className="flex justify-end gap-2">
+                        <CopyPromptButton pipeline={p} />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRunOpen(p);
+                          }}
+                        >
+                          <Play className="mr-1 h-3 w-3" />
+                          Run
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))
@@ -419,4 +453,61 @@ function issueURL(r: Run): string {
 function stripURL(reason?: string): string {
   if (!reason) return '';
   return reason.replace(/https:\/\/github\.com\/\S+/, '').replace(/:\s*$/, '').trim();
+}
+
+// pipelineInputVars scans every step's input for ${{ inputs.X }} references
+// and returns the unique variable names in first-seen order — exactly the
+// inputs a caller must supply. Generated from the live definition, so the
+// copy-prompt can't drift from the pipeline.
+function pipelineInputVars(p: Pipeline): string[] {
+  const re = /\$\{\{\s*inputs\.([a-zA-Z_][\w]*)\s*\}\}/g;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of p.steps ?? []) {
+    if (s.input === undefined) continue;
+    const text = typeof s.input === 'string' ? s.input : JSON.stringify(s.input);
+    for (const m of text.matchAll(re)) {
+      if (!seen.has(m[1])) {
+        seen.add(m[1]);
+        out.push(m[1]);
+      }
+    }
+  }
+  return out;
+}
+
+// buildPipelinePrompt produces a copy-paste prompt that asks an agent (e.g. in
+// the OpenClaw chat UI) to run this pipeline, with a fill-in line per input.
+function buildPipelinePrompt(p: Pipeline): string {
+  const header = `Use helmdeck__pipeline-run to run the ${p.id} pipeline`;
+  const vars = pipelineInputVars(p);
+  if (vars.length === 0) return `${header} (it takes no inputs). Then poll helmdeck__pipeline-run-status with the run_id.`;
+  const lines = vars.map((v) => `${v} = {{${v.toUpperCase()}}}`).join('\n');
+  return `${header} with inputs:\n${lines}\n\nThen poll helmdeck__pipeline-run-status with the run_id until it's terminal.`;
+}
+
+// CopyPromptButton copies an agent prompt for the pipeline to the clipboard.
+function CopyPromptButton({ pipeline }: { pipeline: Pipeline }) {
+  const [copied, setCopied] = useState(false);
+  async function copy(e: MouseEvent) {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(buildPipelinePrompt(pipeline));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable (e.g. non-secure context) — no-op */
+    }
+  }
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      title="Copy an agent prompt to run this pipeline"
+      onClick={copy}
+    >
+      {copied ? <Check className="mr-1 h-3 w-3" /> : <ClipboardCopy className="mr-1 h-3 w-3" />}
+      {copied ? 'Copied' : 'Copy prompt'}
+    </Button>
+  );
 }

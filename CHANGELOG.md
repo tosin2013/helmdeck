@@ -14,6 +14,7 @@ and the hard exit gates for each — see
 ### Added
 
 - **`slides.outline` pack** — restates prose/markdown (a README, a `research.deep` synthesis, `content.ground` output) as a *structured* Marp deck: `---`-separated slides with titles, bullets, and `<!-- speaker notes -->`, ready for `slides.render`/`slides.narrate`. Bounded by a `max_slides` ceiling and a clamped completion-token budget, and it **guarantees a multi-slide deck or fails `invalid_input` ("content too thin")** rather than emitting a degenerate one-slide deck.
+- **Pipelines page (Management UI): live "running" indicators + a per-pipeline "Copy prompt" button.** The `/pipelines` page polls a new `GET /api/v1/pipeline-runs` (recent runs across all pipelines) and shows a pulsing **running** badge on any pipeline with an active run, plus an **N running** header count — so you can see what's executing without expanding each row. Each pipeline also gets a **Copy prompt** button that copies a ready-to-paste agent prompt (`helmdeck__pipeline-run …`) with a fill-in line per `${{ inputs.* }}` the pipeline declares — generated from the live definition, so it can't drift from the actual inputs.
 
 ### Changed
 

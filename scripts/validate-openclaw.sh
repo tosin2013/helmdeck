@@ -461,7 +461,7 @@ declare -a PIPELINES=(
   "doc-ground-blog|builtin.doc-ground-blog|{\"source_url\":\"https://example.com\",\"title\":\"Example\"}"
   "scrape-deck|builtin.scrape-deck|{\"url\":\"https://example.com\"}"
   "research-blog|builtin.research-blog|{\"query\":\"mnemonics memory techniques\",\"title\":\"Mnemonics\"}"
-  "repo-readme-narrate|builtin.repo-readme-narrate|{\"repo_url\":\"https://github.com/octocat/Hello-World.git\"}"
+  "repo-presentation|builtin.repo-presentation|{\"repo_url\":\"https://github.com/octocat/Hello-World.git\"}"
   "repo-readme-podcast|builtin.repo-readme-podcast|{\"repo_url\":\"https://github.com/octocat/Hello-World.git\"}"
   "html-video|builtin.html-video|{\"composition_html\":\"<html><body><h1>Hello from helmdeck</h1></body></html>\"}"
 )

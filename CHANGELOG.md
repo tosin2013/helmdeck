@@ -11,6 +11,14 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Added
+
+- **`repo.fetch` now surfaces a `docs` output** — concatenated markdown/adoc/rst from the repo's doc dirs (`docs/`, `doc/`, `content/`, …) plus top-level design docs (`ARCHITECTURE.md`, `DESIGN.md`, …), bounded to 16 KB with a path header per file (empty when the repo has none). Lets presentation/grounding pipelines ground on a project's real docs, not just its README.
+
+### Changed
+
+- **`builtin.repo-readme-narrate` replaced by `builtin.repo-presentation`.** The old starter fed only the README to `slides.outline`, so a thin README produced a shallow deck. The new pipeline chains `repo.fetch → repo.map → slides.outline → slides.narrate`, building the deck from the README **plus the repo's docs and code structure** (`repo.map`'s symbol map) — a fuller picture of what the project is and how it's built. Same `repo_url` input; the `builtin.repo-readme-narrate` id is gone.
+
 ## [0.18.0] - 2026-05-28
 
 **Theme:** Pipelines you can see and trust. The deck/narrate pipelines now turn prose into a real multi-slide deck via the new `slides.outline` pack — no more a whole README collapsing onto one slide and rendering a degenerate 7-second video — and the Management UI shows which pipelines are running plus a copy-paste agent prompt for each.

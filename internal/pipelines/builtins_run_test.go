@@ -52,7 +52,8 @@ var builtinPackStubs = map[string]stubSpec{
 	"content.ground": {output: `{"grounded_text":"# Grounded [source](https://example.com)\n\n---\n\n## Two"}`},
 	"web.scrape":     {output: `{"markdown":"# Scraped\n\n---\n\n## Two"}`},
 	"doc.parse":      {output: `{"markdown":"# Parsed\n\n---\n\n## Two"}`},
-	"repo.fetch":     {output: `{"readme":{"content":"# README\n\n---\n\n## Two"},"clone_path":"/repos/x"}`},
+	"repo.fetch":     {output: `{"readme":{"content":"# README\n\n---\n\n## Two"},"docs":{"content":"## docs/guide.md\n\nguide body","file_count":1,"truncated":false},"clone_path":"/repos/x"}`},
+	"repo.map":       {output: `{"map":"pkg/x.go:\n  func Foo\n  struct Bar","tokens_estimated":42}`},
 	"slides.outline": {output: `{"markdown":"# Deck\n\n---\n\n## Two\n\n---\n\n## Three","slide_count":3,"model":"openrouter/auto"}`},
 	// Artifact producers (the terminal step of every built-in pipeline).
 	"slides.render":      {output: `{"format":"pdf","artifact_key":"%KEY%","size":1024}`, artifact: true, artName: "deck.pdf", contentType: "application/pdf", content: []byte("%PDF-1.4 stub")},

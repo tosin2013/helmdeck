@@ -11,6 +11,14 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Added
+
+- **`slides.outline` pack** — restates prose/markdown (a README, a `research.deep` synthesis, `content.ground` output) as a *structured* Marp deck: `---`-separated slides with titles, bullets, and `<!-- speaker notes -->`, ready for `slides.render`/`slides.narrate`. Bounded by a `max_slides` ceiling and a clamped completion-token budget, and it **guarantees a multi-slide deck or fails `invalid_input` ("content too thin")** rather than emitting a degenerate one-slide deck.
+
+### Changed
+
+- **Deck & narrate pipelines now structure prose into a real deck before rendering.** `grounded-deck`, `research-deck`, `research-narrate`, `research-ground-deck`, `scrape-deck`, and `repo-readme-narrate` used to feed raw prose (a README, a synthesis, grounded text) straight into `slides.render`/`slides.narrate`, which split slides only on `---` — so prose with no `---` collapsed onto a single slide and produced a degenerate ~7-second silent video that still reported `succeeded`. They now insert a `slides.outline` step, so a README or synthesis becomes a genuine multi-slide deck — or fails legibly (`caller_fixable`) when the content is too thin. Podcast pipelines are unaffected (`podcast.generate` already turns source text into a multi-speaker script).
+
 ## [0.17.2] - 2026-05-28
 
 **Theme:** Honest failures — pipeline runs attribute failures correctly. A malformed input or a still-booting overlay no longer masquerades as a helmdeck `pack_bug` you should file an issue for: input problems are `caller_fixable`, and overlay-backed packs ride out a cold start instead of failing the first call. Plus the v0.17.1 `tts_chars` schema regression that broke every `slides.narrate`/`podcast.generate` run.

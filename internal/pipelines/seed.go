@@ -19,13 +19,13 @@ import "encoding/json"
 func Builtins() []*Pipeline {
 	return []*Pipeline{
 		pipe("builtin.grounded-deck", "Grounded slide deck",
-			"Fact-check + add citations to markdown (content.ground), then render a PDF deck.",
-			// rewrite:false — a full-document prose rewrite reflows a
-			// slide deck and (when long) truncates it; citation-only
-			// grounding preserves every slide. Blog pipelines keep
-			// rewrite:true; decks do not.
+			"Fact-check + add citations to markdown (content.ground), structure it into a deck (slides.outline), then render a PDF.",
+			// rewrite:false — citation-only grounding (a full-document
+			// rewrite is wasted here since slides.outline restructures the
+			// text into slides next). Blog pipelines keep rewrite:true.
 			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":false}`),
-			step("render", "slides.render", `{"markdown":"${{ steps.ground.output.grounded_text }}","format":"pdf"}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto"}`),
+			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.grounded-blog", "Grounded blog post",
 			"Fact-check + rewrite markdown, then publish it as a blog post.",
@@ -33,14 +33,16 @@ func Builtins() []*Pipeline {
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
 		pipe("builtin.research-deck", "Research → slide deck",
-			"Deep-research a topic, then render the synthesis as a slide deck.",
+			"Deep-research a topic, structure the synthesis into a deck (slides.outline), then render a PDF.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
-			step("render", "slides.render", `{"markdown":"${{ steps.research.output.synthesis }}","format":"pdf"}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto"}`),
+			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.research-narrate", "Research → narrated video",
-			"Deep-research a topic, then render a narrated slide video.",
+			"Deep-research a topic, structure the synthesis into a deck (slides.outline), then render a narrated video.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
-			step("narrate", "slides.narrate", `{"markdown":"${{ steps.research.output.synthesis }}","allow_silent_output":true}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto"}`),
+			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":true}`),
 		),
 		pipe("builtin.research-podcast", "Research → podcast",
 			"Deep-research a topic, then generate a multi-speaker podcast.",
@@ -54,13 +56,13 @@ func Builtins() []*Pipeline {
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
 		pipe("builtin.research-ground-deck", "Research → ground → deck",
-			"Deep-research a topic, fact-check + cite the synthesis, then render a deck.",
+			"Deep-research a topic, fact-check + cite the synthesis, structure it into a deck (slides.outline), then render.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
-			// rewrite:false — same rationale as builtin.grounded-deck:
-			// the grounded text feeds slides.render, so keep the deck
-			// structure intact by adding citations only.
+			// rewrite:false — citation-only; slides.outline structures the
+			// cited synthesis into slides next, so a prose rewrite is wasted.
 			step("ground", "content.ground", `{"text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto","rewrite":false}`),
-			step("render", "slides.render", `{"markdown":"${{ steps.ground.output.grounded_text }}","format":"pdf"}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto"}`),
+			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.doc-ground-blog", "Document → ground → blog",
 			"Parse a document (PDF/DOCX/…) to markdown, fact-check + rewrite, then publish.",
@@ -69,9 +71,10 @@ func Builtins() []*Pipeline {
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
 		pipe("builtin.scrape-deck", "Scrape → slide deck",
-			"Scrape a URL to markdown, then render it as a slide deck (no grounding).",
+			"Scrape a URL to markdown, structure it into a deck (slides.outline), then render a PDF (no grounding).",
 			step("scrape", "web.scrape", `{"url":"${{ inputs.url }}"}`),
-			step("render", "slides.render", `{"markdown":"${{ steps.scrape.output.markdown }}","format":"pdf"}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.scrape.output.markdown }}","model":"openrouter/auto"}`),
+			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.research-blog", "Research → blog",
 			"Deep-research a topic, then publish the synthesis directly as a blog post.",
@@ -79,9 +82,10 @@ func Builtins() []*Pipeline {
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.research.output.synthesis }}"}`),
 		),
 		pipe("builtin.repo-readme-narrate", "Repo → narrated deck",
-			"Clone a repo and render a narrated slide deck from its README.",
+			"Clone a repo, structure its README into a deck (slides.outline), then render a narrated video.",
 			step("fetch", "repo.fetch", `{"url":"${{ inputs.repo_url }}"}`),
-			step("narrate", "slides.narrate", `{"markdown":"${{ steps.fetch.output.readme.content }}","allow_silent_output":true}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.fetch.output.readme.content }}","model":"openrouter/auto"}`),
+			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":true}`),
 		),
 		pipe("builtin.repo-readme-podcast", "Repo → podcast",
 			"Clone a repo and generate a podcast about it from its README.",

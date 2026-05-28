@@ -617,6 +617,12 @@ func main() {
 			// inside a session-local clone) and LLM-backed, so
 			// like research.deep it rides this conditional block.
 			builtin.ContentGround(visionDispatcher),
+			// slides.outline — restate prose (a README, a research
+			// synthesis, grounded text) as a structured Marp deck before
+			// slides.render/narrate. LLM-backed, so it rides this block.
+			// The deck/narrate pipelines (seed.go) insert it so prose no
+			// longer collapses to a single slide.
+			builtin.SlidesOutline(visionDispatcher),
 			// T406 (revived): slides.narrate — Marp slides → narrated
 			// MP4 video via ElevenLabs TTS + ffmpeg + YouTube metadata
 			// via gateway LLM. Vault-stored ElevenLabs API key; degrades

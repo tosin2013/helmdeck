@@ -53,6 +53,7 @@ var builtinPackStubs = map[string]stubSpec{
 	"web.scrape":     {output: `{"markdown":"# Scraped\n\n---\n\n## Two"}`},
 	"doc.parse":      {output: `{"markdown":"# Parsed\n\n---\n\n## Two"}`},
 	"repo.fetch":     {output: `{"readme":{"content":"# README\n\n---\n\n## Two"},"clone_path":"/repos/x"}`},
+	"slides.outline": {output: `{"markdown":"# Deck\n\n---\n\n## Two\n\n---\n\n## Three","slide_count":3,"model":"openrouter/auto"}`},
 	// Artifact producers (the terminal step of every built-in pipeline).
 	"slides.render":      {output: `{"format":"pdf","artifact_key":"%KEY%","size":1024}`, artifact: true, artName: "deck.pdf", contentType: "application/pdf", content: []byte("%PDF-1.4 stub")},
 	"slides.narrate":     {output: `{"video_artifact_key":"%KEY%","total_duration_s":5}`, artifact: true, artName: "deck.mp4", contentType: "video/mp4", content: []byte("\x00\x00\x00\x18ftypmp42 stub")},

@@ -10,9 +10,10 @@ One template per built-in pipeline (a saved, multi-step chain). Replace every
 `{{VARIABLE}}`, then ask your agent to run it — the agent calls
 `helmdeck__pipeline-run` with your values, returns a `run_id`, and polls
 `helmdeck__pipeline-run-status`. Variables map to the pipeline's
-`${{ inputs.* }}` references (see `internal/pipelines/seed.go`). See the
-[pipelines overview](/reference/packs/repo/solve) and [SKILL.md](/integrations/SKILLS)
-for when to run a pipeline vs. call packs directly.
+`${{ inputs.* }}` references (see `internal/pipelines/seed.go`). New to
+pipelines? Read [How a pipeline run works](#how-a-pipeline-run-works) just
+below; see [SKILL.md](/integrations/SKILLS) for when to run a pipeline vs. call
+packs directly.
 
 > Provider-dependent steps degrade gracefully: podcast/narrate pipelines run
 > silently without an `elevenlabs-key`; grounding/research need the Firecrawl
@@ -24,6 +25,54 @@ for when to run a pipeline vs. call packs directly.
 > a one-line `failure_reason`. Re-run with the same inputs via
 > `helmdeck__pipeline-rerun`. See [When a pipeline fails](/howto/when-a-pipeline-fails).
 > For a step's `model`, pick a routable id from `helmdeck://models`.
+
+---
+
+## How a pipeline run works
+
+Every template below drives the same four-step loop — your agent handles it; you
+just supply the inputs:
+
+1. **Start** — the agent calls `helmdeck__pipeline-run` with the pipeline id and
+   your `inputs`, and gets a `run_id` back immediately (runs are **async**; a
+   narrate/podcast/video pipeline can take minutes).
+2. **Poll** — `helmdeck__pipeline-run-status` with the `run_id` reports `status`
+   (`pending` → `running` → `succeeded` / `failed`), each step's output, and the
+   artifacts each step produced.
+3. **Collect** — on `succeeded`, the run lists each step's artifacts (a PDF,
+   MP4, MP3, or a published-post URL/key); fetch the final one by its artifact
+   key.
+4. **Recover** — on `failed`, read `failure_class` + `failure_reason` and
+   `helmdeck__pipeline-rerun` (see the callout above). A `caller_fixable`
+   failure means *your* input/model needs a tweak, not that helmdeck is broken.
+
+Inputs map 1:1 to the pipeline's `${{ inputs.* }}` references — each template's
+**Variables** list is exactly the set that pipeline needs, nothing more.
+
+## Customizing a built-in (private repos, models, voices)
+
+The built-ins are **read-only** — editing one returns `builtin_readonly`. To
+change a step's input — add a `credential` for a private repo, pin a `model`,
+set podcast `speakers`/`plan` — **clone it**: fetch the builtin's definition,
+edit the step input, and `POST` it back. The server gives the clone a fresh
+`pipe_<id>` and `builtin: false`; everything else (including the
+`${{ inputs.* }}` / `${{ steps.* }}` wiring) carries over unchanged.
+
+```bash
+# Clone builtin.repo-readme-narrate and add a credential so it can clone a
+# private repo. (JWT minted as in the swe.solve reference.)
+curl -fsS -H "Authorization: Bearer $JWT" \
+  http://localhost:3000/api/v1/pipelines/builtin.repo-readme-narrate \
+| jq 'del(.id, .builtin, .created_at, .updated_at)
+      | .name = "repo-readme-narrate (private)"
+      | .steps[0].input.credential = "github-token"' \
+| curl -fsS -X POST http://localhost:3000/api/v1/pipelines \
+    -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' -d @-
+```
+
+The response includes the new `pipe_<id>`; run it exactly like a built-in
+(`helmdeck__pipeline-run` with that id). Your agent can do the same through the
+pipeline CRUD tools instead of `curl`.
 
 ---
 

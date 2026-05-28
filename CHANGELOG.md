@@ -11,6 +11,10 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-05-28
+
+**Theme:** Pipelines you can see and trust. The deck/narrate pipelines now turn prose into a real multi-slide deck via the new `slides.outline` pack — no more a whole README collapsing onto one slide and rendering a degenerate 7-second video — and the Management UI shows which pipelines are running plus a copy-paste agent prompt for each.
+
 ### Added
 
 - **`slides.outline` pack** — restates prose/markdown (a README, a `research.deep` synthesis, `content.ground` output) as a *structured* Marp deck: `---`-separated slides with titles, bullets, and `<!-- speaker notes -->`, ready for `slides.render`/`slides.narrate`. Bounded by a `max_slides` ceiling and a clamped completion-token budget, and it **guarantees a multi-slide deck or fails `invalid_input` ("content too thin")** rather than emitting a degenerate one-slide deck.

@@ -106,3 +106,36 @@ func TestStore_RunHistory(t *testing.T) {
 		t.Errorf("ListRuns len = %d", len(runs))
 	}
 }
+
+// TestStore_ListAllRuns covers the cross-pipeline query behind the Management
+// UI's "which pipelines are running" poll: it must return runs spanning every
+// pipeline, which the per-pipeline ListRuns can't.
+func TestStore_ListAllRuns(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for _, rc := range []struct {
+		id, pid string
+		st      RunStatus
+	}{
+		{"run_a", "p1", RunRunning},
+		{"run_b", "p2", RunSucceeded},
+	} {
+		if err := s.CreateRun(ctx, &Run{ID: rc.id, PipelineID: rc.pid, Status: rc.st, StartedAt: s.now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs, err := s.ListAllRuns(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("ListAllRuns len = %d, want 2 (spans pipelines)", len(runs))
+	}
+	pids := map[string]bool{}
+	for _, r := range runs {
+		pids[r.PipelineID] = true
+	}
+	if !pids["p1"] || !pids["p2"] {
+		t.Errorf("ListAllRuns should span pipelines, got %v", pids)
+	}
+}

@@ -84,6 +84,13 @@ func registerPipelineRoutes(mux *http.ServeMux, deps Deps) {
 		writeJSON(w, http.StatusCreated, &p)
 	})
 
+	// Cross-pipeline recent runs — one poll for the Management UI to show
+	// which pipelines have an active run. Distinct path (not under
+	// /pipelines/) so it doesn't collide with the {id} prefix parser below.
+	mux.HandleFunc("GET /api/v1/pipeline-runs", func(w http.ResponseWriter, r *http.Request) {
+		handleListAllRuns(w, r, store)
+	})
+
 	mux.HandleFunc("/api/v1/pipelines/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/v1/pipelines/")
 		parts := strings.Split(path, "/")
@@ -234,6 +241,20 @@ func handleGetRun(w http.ResponseWriter, r *http.Request, runner *pipelines.Runn
 
 func handleListRuns(w http.ResponseWriter, r *http.Request, store *pipelines.Store, id string) {
 	runs, err := store.ListRuns(r.Context(), id, 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if runs == nil {
+		runs = []*pipelines.Run{}
+	}
+	writeJSON(w, http.StatusOK, runs)
+}
+
+// handleListAllRuns returns recent runs across every pipeline so the UI can
+// show which ones are active without polling each pipeline individually.
+func handleListAllRuns(w http.ResponseWriter, r *http.Request, store *pipelines.Store) {
+	runs, err := store.ListAllRuns(r.Context(), 100)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return

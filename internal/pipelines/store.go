@@ -185,6 +185,32 @@ func (s *Store) ListRuns(ctx context.Context, pipelineID string, limit int) ([]*
 	return out, rows.Err()
 }
 
+// ListAllRuns returns recent runs across ALL pipelines, newest first. The
+// Management UI uses it for a single cheap poll to show which pipelines have
+// an active (pending/running) run, instead of polling every pipeline's
+// per-pipeline runs endpoint.
+func (s *Store) ListAllRuns(ctx context.Context, limit int) ([]*Run, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at
+		FROM pipeline_runs ORDER BY started_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Run
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // --- scan helpers ---
 
 type scanner interface {

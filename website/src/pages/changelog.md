@@ -16,6 +16,10 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-05-28
+
+**Theme:** A more trustworthy agent surface. Pipelines reject unfilled `{{PLACEHOLDER}}` inputs instead of running with them; built-in pipeline descriptions say what the packs actually do (cite + save, not "rewrite + publish"); `slides.outline` guarantees a title slide and gains audience personas so decks open and close properly; and a new installable `helmdeck-debug` skill sweeps every pipeline + pack and drafts GitHub issues for what it finds.
+
 ### Added
 
 - **Pipeline runs reject unfilled `{{PLACEHOLDER}}` inputs.** An input whose value is still a literal prompt-template variable (e.g. `title` = `{{TITLE}}`, pasted from the prompt-template docs without substituting) now fails fast with a `caller_fixable` error that names the input and tells the agent to fill it — ask the user for a value, or propose one and confirm it — instead of silently running and producing a post titled `{{TITLE}}`.

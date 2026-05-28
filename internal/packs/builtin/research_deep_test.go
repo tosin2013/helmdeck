@@ -206,9 +206,12 @@ func TestResearchDeep_FirecrawlSuccessFalse(t *testing.T) {
 }
 
 func TestResearchDeep_AllSourcesEmptyMarkdown(t *testing.T) {
-	// Every source has empty markdown — after filtering we have
-	// zero usable sources, which is a handler_failed (not a
-	// success with empty synthesis).
+	// Every source has empty markdown — after filtering we have zero
+	// usable sources. That's caller-fixable (refine the query), NOT a
+	// pack bug: helmdeck searched fine, the query just yielded nothing
+	// usable. invalid_input so the pipeline classifies it caller_fixable
+	// instead of pack_bug ("file a GitHub issue" for a refine-your-query
+	// situation).
 	srv := stubFirecrawlSearch(t, 200, `{
 		"success": true,
 		"data": [
@@ -219,8 +222,8 @@ func TestResearchDeep_AllSourcesEmptyMarkdown(t *testing.T) {
 	enableFirecrawlSearch(t, srv.URL)
 	_, err := runResearchDeep(t, &scriptedDispatcherWT{}, `{"query":"x","model":"openai/gpt-4o"}`)
 	pe := &packs.PackError{}
-	if !errors.As(err, &pe) || pe.Code != packs.CodeHandlerFailed {
-		t.Errorf("want handler_failed, got %v", err)
+	if !errors.As(err, &pe) || pe.Code != packs.CodeInvalidInput {
+		t.Errorf("want invalid_input (caller_fixable), got %v", err)
 	}
 	if !strings.Contains(pe.Message, "no usable sources") {
 		t.Errorf("message = %q, want contains 'no usable sources'", pe.Message)

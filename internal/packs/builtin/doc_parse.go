@@ -328,15 +328,19 @@ func docParseHandler(eg *security.EgressGuard) packs.HandlerFunc {
 
 		httpCtx, cancel := context.WithTimeout(ctx, doclingTimeout)
 		defer cancel()
-		req, err := http.NewRequestWithContext(httpCtx, "POST", base+"/v1/convert/source", bytes.NewReader(bodyBytes))
-		if err != nil {
-			return nil, &packs.PackError{Code: packs.CodeInternal, Message: err.Error(), Cause: err}
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json")
-
 		client := &http.Client{Timeout: doclingTimeout}
-		resp, err := client.Do(req)
+		// Retry while Docling is still booting so a cold start doesn't fail
+		// the first parse (chat-UI readiness gap). reqFn rebuilds the
+		// request each attempt since the body is consumed.
+		resp, err := coldStartRetry(httpCtx, client, func() (*http.Request, error) {
+			r, e := http.NewRequestWithContext(httpCtx, "POST", base+"/v1/convert/source", bytes.NewReader(bodyBytes))
+			if e != nil {
+				return nil, e
+			}
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("Accept", "application/json")
+			return r, nil
+		})
 		if err != nil {
 			return nil, &packs.PackError{
 				Code:    packs.CodeHandlerFailed,

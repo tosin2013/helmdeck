@@ -36,6 +36,14 @@ func WithPipelines(p PipelineService) PackServerOption {
 
 // pipelineTools returns the MCP tools backing pipelines, or nil when no
 // pipeline service is wired.
+//
+// Tool names are BARE (`pipeline-run`, not `helmdeck__pipeline-run`) — exactly
+// like pack tools, which are advertised as `pack.Name` (server.go) and let the
+// MCP client namespace them with the server name. Baking the `helmdeck__`
+// prefix in here made namespacing clients double-prefix the tool to
+// `helmdeck__helmdeck__pipeline-run`, so the documented `helmdeck__pipeline-run`
+// (UI copy-prompt, SKILL.md, prompt templates) was unreachable. Keep these bare;
+// the resolved client-facing name is `helmdeck__pipeline-*` (what the docs say).
 func (s *PackServer) pipelineTools() []Tool {
 	if s.pipelines == nil {
 		return nil
@@ -47,17 +55,17 @@ func (s *PackServer) pipelineTools() []Tool {
 	})
 	return []Tool{
 		{
-			Name:        "helmdeck__pipeline-list",
+			Name:        "pipeline-list",
 			Description: "List all helmdeck pipelines (built-in starters + user-created) with their steps and status. A pipeline is a saved, ordered sequence of pack calls with ${{ steps.X.output.field }} templating between steps.",
 			InputSchema: mustJSON(map[string]any{"type": "object", "properties": map[string]any{}}),
 		},
 		{
-			Name:        "helmdeck__pipeline-get",
+			Name:        "pipeline-get",
 			Description: "Get one pipeline's full definition by id.",
 			InputSchema: idSchema,
 		},
 		{
-			Name:        "helmdeck__pipeline-create",
+			Name:        "pipeline-create",
 			Description: "Create a new pipeline from an ordered list of steps. Each step is {id, pack, input}; a step's input may reference an earlier step via ${{ steps.<id>.output.<field> }} or a run input via ${{ inputs.<name> }}. Discover valid chat-model IDs via the helmdeck://models resource, and voice/image-model IDs via helmdeck://voices and helmdeck://image-models, before setting a `model` or referencing podcast/image packs.",
 			InputSchema: mustJSON(map[string]any{
 				"type": "object",
@@ -70,7 +78,7 @@ func (s *PackServer) pipelineTools() []Tool {
 			}),
 		},
 		{
-			Name:        "helmdeck__pipeline-run",
+			Name:        "pipeline-run",
 			Description: "Start a pipeline run (async) and return a run_id immediately. Pass `inputs` for the pipeline's ${{ inputs.* }} references. Then poll helmdeck__pipeline-run-status.",
 			InputSchema: mustJSON(map[string]any{
 				"type": "object",
@@ -82,7 +90,7 @@ func (s *PackServer) pipelineTools() []Tool {
 			}),
 		},
 		{
-			Name:        "helmdeck__pipeline-run-status",
+			Name:        "pipeline-run-status",
 			Description: "Get the status of a pipeline run by run_id: overall status (pending|running|succeeded|failed) plus per-step outputs/errors. A failed run includes failure_class (caller_fixable|pack_bug|transient|state_changed) and a failure_reason saying what to do — fix the input, re-run, or file a helmdeck issue. Poll every few seconds until terminal.",
 			InputSchema: mustJSON(map[string]any{
 				"type":       "object",
@@ -91,7 +99,7 @@ func (s *PackServer) pipelineTools() []Tool {
 			}),
 		},
 		{
-			Name:        "helmdeck__pipeline-rerun",
+			Name:        "pipeline-rerun",
 			Description: "Re-run an existing run from the top with the same pipeline + inputs (the CI/CD 'retry this job' affordance). Use after fixing a caller_fixable failure, or to retry a transient one. Returns a new run_id.",
 			InputSchema: mustJSON(map[string]any{
 				"type":       "object",
@@ -110,10 +118,10 @@ func (s *PackServer) dispatchPipelineTool(ctx context.Context, name string, argu
 		return nil, false
 	}
 	switch name {
-	case "helmdeck__pipeline-list":
+	case "pipeline-list":
 		out, err := s.pipelines.List(ctx)
 		return jsonOrErr(out, err), true
-	case "helmdeck__pipeline-get":
+	case "pipeline-get":
 		var a struct {
 			ID string `json:"id"`
 		}
@@ -122,10 +130,10 @@ func (s *PackServer) dispatchPipelineTool(ctx context.Context, name string, argu
 		}
 		out, err := s.pipelines.Get(ctx, a.ID)
 		return jsonOrErr(out, err), true
-	case "helmdeck__pipeline-create":
+	case "pipeline-create":
 		out, err := s.pipelines.Create(ctx, arguments)
 		return jsonOrErr(out, err), true
-	case "helmdeck__pipeline-run":
+	case "pipeline-run":
 		var a struct {
 			ID     string          `json:"id"`
 			Inputs json.RawMessage `json:"inputs"`
@@ -139,7 +147,7 @@ func (s *PackServer) dispatchPipelineTool(ctx context.Context, name string, argu
 		}
 		body, _ := json.Marshal(map[string]string{"run_id": runID, "pipeline_id": a.ID, "status": "pending"})
 		return okToolResult(body), true
-	case "helmdeck__pipeline-run-status":
+	case "pipeline-run-status":
 		var a struct {
 			RunID string `json:"run_id"`
 		}
@@ -148,7 +156,7 @@ func (s *PackServer) dispatchPipelineTool(ctx context.Context, name string, argu
 		}
 		out, err := s.pipelines.RunStatus(ctx, a.RunID)
 		return jsonOrErr(out, err), true
-	case "helmdeck__pipeline-rerun":
+	case "pipeline-rerun":
 		var a struct {
 			RunID string `json:"run_id"`
 		}

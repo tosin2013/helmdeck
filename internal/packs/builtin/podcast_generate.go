@@ -64,9 +64,9 @@ func zeroFloorOptedIn(raw json.RawMessage) bool {
 // return CodeInternal at handler time.
 func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) *packs.Pack {
 	return &packs.Pack{
-		Name:        "podcast.generate",
-		Version:     "v1",
-		Description: "Multi-speaker podcast (1..N) → MP3 artifact via pluggable TTS engine. Day 1: ElevenLabs. Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to produce a silence-padded MP3 when no key is configured (CI smoke / demo placeholder).",
+		Name:            "podcast.generate",
+		Version:         "v1",
+		Description:     "Multi-speaker podcast (1..N) → MP3 artifact via pluggable TTS engine. Day 1: ElevenLabs. Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to produce a silence-padded MP3 when no key is configured (CI smoke / demo placeholder).",
 		NeedsSession:    true,
 		PreserveSession: false,
 		SessionSpec: session.Spec{
@@ -76,41 +76,41 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 		InputSchema: packs.BasicSchema{
 			Required: []string{"speakers"},
 			Properties: map[string]string{
-				"engine":                    "string",
-				"script":                    "array",
-				"prompt":                    "string",
-				"model":                     "string",
-				"max_tokens":                "number",
-				"source_url":                "string",
-				"source_text":               "string",
-				"speakers":                  "object",
-				"model_id":                  "string",
-				"theme":                     "string",
-				"duration_target_min":       "number",
-				"silence_between_turns_ms":  "number",
-				"min_turn_duration_s":       "number",
-				"generate_cover_prompt":     "boolean",
-				"cover_image":               "boolean",
-				"cover_image_model":         "string",
-				"credential":                "string",
-				"allow_silent_output":       "boolean",
-				"dry_run":                   "boolean",
-				"plan":                      "string",
+				"engine":                   "string",
+				"script":                   "array",
+				"prompt":                   "string",
+				"model":                    "string",
+				"max_tokens":               "number",
+				"source_url":               "string",
+				"source_text":              "string",
+				"speakers":                 "object",
+				"model_id":                 "string",
+				"theme":                    "string",
+				"duration_target_min":      "number",
+				"silence_between_turns_ms": "number",
+				"min_turn_duration_s":      "number",
+				"generate_cover_prompt":    "boolean",
+				"cover_image":              "boolean",
+				"cover_image_model":        "string",
+				"credential":               "string",
+				"allow_silent_output":      "boolean",
+				"dry_run":                  "boolean",
+				"plan":                     "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
 			Required: []string{"engine", "audio_artifact_key", "audio_size", "speaker_count", "turn_count", "script_source", "has_narration"},
 			Properties: map[string]string{
-				"engine":             "string",
-				"audio_artifact_key": "string",
-				"audio_url":          "string",
-				"audio_size":         "number",
-				"duration_s":         "number",
-				"speaker_count":      "number",
-				"turn_count":         "number",
-				"script_source":      "string",
-				"model_used":         "string",
-				"voices_used":        "object",
+				"engine":                   "string",
+				"audio_artifact_key":       "string",
+				"audio_url":                "string",
+				"audio_size":               "number",
+				"duration_s":               "number",
+				"speaker_count":            "number",
+				"turn_count":               "number",
+				"script_source":            "string",
+				"model_used":               "string",
+				"voices_used":              "object",
 				"has_narration":            "boolean",
 				"theme":                    "string",
 				"cover_image_prompt":       "string",
@@ -132,26 +132,26 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 }
 
 type podcastGenerateInput struct {
-	Engine                 string            `json:"engine"`
-	Script                 []podcast.Turn    `json:"script"`
-	Prompt                 string            `json:"prompt"`
-	Model                  string            `json:"model"`
-	MaxTokens              int               `json:"max_tokens"`
-	SourceURL              string            `json:"source_url"`
-	SourceText             string            `json:"source_text"`
-	Speakers               map[string]string `json:"speakers"`
-	ModelID                string            `json:"model_id"`
-	Theme                  string            `json:"theme"`
-	DurationTargetMin      int               `json:"duration_target_min"`
-	SilenceBetweenTurnsMs  int               `json:"silence_between_turns_ms"`
-	MinTurnDurationS       float64           `json:"min_turn_duration_s"`
-	GenerateCoverPrompt    bool              `json:"generate_cover_prompt"`
-	CoverImage             bool              `json:"cover_image"`
-	CoverImageModel        string            `json:"cover_image_model"`
-	Credential             string            `json:"credential"`
-	AllowSilentOutput      bool              `json:"allow_silent_output"`
-	DryRun                 bool              `json:"dry_run"`
-	Plan                   string            `json:"plan"`
+	Engine                string            `json:"engine"`
+	Script                []podcast.Turn    `json:"script"`
+	Prompt                string            `json:"prompt"`
+	Model                 string            `json:"model"`
+	MaxTokens             int               `json:"max_tokens"`
+	SourceURL             string            `json:"source_url"`
+	SourceText            string            `json:"source_text"`
+	Speakers              map[string]string `json:"speakers"`
+	ModelID               string            `json:"model_id"`
+	Theme                 string            `json:"theme"`
+	DurationTargetMin     int               `json:"duration_target_min"`
+	SilenceBetweenTurnsMs int               `json:"silence_between_turns_ms"`
+	MinTurnDurationS      float64           `json:"min_turn_duration_s"`
+	GenerateCoverPrompt   bool              `json:"generate_cover_prompt"`
+	CoverImage            bool              `json:"cover_image"`
+	CoverImageModel       string            `json:"cover_image_model"`
+	Credential            string            `json:"credential"`
+	AllowSilentOutput     bool              `json:"allow_silent_output"`
+	DryRun                bool              `json:"dry_run"`
+	Plan                  string            `json:"plan"`
 }
 
 func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) packs.HandlerFunc {
@@ -424,14 +424,22 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 		out := map[string]any{
 			"engine":             eng.Name(),
 			"audio_artifact_key": art.Key,
-			"audio_size":         art.Size,
-			"duration_s":         durationS,
-			"speaker_count":      len(voicesUsed),
-			"turn_count":         len(script),
-			"script_source":      scriptSource,
-			"voices_used":        voicesMap,
-			"has_narration":      hasNarration,
-			"theme":              theme,
+			// #233/ADR 041: the presigned artifact URL so a pipeline can embed
+			// it in a hyperframes.render composition's <audio src> (podcast →
+			// narrated video). Always present (even "") so a downstream
+			// ${{ steps.podcast.output.audio_url }} reference always resolves;
+			// empty for the in-memory artifact store (dev/CI), set when an S3
+			// store is configured, so the narrated-video pipeline degrades to a
+			// silent video instead of failing on a missing reference.
+			"audio_url":     art.URL,
+			"audio_size":    art.Size,
+			"duration_s":    durationS,
+			"speaker_count": len(voicesUsed),
+			"turn_count":    len(script),
+			"script_source": scriptSource,
+			"voices_used":   voicesMap,
+			"has_narration": hasNarration,
+			"theme":         theme,
 			// #145: cost transparency on real runs too — operators
 			// log this to their accounting workflow without re-doing
 			// the math against ElevenLabs' billing dashboard.
@@ -441,13 +449,6 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 		}
 		if modelUsed != "" {
 			out["model_used"] = modelUsed
-		}
-		// #233/ADR 041: surface the presigned artifact URL so a pipeline
-		// can embed it in a hyperframes.render composition's <audio src>
-		// (podcast → narrated video). Empty for the in-memory artifact
-		// store (dev/CI); set when an S3 store is configured.
-		if art.URL != "" {
-			out["audio_url"] = art.URL
 		}
 		// Cover prompt is computed once (cheap, in-process) and either
 		// surfaced as `cover_image_prompt` (when generate_cover_prompt

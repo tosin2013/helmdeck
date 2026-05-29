@@ -55,10 +55,13 @@ var builtinPackStubs = map[string]stubSpec{
 	"repo.fetch":     {output: `{"readme":{"content":"# README\n\n---\n\n## Two"},"docs":{"content":"## docs/guide.md\n\nguide body","file_count":1,"truncated":false},"clone_path":"/repos/x"}`},
 	"repo.map":       {output: `{"map":"pkg/x.go:\n  func Foo\n  struct Bar","tokens_estimated":42}`},
 	"slides.outline": {output: `{"markdown":"# Deck\n\n---\n\n## Two\n\n---\n\n## Three","slide_count":3,"model":"openrouter/auto"}`},
+	// hyperframes.compose produces the composition_html the render step consumes.
+	"hyperframes.compose": {output: `{"composition_html":"<!doctype html><html><body><div id=\"root\" data-composition-id=\"main\" data-width=\"1920\" data-height=\"1080\"></div></body></html>","model":"openrouter/auto","width":1920,"height":1080,"duration_seconds":8,"has_audio":false,"duration_source":"timeline"}`},
 	// Artifact producers (the terminal step of every built-in pipeline).
-	"slides.render":      {output: `{"format":"pdf","artifact_key":"%KEY%","size":1024}`, artifact: true, artName: "deck.pdf", contentType: "application/pdf", content: []byte("%PDF-1.4 stub")},
-	"slides.narrate":     {output: `{"video_artifact_key":"%KEY%","total_duration_s":5}`, artifact: true, artName: "deck.mp4", contentType: "video/mp4", content: []byte("\x00\x00\x00\x18ftypmp42 stub")},
-	"podcast.generate":   {output: `{"audio_url":"https://example.com/a.mp3","artifact_key":"%KEY%"}`, artifact: true, artName: "podcast.mp3", contentType: "audio/mpeg", content: []byte("ID3 stub")},
+	"slides.render":  {output: `{"format":"pdf","artifact_key":"%KEY%","size":1024}`, artifact: true, artName: "deck.pdf", contentType: "application/pdf", content: []byte("%PDF-1.4 stub")},
+	"slides.narrate": {output: `{"video_artifact_key":"%KEY%","total_duration_s":5}`, artifact: true, artName: "deck.mp4", contentType: "video/mp4", content: []byte("\x00\x00\x00\x18ftypmp42 stub")},
+	// audio_url + duration_s feed builtin.prompt-narrated-video's compose step.
+	"podcast.generate":   {output: `{"audio_url":"https://example.com/a.mp3","duration_s":60,"artifact_key":"%KEY%"}`, artifact: true, artName: "podcast.mp3", contentType: "audio/mpeg", content: []byte("ID3 stub")},
 	"blog.publish":       {output: `{"artifact_key":"%KEY%","format":"markdown"}`, artifact: true, artName: "post.md", contentType: "text/markdown", content: []byte("# Post")},
 	"hyperframes.render": {output: `{"artifact_key":"%KEY%","format":"mp4"}`, artifact: true, artName: "video.mp4", contentType: "video/mp4", content: []byte("\x00\x00\x00\x18ftypmp42 stub")},
 }
@@ -109,7 +112,8 @@ const builtinRunInputs = `{
   "repo_url": "https://github.com/example/repo",
   "source_url": "https://example.com/whitepaper.pdf",
   "title": "My Title",
-  "composition_html": "<html><body>hi</body></html>"
+  "composition_html": "<html><body>hi</body></html>",
+  "description": "a 30-second explainer about kubernetes operators"
 }`
 
 // TestBuiltins_RunEndToEnd runs every built-in pipeline through the runner

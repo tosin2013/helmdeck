@@ -586,6 +586,17 @@ func main() {
 	if err := packReg.Register(builtin.BlogPublish(vaultStore, egressGuard, nil)); err != nil {
 		logger.Warn("register blog.publish pack failed", "err", err)
 	}
+	// podcast.generate body/script mode (mode A) works without a gateway, so
+	// register the nil-dispatcher version here — BEFORE the gated block — so it
+	// exists in gateway-less deployments. When a gateway IS present, the
+	// dispatcher version inside the block is registered AFTER this and wins
+	// (registry last-wins), enabling prompt + source_url/source_text modes.
+	// (Registering this nil version AFTER the block instead clobbered the
+	// dispatcher one, so source/prompt mode failed "registered without a gateway
+	// dispatcher" — same ordering pattern as blog.publish above.)
+	if err := packReg.Register(builtin.PodcastGenerate(vaultStore, egressGuard, nil)); err != nil {
+		logger.Warn("register podcast.generate pack failed", "err", err)
+	}
 	// Vision packs (T408) need a gateway dispatcher. Register only when
 	// one is configured — operators running in stub mode without
 	// providers should still get the rest of the pack catalog.
@@ -653,13 +664,6 @@ func main() {
 		if err := packReg.Register(builtin.PodcastGenerate(vaultStore, egressGuard, visionDispatcher)); err != nil {
 			logger.Warn("register podcast.generate (with dispatcher) failed", "err", err)
 		}
-	}
-	// podcast.generate body-mode-only registration: ensures script
-	// mode works in deployments without a gateway. The conditional
-	// re-registration above overrides this when the dispatcher is
-	// configured.
-	if err := packReg.Register(builtin.PodcastGenerate(vaultStore, egressGuard, nil)); err != nil {
-		logger.Warn("register podcast.generate pack failed", "err", err)
 	}
 
 	// hyperframes.render (#200): HTML/CSS/JS composition → MP4 via

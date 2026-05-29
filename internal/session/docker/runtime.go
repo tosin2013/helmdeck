@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -450,17 +451,78 @@ func (r *Runtime) PruneOrphans(ctx context.Context) error {
 	return firstErr
 }
 
+// pullMaxAttempts caps ensureImage's retry loop. Three attempts is
+// enough to ride out a Docker Hub 429 / brief TLS hiccup without
+// piling work onto the daemon during a real outage — set to 1 in
+// tests via withPullRetryForTest if you need to assert the no-retry
+// path.
+const pullMaxAttempts = 3
+
+// pullBackoff returns the wait before the Nth retry (attempt is 1-based;
+// first retry is attempt=2). 1s → 3s linear; deliberately short so a
+// transient Docker Hub blip doesn't slow Create noticeably.
+func pullBackoff(attempt int) time.Duration {
+	return time.Duration(attempt-1) * 2 * time.Second // 0, 2, 4 → first call has no delay
+}
+
+// isPermanentImageError reports whether an ImagePull error is one we
+// should NOT retry — the image truly doesn't exist or the auth is wrong,
+// so retrying will fail the same way and only waste time. Anything else
+// (network blip, rate limit, TLS hiccup) is treated as transient.
+func isPermanentImageError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// Substrings are stable across docker SDK versions for the common
+	// "not found / unauthorized" classes; the SDK does not surface a
+	// typed error for these so string match is the pragmatic answer.
+	for _, s := range []string{"manifest unknown", "not found", "unauthorized", "denied", "no such image"} {
+		if strings.Contains(strings.ToLower(msg), s) {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureImage makes the named image present locally. If a prior pull
+// cached it, the ImageInspect short-circuit returns immediately.
+// Otherwise it pulls — with retry on transient errors (Docker Hub
+// rate-limit / TLS / connection-reset) so a flaky network on a CI
+// runner doesn't turn a green build red. Permanent errors (image truly
+// missing, auth denied) fail fast.
 func (r *Runtime) ensureImage(ctx context.Context, ref string) error {
 	if _, _, err := r.cli.ImageInspectWithRaw(ctx, ref); err == nil {
 		return nil
 	}
-	rc, err := r.cli.ImagePull(ctx, ref, image.PullOptions{})
-	if err != nil {
-		return err
+	var lastErr error
+	for attempt := 1; attempt <= pullMaxAttempts; attempt++ {
+		if attempt > 1 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(pullBackoff(attempt)):
+			}
+		}
+		rc, err := r.cli.ImagePull(ctx, ref, image.PullOptions{})
+		if err != nil {
+			lastErr = err
+			if isPermanentImageError(err) {
+				return err
+			}
+			continue
+		}
+		_, copyErr := io.Copy(io.Discard, rc) // drain pull progress
+		rc.Close()
+		if copyErr == nil {
+			return nil
+		}
+		lastErr = copyErr
+		if isPermanentImageError(copyErr) {
+			return copyErr
+		}
 	}
-	defer rc.Close()
-	_, err = io.Copy(io.Discard, rc) // drain pull progress
-	return err
+	return fmt.Errorf("pull %q after %d attempts: %w", ref, pullMaxAttempts, lastErr)
 }
 
 // ensureReposWritable makes the persistent repos volume writable by the

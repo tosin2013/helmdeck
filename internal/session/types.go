@@ -42,8 +42,18 @@ type Spec struct {
 	// SHMSize is the size of /dev/shm; Chromium needs ≥1g for SPA workloads.
 	SHMSize string
 
-	// CPULimit is fractional cores (e.g. 1.0, 0.5).
+	// CPULimit is fractional cores (e.g. 1.0, 0.5). When set non-zero,
+	// it wins over CPUProfile — operators can pin a number explicitly.
+	// When zero, the runtime resolves CPUProfile to a number via
+	// ResolveCPUProfile (host-aware for compute-bound profiles).
 	CPULimit float64
+
+	// CPUProfile is a coarse, host-aware sizing hint used when CPULimit
+	// is zero — see ADR 045. A pack declares its workload class
+	// ("io_bound" vs "compute_bound") instead of a raw core count, and
+	// the runtime picks a sensible cap from the host's available CPU.
+	// Empty string is treated as the I/O profile (the legacy default).
+	CPUProfile CPUProfile
 
 	// Timeout is the wall-clock lifetime after which the watchdog recycles.
 	// Zero means "use runtime default" (5m).
@@ -68,6 +78,29 @@ type Spec struct {
 // (e.g. packs.Engine) can populate Spec.Labels without importing docker.
 const (
 	LabelRunID = "helmdeck.run_id"
+)
+
+// CPUProfile is a coarse, runtime-portable workload class. A pack
+// declares which class its work belongs to (I/O-bound vs compute-bound)
+// and the runtime resolves that to a concrete CPU cap based on the
+// host's available cores — see ADR 045. New profiles can be added
+// without churning every pack: a new pack just picks the class.
+type CPUProfile string
+
+const (
+	// ProfileIO is the default for I/O-bound work — headless Chromium
+	// driving Playwright, HTTP-call orchestration, shell-out to short
+	// CLIs. 1 core is plenty; more would sit idle waiting on the
+	// network. Used by web.*, repo.*, fs.*, screenshot, doc.ocr,
+	// podcast.generate, swe.solve, vision.*, etc.
+	ProfileIO CPUProfile = "io_bound"
+
+	// ProfileCompute is for CPU-bound work — video encoding, large
+	// PDF rendering, OCR done in-process. The runtime scales the cap
+	// with host cores (host_cores - 1, clamped to [1, 6]) so a render
+	// on an 8-core box gets 6 cores instead of 1. Used by
+	// hyperframes.render and slides.narrate (MP4 encode).
+	ProfileCompute CPUProfile = "compute_bound"
 )
 
 // Session is the runtime-observable view of a created session.

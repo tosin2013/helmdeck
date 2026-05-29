@@ -107,6 +107,13 @@ func HyperframesRender() *packs.Pack {
 			Image:       hyperframesSidecarImage(),
 			MemoryLimit: "4g",
 			Timeout:     60 * time.Minute,
+			// CPU-bound — headless Chromium driving the comp + ffmpeg
+			// encode are wildly parallel. ProfileCompute scales the
+			// cap to host_cores-1 (capped at 6) so a 25-min render on
+			// the 1-core legacy default drops to ~5 min on an 8-core
+			// box. Operators tune via HELMDECK_COMPUTE_CPU_LIMIT.
+			// ADR 045.
+			CPUProfile: session.ProfileCompute,
 		},
 	}
 }

@@ -604,7 +604,11 @@ func (r *Runtime) withDefaults(in session.Spec) session.Spec {
 		out.SHMSize = defaultSHMSize
 	}
 	if out.CPULimit == 0 {
-		out.CPULimit = 1.0
+		// No explicit number → derive from the pack's workload class.
+		// An empty CPUProfile resolves to ProfileIO (= 1.0 core), so
+		// every existing pack that set neither field gets the legacy
+		// behavior. ADR 045.
+		out.CPULimit = session.ResolveCPUProfile(out.CPUProfile)
 	}
 	if out.Timeout == 0 {
 		out.Timeout = defaultTimeout

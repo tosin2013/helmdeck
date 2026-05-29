@@ -23,6 +23,7 @@ and the hard exit gates for each — see
 ### Fixed
 
 - **Pipeline MCP tools are now callable as `helmdeck__pipeline-run` (and `-list`/`-get`/`-create`/`-run-status`/`-rerun`).** They baked the `helmdeck__` server prefix into their MCP tool names while pack tools are advertised bare — so namespacing MCP clients (OpenClaw, etc.) double-prefixed them to `helmdeck__helmdeck__pipeline-run`, making the documented name (the UI copy-prompt button, `SKILL.md`, the prompt templates) fail with "tool not found." Pipeline tools are now advertised bare (`pipeline-run`, …) like packs, so the client resolves them to `helmdeck__pipeline-*` exactly as documented. (MCP pipeline tools were previously only reachable via REST.)
+- **Built-in podcast pipelines run without a manually-supplied `model`.** `builtin.research-podcast`, `builtin.repo-readme-podcast`, and `builtin.prompt-narrated-video` chained `podcast.generate` in source-text mode (which writes the script via an LLM) but omitted the `model` field, so a real run failed `caller_fixable` ("model is required …"). They now default `model` to `openrouter/auto` like every other pipeline, so the run needs only its documented input (no model/voice to supply — `speakers` is already pre-set to ElevenLabs premade voices).
 
 ## [0.20.0] - 2026-05-28
 

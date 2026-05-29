@@ -157,6 +157,12 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 		SessionSpec: session.Spec{
 			MemoryLimit: "3g",
 			Timeout:     30 * time.Minute,
+			// CPU-bound — per-slide TTS upload is I/O, but the Marp
+			// render and per-segment ffmpeg encode + concat are
+			// compute-heavy and dominate wall-clock. ProfileCompute
+			// scales the cap with host cores (vs the legacy 1-core
+			// default that pegged encode at 100%). ADR 045.
+			CPUProfile: session.ProfileCompute,
 		},
 	}
 }

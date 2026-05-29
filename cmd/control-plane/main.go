@@ -291,6 +291,12 @@ func main() {
 			wd := session.NewWatchdog(rt, logger, *watchdogIv)
 			go wd.Run(ctx)
 			logger.Info("session runtime ready", "network", *network, "watchdog_interval", watchdogIv.String())
+			// Log the resolved per-profile CPU caps so operators see what
+			// hyperframes.render + slides.narrate will actually get
+			// without having to inspect a session container. ADR 045.
+			logger.Info("session CPU profile caps",
+				"io_cores", session.ResolveCPUProfile(session.ProfileIO),
+				"compute_cores", session.ResolveCPUProfile(session.ProfileCompute))
 		}
 	} else {
 		logger.Info("session runtime disabled by flag")

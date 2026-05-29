@@ -45,25 +45,33 @@ const (
 	gsapCDN = "https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"
 
 	// hyperframesComposeSystemPrompt asks the model for ONLY the creative pieces
-	// as a JSON object — the pack assembles the contract scaffolding around them.
-	// %d=width %d=height %g=duration %s=audio-note %s=style-note.
+	// as three marker-delimited sections (raw CSS/HTML/JS, NOT JSON) — the pack
+	// assembles the contract scaffolding around them. Marker sections avoid the
+	// quote/newline escaping that made models emit invalid JSON when the body /
+	// timeline contained HTML and JS.
+	// %d=width %d=height %g=duration %s=audio-note %s=style-note %g=duration %d=width %d=height.
 	hyperframesComposeSystemPrompt = `You design short HTML video compositions for the HyperFrames renderer (Chromium + GSAP). You will be given a DESCRIPTION of the video to make.
 
 The canvas is EXACTLY %d×%d pixels and the video is %g seconds long. Animate with GSAP into a single paused timeline variable named ` + "`tl`" + ` (already declared for you — just add tweens to it).%s%s
 
-Respond with ONE JSON object and nothing else — no prose, no markdown fence:
+Respond with EXACTLY these three sections and NOTHING else. Put each marker on its OWN line and write raw CSS / HTML / JS between them — NO JSON, NO escaping, NO markdown fences:
 
-{
-  "styles": "<extra CSS rules for your elements; the canvas sizing + reset are already provided>",
-  "body": "<the visible elements that go inside the root div>",
-  "timeline": "<GSAP statements that add tweens to the existing 'tl' timeline>"
-}
+===STYLES===
+(extra CSS rules for your elements; the canvas sizing + reset are already provided)
+===BODY===
+(the visible elements that go inside the root div)
+===TIMELINE===
+(GSAP statements that add tweens to the existing 'tl' timeline)
 
 Hard rules (the render fails if you break them):
 - Every visible, timed element MUST have class="clip" and the attributes data-start, data-duration, data-track-index (integers; data-start+data-duration must stay within 0..%g). Give each element a unique id you reference from the timeline.
 - Position elements with absolute CSS inside the %d×%d canvas; use large, legible type (this is video, not a web page).
 - DETERMINISTIC ONLY: no Date.now(), no Math.random(), no network/fetch, no external images or fonts. Use solid colors, CSS gradients, shapes, and text.
-- Do NOT emit <html>, <head>, <body>, <style> tags, the root div, the GSAP <script>, or the window.__timelines line — those are added for you. Only the three JSON fields above.`
+- Do NOT emit <html>, <head>, <body>, <style> tags, the root div, the GSAP <script>, or the window.__timelines line — those are added for you. Only the three marked sections above.`
+
+	composeSecStyles   = "===STYLES==="
+	composeSecBody     = "===BODY==="
+	composeSecTimeline = "===TIMELINE==="
 )
 
 type hyperframesComposeInput struct {
@@ -235,24 +243,44 @@ func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 	}
 }
 
-// parseComposeSpec tolerates the same prose/fence wrapping as content.ground's
-// parseClaimPlan — strict unmarshal first, balanced-brace fallback second.
+// parseComposeSpec splits the model's marker-delimited reply into the three
+// creative sections. Lenient: any preamble before the first marker is ignored,
+// and STYLES/TIMELINE are optional (only BODY is required). Raw CSS/HTML/JS
+// between markers needs no escaping — the reason we dropped the JSON format,
+// which broke whenever the body/timeline contained quotes or newlines.
 func parseComposeSpec(raw string) (composeSpec, *packs.PackError) {
-	var s composeSpec
-	if err := json.Unmarshal([]byte(raw), &s); err == nil {
-		return s, nil
-	}
-	if obj := extractFirstJSONObject(raw); obj != "" {
-		if err := json.Unmarshal([]byte(obj), &s); err == nil {
-			return s, nil
+	iStyles := strings.Index(raw, composeSecStyles)
+	iBody := strings.Index(raw, composeSecBody)
+	iTimeline := strings.Index(raw, composeSecTimeline)
+	if iBody < 0 {
+		snippet := raw
+		if len(snippet) > 256 {
+			snippet = snippet[:256] + "…"
 		}
+		return composeSpec{}, &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: fmt.Sprintf("model did not return the expected ===STYLES===/===BODY===/===TIMELINE=== sections (try a more capable model or a richer description): %s", snippet)}
 	}
-	snippet := raw
-	if len(snippet) > 256 {
-		snippet = snippet[:256] + "…"
+	var s composeSpec
+	if iStyles >= 0 && iStyles < iBody {
+		s.Styles = composeSection(raw, iStyles+len(composeSecStyles), iBody)
 	}
-	return composeSpec{}, &packs.PackError{Code: packs.CodeInvalidInput,
-		Message: fmt.Sprintf("model returned an unparseable composition spec (expected JSON with styles/body/timeline): %s", snippet)}
+	bodyEnd := len(raw)
+	if iTimeline > iBody {
+		bodyEnd = iTimeline
+	}
+	s.Body = composeSection(raw, iBody+len(composeSecBody), bodyEnd)
+	if iTimeline > iBody {
+		s.Timeline = composeSection(raw, iTimeline+len(composeSecTimeline), len(raw))
+	}
+	return s, nil
+}
+
+// composeSection returns the trimmed slice s[start:end], guarding the bounds.
+func composeSection(s string, start, end int) string {
+	if start < 0 || end > len(s) || start > end {
+		return ""
+	}
+	return strings.TrimSpace(s[start:end])
 }
 
 // assembleComposition builds the final HyperFrames document around the guaranteed

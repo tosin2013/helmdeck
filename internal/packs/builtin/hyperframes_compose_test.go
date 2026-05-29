@@ -40,8 +40,15 @@ func decodeCompose(t *testing.T, raw json.RawMessage) composeOut {
 	return o
 }
 
-// goodSpec is a well-formed creative payload the model is expected to return.
-const goodSpec = `{"styles":".t{color:#fff;font-size:80px;position:absolute;top:40px;left:40px}","body":"<div id=\"t\" class=\"clip\" data-start=\"0\" data-duration=\"5\" data-track-index=\"1\">Hello</div>","timeline":"tl.from('#t',{opacity:0,duration:1},0);"}`
+// goodSpec is a well-formed creative payload the model is expected to return —
+// marker-delimited raw CSS/HTML/JS (note the unescaped quotes that would break a
+// JSON payload).
+const goodSpec = "===STYLES===\n" +
+	".t{color:#fff;font-size:80px;position:absolute;top:40px;left:40px}\n" +
+	"===BODY===\n" +
+	`<div id="t" class="clip" data-start="0" data-duration="5" data-track-index="1">Hello</div>` + "\n" +
+	"===TIMELINE===\n" +
+	"tl.from('#t',{opacity:0,duration:1},0);"
 
 // TestCompose_AssemblesContractScaffolding — the pack wraps the model's creative
 // pieces in the guaranteed HyperFrames contract: sized canvas, root data-*, and a
@@ -134,9 +141,9 @@ func TestCompose_EmptyAudioURLIsSilent(t *testing.T) {
 	}
 }
 
-// TestCompose_UnwrapsCodeFence — models often wrap the JSON in a ```json fence.
+// TestCompose_UnwrapsCodeFence — models often wrap the whole reply in a fence.
 func TestCompose_UnwrapsCodeFence(t *testing.T) {
-	disp := &scriptedDispatcherWT{replies: []string{"```json\n" + goodSpec + "\n```"}}
+	disp := &scriptedDispatcherWT{replies: []string{"```\n" + goodSpec + "\n```"}}
 	raw, err := runCompose(t, disp, `{"description":"x","model":"openrouter/auto"}`)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -146,19 +153,20 @@ func TestCompose_UnwrapsCodeFence(t *testing.T) {
 	}
 }
 
-// TestCompose_UnparseableSpec — a non-JSON reply is caller_fixable, not a crash.
-func TestCompose_UnparseableSpec(t *testing.T) {
+// TestCompose_NoMarkers — a reply with no ===BODY=== section is caller_fixable,
+// not a crash.
+func TestCompose_NoMarkers(t *testing.T) {
 	disp := &scriptedDispatcherWT{replies: []string{"I cannot do that."}}
 	_, err := runCompose(t, disp, `{"description":"x","model":"openrouter/auto"}`)
 	pe := &packs.PackError{}
 	if !errors.As(err, &pe) || pe.Code != packs.CodeInvalidInput {
-		t.Fatalf("want invalid_input on unparseable spec, got %v", err)
+		t.Fatalf("want invalid_input when the section markers are absent, got %v", err)
 	}
 }
 
-// TestCompose_EmptyBody — a spec with no visible elements is caller_fixable.
+// TestCompose_EmptyBody — a BODY section with no visible elements is caller_fixable.
 func TestCompose_EmptyBody(t *testing.T) {
-	disp := &scriptedDispatcherWT{replies: []string{`{"styles":"","body":"  ","timeline":""}`}}
+	disp := &scriptedDispatcherWT{replies: []string{"===STYLES===\n\n===BODY===\n   \n===TIMELINE===\n"}}
 	_, err := runCompose(t, disp, `{"description":"x","model":"openrouter/auto"}`)
 	pe := &packs.PackError{}
 	if !errors.As(err, &pe) || pe.Code != packs.CodeInvalidInput {

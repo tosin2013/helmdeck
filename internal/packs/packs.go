@@ -72,6 +72,12 @@ func progressFromContext(ctx context.Context) ProgressFunc {
 	return func(float64, string) {}
 }
 
+// ProgressFromContext is the exported accessor for the WithProgress sink.
+// Used by Executor fakes outside this package (e.g. the pipeline runner's
+// progress test) to drive the runner-attached sink without going through
+// a real ExecutionContext.
+func ProgressFromContext(ctx context.Context) ProgressFunc { return progressFromContext(ctx) }
+
 // callerCtxKey carries the authenticated caller subject (JWT "sub")
 // into Engine.Execute so the memory layer can derive a stable
 // namespace. Mirrors progressCtxKey. Unexported so the only way to
@@ -100,6 +106,29 @@ func callerFromContext(ctx context.Context) string {
 // ("unknown" when none). Lets callers outside this package (e.g. tests,
 // the pipeline runner) read the threaded caller.
 func CallerFromContext(ctx context.Context) string { return callerFromContext(ctx) }
+
+// runIDCtxKey carries the active pipeline run id so Execute can label any
+// session it CREATES with helmdeck.run_id=<id>. The pipeline runner sets
+// it on the detached run ctx (runs.go StartRun goroutine);
+// TerminateByRunID uses the label to find containers to kill on cancel.
+type runIDCtxKey struct{}
+
+// WithRunID returns a child context carrying the pipeline run id.
+// Used by Engine.Execute (create-session branch only) to tag created
+// session containers with the run, so a hard cancel can find them.
+// An empty id is a no-op (the label is only set when the id is non-empty).
+func WithRunID(ctx context.Context, runID string) context.Context {
+	return context.WithValue(ctx, runIDCtxKey{}, runID)
+}
+
+// RunIDFromContext returns the run id attached by WithRunID, or "" when
+// none. Empty is the safe default — no label, behaves like before.
+func RunIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(runIDCtxKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
 
 // MemoryConfig is the per-pack opt-in for the memory engine seam. The
 // zero value (nil *MemoryConfig on a Pack) means "no memory hooks" —
@@ -519,7 +548,24 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 			pinnedSession = true
 			logger.Info("reusing pinned session", "session_id", meta.SessionID, "pack", pack.Name)
 		} else {
-			s, err := e.runtime.Create(ctx, pack.SessionSpec)
+			// Copy the pack's session spec so we can stamp per-run
+			// labels without mutating the shared SessionSpec. Pinned
+			// (_session_id) sessions are NOT relabeled — only sessions
+			// we create here belong to this run.
+			spec := pack.SessionSpec
+			if rid := RunIDFromContext(ctx); rid != "" {
+				if spec.Labels == nil {
+					spec.Labels = map[string]string{}
+				} else {
+					cp := make(map[string]string, len(spec.Labels)+1)
+					for k, v := range spec.Labels {
+						cp[k] = v
+					}
+					spec.Labels = cp
+				}
+				spec.Labels[session.LabelRunID] = rid
+			}
+			s, err := e.runtime.Create(ctx, spec)
 			if err != nil {
 				return nil, &PackError{Code: CodeSessionUnavailable, Message: err.Error(), Cause: err}
 			}

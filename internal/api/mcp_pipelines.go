@@ -73,6 +73,10 @@ func (a pipelineServiceAdapter) Rerun(ctx context.Context, runID string) (string
 	return a.runner.Rerun(ctx, runID, mcpCaller(ctx))
 }
 
+func (a pipelineServiceAdapter) Cancel(ctx context.Context, runID string) error {
+	return a.runner.CancelRun(ctx, runID)
+}
+
 // mcpCaller pulls the authenticated subject off the tools/call context
 // (the MCP server attaches it via auth.FromContext before dispatch), so
 // pipeline runs started over MCP namespace per-caller like REST does.

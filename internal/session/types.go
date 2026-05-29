@@ -55,7 +55,20 @@ type Spec struct {
 
 	// Env is extra environment variables passed into the session container.
 	Env map[string]string
+
+	// Labels are extra runtime-level container labels merged with the
+	// runtime's own labels (helmdeck.managed, helmdeck.session_id, …).
+	// The pipeline runner sets helmdeck.run_id here so a hard cancel can
+	// find this run's session containers via a label filter.
+	Labels map[string]string
 }
+
+// Reserved runtime label keys (kept in sync with internal/session/docker
+// runtime constants). Stored here so callers outside the docker package
+// (e.g. packs.Engine) can populate Spec.Labels without importing docker.
+const (
+	LabelRunID = "helmdeck.run_id"
+)
 
 // Session is the runtime-observable view of a created session.
 type Session struct {

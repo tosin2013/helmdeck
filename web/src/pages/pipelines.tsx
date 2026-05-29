@@ -1,6 +1,6 @@
 import { useState, type MouseEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Bug, Check, ClipboardCopy, GitBranch, Play, RotateCw, Workflow } from 'lucide-react';
+import { Bug, Check, ClipboardCopy, GitBranch, Play, RotateCw, Workflow, X } from 'lucide-react';
 
 import {
   Card,
@@ -50,6 +50,12 @@ interface Pipeline {
   updated_at: string;
 }
 
+interface StepProgress {
+  at: string;
+  pct: number;
+  message: string;
+}
+
 interface RunStep {
   step_id: string;
   pack: string;
@@ -58,6 +64,7 @@ interface RunStep {
   error_code?: string;
   failure_class?: string;
   failure_reason?: string;
+  progress?: StepProgress[];
 }
 
 interface Run {
@@ -234,6 +241,7 @@ function RunHistory({ pipeline, onClose }: { pipeline: Pipeline; onClose: () => 
   );
   const authFetch = useAuthFetch();
   const [rerunning, setRerunning] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<string | null>(null);
 
   async function rerun(runID: string) {
     setRerunning(runID);
@@ -244,6 +252,21 @@ function RunHistory({ pipeline, onClose }: { pipeline: Pipeline; onClose: () => 
       await refetch();
     } finally {
       setRerunning(null);
+    }
+  }
+
+  // cancel — hard-stop a running/pending run. Server flips it to
+  // 'cancelled' within ~1-2s (force-removes the session container),
+  // the 3s poll then reflects it.
+  async function cancel(runID: string) {
+    setCancelling(runID);
+    try {
+      await authFetch(`/api/v1/pipelines/${pipeline.id}/runs/${runID}/cancel`, {
+        method: 'POST',
+      });
+      await refetch();
+    } finally {
+      setCancelling(null);
     }
   }
 
@@ -300,16 +323,39 @@ function RunHistory({ pipeline, onClose }: { pipeline: Pipeline; onClose: () => 
                     )}
                   </TableCell>
                   <TableCell className="text-xs">
-                    {r.steps?.map((s) => (
-                      <span key={s.step_id} className="mr-1 inline-flex">
-                        <RunStatusBadge status={s.status} label={s.step_id} />
-                      </span>
-                    ))}
+                    {r.steps?.map((s) => {
+                      const last = s.progress && s.progress.length > 0 ? s.progress[s.progress.length - 1] : null;
+                      return (
+                        <span key={s.step_id} className="mr-1 inline-flex flex-col">
+                          <RunStatusBadge status={s.status} label={s.step_id} />
+                          {s.status === 'running' && last && (
+                            <span
+                              className="mt-0.5 max-w-[14rem] truncate text-[10px] text-muted-foreground"
+                              title={`${Math.round(last.pct)}% — ${last.message}`}
+                            >
+                              {Math.round(last.pct)}% {last.message}
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {formatRelative(r.started_at)}
                   </TableCell>
                   <TableCell>
+                    {(r.status === 'running' || r.status === 'pending') && (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        title="Cancel — kills the in-flight session container so it stops immediately. Partial output is discarded."
+                        disabled={cancelling === r.id}
+                        onClick={() => cancel(r.id)}
+                      >
+                        <X className="mr-1 h-3.5 w-3.5" />
+                        Cancel
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="ghost"
@@ -418,7 +464,9 @@ function RunStatusBadge({ status, label }: { status: string; label?: string }) {
         ? 'warning'
         : status === 'failed'
           ? 'destructive'
-          : 'outline';
+          : status === 'cancelled'
+            ? 'outline'
+            : 'outline';
   return (
     <Badge variant={v}>
       <GitBranch className="mr-1 h-3 w-3" />

@@ -121,6 +121,16 @@ func registerPipelineRoutes(mux *http.ServeMux, deps Deps) {
 					handlePipelineRerun(w, r, runner, parts[2])
 					return
 				}
+				// POST /{id}/runs/{runId}/cancel — hard-stop a running
+				// or pending run (kills its session containers).
+				if len(parts) >= 4 && parts[3] == "cancel" {
+					if r.Method != http.MethodPost {
+						writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", r.Method)
+						return
+					}
+					handlePipelineCancel(w, r, runner, parts[2])
+					return
+				}
 				if r.Method != http.MethodGet {
 					writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", r.Method)
 					return
@@ -227,6 +237,31 @@ func handlePipelineRerun(w http.ResponseWriter, r *http.Request, runner *pipelin
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"run_id": newRunID, "status": string(pipelines.RunPending),
+	})
+}
+
+// handlePipelineCancel hard-stops a running (or pending) run: marks the
+// cancel intent, fires the run ctx-cancel, and force-removes its session
+// containers via the helmdeck.run_id label. Returns 200 on success — the
+// run goroutine flips to "cancelled" within ~1-2s (single-writer).
+// Already-terminal runs return 409 not_cancellable.
+func handlePipelineCancel(w http.ResponseWriter, r *http.Request, runner *pipelines.Runner, runID string) {
+	if err := runner.CancelRun(r.Context(), runID); err != nil {
+		if errors.Is(err, pipelines.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "run not found")
+			return
+		}
+		// "already <status> and cannot be cancelled" — distinguish via
+		// the error string. CancelRun is the only source of that text.
+		if strings.Contains(err.Error(), "cannot be cancelled") {
+			writeError(w, http.StatusConflict, "not_cancellable", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"run_id": runID, "status": string(pipelines.RunCancelled),
 	})
 }
 

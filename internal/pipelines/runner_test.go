@@ -56,7 +56,7 @@ func resolverFor(_ ...string) PackResolver {
 
 func newTestRunner(t *testing.T, ex Executor) *Runner {
 	t.Helper()
-	return NewRunner(testStore(t), resolverFor(), ex, nil)
+	return NewRunner(testStore(t), resolverFor(), ex, nil, nil)
 }
 
 func TestRunner_ThreadsOutputForward(t *testing.T) {
@@ -319,5 +319,179 @@ func TestRunner_StartRunThreadsCaller(t *testing.T) {
 	}
 	if c := ex.Caller(); c != "alice" {
 		t.Errorf("step Execute ctx caller = %q, want alice (StartRun must thread the caller onto the detached run context)", c)
+	}
+}
+
+type progressMilestone struct {
+	pct float64
+	msg string
+}
+
+// progressEmittingExec fires a handful of ec.Report milestones via the
+// progress sink the runner attached to the ctx (packs.WithProgress).
+type progressEmittingExec struct{ milestones []progressMilestone }
+
+func (e *progressEmittingExec) Execute(ctx context.Context, _ *packs.Pack, _ json.RawMessage) (*packs.Result, error) {
+	// Mimic how a real pack reports progress — the engine wires this
+	// callback from the runner's WithProgress.
+	report := packs.ProgressFromContext(ctx)
+	for _, m := range e.milestones {
+		report(m.pct, m.msg)
+	}
+	return &packs.Result{Output: json.RawMessage(`{}`)}, nil
+}
+
+// TestRunner_RecordsStepProgress — the runner attaches a progress sink to the
+// step's ctx, so each ec.Report(pct,msg) the pack emits is appended to the
+// step's Progress slice and persisted (live-visible to the UI poll).
+func TestRunner_RecordsStepProgress(t *testing.T) {
+	ex := &progressEmittingExec{milestones: []progressMilestone{
+		{pct: 10, msg: "starting"},
+		{pct: 50, msg: "rendering"},
+		{pct: 100, msg: "uploaded"},
+	}}
+	r := newTestRunner(t, ex)
+	p := &Pipeline{ID: "p", Name: "n", Steps: []Step{{ID: "s1", Pack: "any.pack", Input: json.RawMessage(`{}`)}}}
+	run := &Run{ID: "run-prog", PipelineID: "p", StartedAt: r.now()}
+	_ = r.store.CreateRun(context.Background(), run)
+	if err := r.RunSync(context.Background(), p, nil, run); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(run.Steps[0].Progress); got != 3 {
+		t.Fatalf("Progress entries = %d, want 3", got)
+	}
+	if msg := run.Steps[0].Progress[1].Message; msg != "rendering" {
+		t.Errorf("Progress[1].Message = %q, want rendering", msg)
+	}
+	persisted, _ := r.store.GetRun(context.Background(), "run-prog")
+	if len(persisted.Steps[0].Progress) != 3 {
+		t.Errorf("persisted Progress not durable: %+v", persisted.Steps[0])
+	}
+}
+
+// stubCanceller records TerminateByRunID calls — the SessionCanceller seam.
+type stubCanceller struct {
+	mu     sync.Mutex
+	calls  []string
+	killed int
+	err    error
+}
+
+func (s *stubCanceller) TerminateByRunID(_ context.Context, runID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, runID)
+	return s.killed, s.err
+}
+
+func (s *stubCanceller) Calls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+
+func TestRunner_CancelRun_UnknownRun(t *testing.T) {
+	r := NewRunner(testStore(t), resolverFor(), &recordingExec{}, &stubCanceller{}, nil)
+	if err := r.CancelRun(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("CancelRun on unknown = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRunner_CancelRun_AlreadyTerminal(t *testing.T) {
+	r := NewRunner(testStore(t), resolverFor(), &recordingExec{}, &stubCanceller{}, nil)
+	done := &Run{ID: "run-done", PipelineID: "p", Status: RunSucceeded, StartedAt: r.now(), EndedAt: r.now()}
+	if err := r.store.CreateRun(context.Background(), done); err != nil {
+		t.Fatal(err)
+	}
+	// Save the terminal status so GetRun returns succeeded.
+	if err := r.store.SaveRun(context.Background(), done); err != nil {
+		t.Fatal(err)
+	}
+	err := r.CancelRun(context.Background(), "run-done")
+	if err == nil || !strings.Contains(err.Error(), "cannot be cancelled") {
+		t.Fatalf("CancelRun on terminal = %v, want 'cannot be cancelled' error", err)
+	}
+}
+
+// blockingExec blocks until the test releases it, so the goroutine can sit on
+// a step while CancelRun fires. ctx-cancel unblocks it (mimics how the engine
+// returns when a session container is killed).
+type blockingExec struct {
+	started chan struct{}
+}
+
+func (b *blockingExec) Execute(ctx context.Context, _ *packs.Pack, _ json.RawMessage) (*packs.Result, error) {
+	select {
+	case b.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestRunner_CancelRun_RaceGuard — a mid-flight cancel resolves the step to
+// RunCancelled, NOT RunFailed (the cancelReq flag set before the kill is the
+// authoritative signal; without it, the step's ctx.Canceled error would
+// otherwise be classified as a transient failure).
+func TestRunner_CancelRun_RaceGuard(t *testing.T) {
+	ex := &blockingExec{started: make(chan struct{}, 1)}
+	canc := &stubCanceller{}
+	r := NewRunner(testStore(t), resolverFor(), ex, canc, nil)
+	p := &Pipeline{ID: "p", Name: "n", Steps: []Step{{ID: "s1", Pack: "any.pack", Input: json.RawMessage(`{}`)}}}
+	if err := r.store.Create(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := r.StartRun(context.Background(), "p", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-ex.started // step is now blocked in Execute
+	if err := r.CancelRun(context.Background(), runID); err != nil {
+		t.Fatalf("CancelRun: %v", err)
+	}
+	if calls := canc.Calls(); len(calls) != 1 || calls[0] != runID {
+		t.Errorf("TerminateByRunID calls = %v, want [%s]", calls, runID)
+	}
+	// Wait for the goroutine to flip the run.
+	deadline := time.Now().Add(2 * time.Second)
+	var got *Run
+	for time.Now().Before(deadline) {
+		got, _ = r.GetRun(context.Background(), runID)
+		if got != nil && got.Status.IsTerminal() {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got == nil || got.Status != RunCancelled {
+		t.Fatalf("final run status = %v, want %s", got, RunCancelled)
+	}
+	if len(got.Steps) == 0 || got.Steps[0].Status != RunCancelled {
+		t.Errorf("step status = %v, want %s", got.Steps, RunCancelled)
+	}
+	// And the persisted row reflects it too.
+	persisted, _ := r.store.GetRun(context.Background(), runID)
+	if persisted.Status != RunCancelled {
+		t.Errorf("persisted status = %s, want %s", persisted.Status, RunCancelled)
+	}
+}
+
+// TestRunRegistry_SweepEvictsCancelled — sweep removes a terminated
+// RunCancelled run and clears its cancel bookkeeping (no leak).
+func TestRunRegistry_SweepEvictsCancelled(t *testing.T) {
+	rr := newRunRegistry()
+	rr.ttl = 1 * time.Nanosecond
+	cancelled := &Run{ID: "rc", Status: RunCancelled, EndedAt: time.Now().Add(-time.Hour)}
+	rr.put(cancelled)
+	rr.markCancelRequested("rc")
+	rr.setCancel("rc", func() {})
+	rr.sweep(time.Now())
+	if _, ok := rr.get("rc"); ok {
+		t.Errorf("RunCancelled should be evicted by sweep")
+	}
+	if rr.cancelRequested("rc") {
+		t.Errorf("sweep should clear cancelReq for evicted runs")
+	}
+	if c := rr.takeCancel("rc"); c != nil {
+		t.Errorf("sweep should clear cancels for evicted runs")
 	}
 }

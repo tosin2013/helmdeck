@@ -25,6 +25,7 @@ type PipelineService interface {
 	StartRun(ctx context.Context, id string, inputs json.RawMessage) (runID string, err error)
 	RunStatus(ctx context.Context, runID string) (json.RawMessage, error)
 	Rerun(ctx context.Context, runID string) (newRunID string, err error)
+	Cancel(ctx context.Context, runID string) error
 }
 
 // WithPipelines wires the pipeline service so the helmdeck__pipeline-*
@@ -107,6 +108,15 @@ func (s *PackServer) pipelineTools() []Tool {
 				"required":   []string{"run_id"},
 			}),
 		},
+		{
+			Name:        "pipeline-cancel",
+			Description: "Hard-stop a running or pending pipeline run by run_id. Force-removes the run's session container(s) so an in-flight render frees CPU within ~1-2s. Already-terminal runs return an error. Partial outputs from the in-flight step are discarded.",
+			InputSchema: mustJSON(map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"run_id": map[string]any{"type": "string"}},
+				"required":   []string{"run_id"},
+			}),
+		},
 	}
 }
 
@@ -168,6 +178,18 @@ func (s *PackServer) dispatchPipelineTool(ctx context.Context, name string, argu
 			return errorToolResult("pipeline_run_failed", err.Error()), true
 		}
 		body, _ := json.Marshal(map[string]string{"run_id": runID, "status": "pending"})
+		return okToolResult(body), true
+	case "pipeline-cancel":
+		var a struct {
+			RunID string `json:"run_id"`
+		}
+		if err := json.Unmarshal(arguments, &a); err != nil || a.RunID == "" {
+			return errorToolResult("invalid_input", "helmdeck__pipeline-cancel: run_id is required"), true
+		}
+		if err := s.pipelines.Cancel(ctx, a.RunID); err != nil {
+			return errorToolResult("pipeline_cancel_failed", err.Error()), true
+		}
+		body, _ := json.Marshal(map[string]string{"run_id": a.RunID, "status": "cancelled"})
 		return okToolResult(body), true
 	}
 	return nil, false

@@ -60,7 +60,7 @@ func newPipelinesRouter(t *testing.T) http.Handler {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	ps := pipelines.NewStore(db)
-	pr := pipelines.NewRunner(ps, reg.Get, eng, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pr := pipelines.NewRunner(ps, reg.Get, eng, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	return NewRouter(Deps{
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),

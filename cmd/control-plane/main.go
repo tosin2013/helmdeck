@@ -233,6 +233,12 @@ func main() {
 	}
 
 	var rt session.Runtime
+	// pipeCanceller is the SessionCanceller the pipeline runner uses to
+	// hard-cancel a stuck run (force-remove its session containers via the
+	// helmdeck.run_id label). When the docker runtime is unavailable
+	// (disabled or init failed), it stays nil ⇒ CancelRun degrades to a
+	// soft cancel (ctx-only).
+	var pipeCanceller pipelines.SessionCanceller
 	if !*disableRuntime {
 		opts := []dockerrt.Option{}
 		if *network != "" {
@@ -280,6 +286,7 @@ func main() {
 				logger.Warn("orphan prune failed", "err", err)
 			}
 			rt = dr
+			pipeCanceller = dr
 			defer dr.Close()
 			wd := session.NewWatchdog(rt, logger, *watchdogIv)
 			go wd.Run(ctx)
@@ -697,7 +704,7 @@ func main() {
 	// startup never fails. Runner reuses the pack engine; the run sweeper
 	// evicts terminal in-memory runs (durable history stays in SQLite).
 	pipeStore := pipelines.NewStore(db)
-	pipeRunner := pipelines.NewRunner(pipeStore, packReg.Get, deps.PackEngine, logger.With("subsystem", "pipelines"))
+	pipeRunner := pipelines.NewRunner(pipeStore, packReg.Get, deps.PackEngine, pipeCanceller, logger.With("subsystem", "pipelines"))
 	pipeRunner.SetHook(func(c context.Context, r *pipelines.Run) {
 		auditWriter.Write(c, audit.Entry{
 			EventType: audit.EventType("pipeline_run"),

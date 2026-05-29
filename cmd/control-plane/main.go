@@ -719,6 +719,16 @@ func main() {
 	}
 	deps.PipelineStore = pipeStore
 	deps.PipelineRunner = pipeRunner
+	// Reap any in-flight rows the previous control-plane process left
+	// behind — their owning goroutines died with that process and
+	// nothing will ever flip them. Runs once here, before the HTTP
+	// listener accepts requests, so there is no live goroutine to race.
+	if reaped, err := pipeRunner.ReconcileOrphans(ctx); err != nil {
+		logger.Warn("pipeline orphan reaper failed", "err", err)
+	} else if reaped > 0 {
+		logger.Info("reaped orphan pipeline runs", "count", reaped,
+			"reason", "control plane restarted while these runs were in flight")
+	}
 	go pipeRunner.RunSweeper(ctx)
 	logger.Info("pipelines enabled (ADR 041)", "builtins", len(pipelines.Builtins()))
 

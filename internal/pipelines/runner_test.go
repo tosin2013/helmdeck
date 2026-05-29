@@ -495,3 +495,74 @@ func TestRunRegistry_SweepEvictsCancelled(t *testing.T) {
 		t.Errorf("sweep should clear cancels for evicted runs")
 	}
 }
+
+// TestRunner_ReconcileOrphans — runs the store still records as
+// pending/running at boot are reaped to failed with the orphan reason,
+// every in-flight step inside is reaped too (so the UI step badges are
+// not stuck), and already-terminal runs are untouched.
+func TestRunner_ReconcileOrphans(t *testing.T) {
+	store := testStore(t)
+	r := NewRunner(store, resolverFor(), &recordingExec{}, nil, nil)
+	ctx := context.Background()
+
+	// Seed: succeeded (untouched), running (reaped), pending (reaped).
+	done := &Run{ID: "r-done", PipelineID: "p", Status: RunSucceeded, StartedAt: r.now(), EndedAt: r.now()}
+	running := &Run{ID: "r-run", PipelineID: "p", Status: RunRunning, StartedAt: r.now(),
+		Steps: []RunStep{
+			{StepID: "a", Pack: "x", Status: RunSucceeded, StartedAt: r.now(), EndedAt: r.now()},
+			{StepID: "b", Pack: "y", Status: RunRunning, StartedAt: r.now()},
+		}}
+	pending := &Run{ID: "r-pend", PipelineID: "p", Status: RunPending, StartedAt: r.now()}
+	for _, run := range []*Run{done, running, pending} {
+		if err := store.CreateRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SaveRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	n, err := r.ReconcileOrphans(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileOrphans: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("reaped = %d, want 2", n)
+	}
+
+	// The succeeded run must be untouched.
+	gotDone, _ := store.GetRun(ctx, "r-done")
+	if gotDone.Status != RunSucceeded {
+		t.Errorf("succeeded run was mutated: %s", gotDone.Status)
+	}
+
+	// Running → failed with reason on run + on its in-flight step only.
+	gotRun, _ := store.GetRun(ctx, "r-run")
+	if gotRun.Status != RunFailed {
+		t.Errorf("running run not reaped: %s", gotRun.Status)
+	}
+	if gotRun.Error == "" || gotRun.EndedAt.IsZero() {
+		t.Errorf("reaped run missing error/ended_at: %+v", gotRun)
+	}
+	if gotRun.Steps[0].Status != RunSucceeded {
+		t.Errorf("already-succeeded step was clobbered: %+v", gotRun.Steps[0])
+	}
+	if gotRun.Steps[1].Status != RunFailed {
+		t.Errorf("in-flight step not reaped: %+v", gotRun.Steps[1])
+	}
+	if gotRun.Steps[1].FailureClass != "transient" || gotRun.Steps[1].FailureReason != orphanReason {
+		t.Errorf("step attribution wrong: %+v", gotRun.Steps[1])
+	}
+
+	// Pending → failed too.
+	gotPend, _ := store.GetRun(ctx, "r-pend")
+	if gotPend.Status != RunFailed {
+		t.Errorf("pending run not reaped: %s", gotPend.Status)
+	}
+
+	// Re-running the reaper finds nothing.
+	n2, _ := r.ReconcileOrphans(ctx)
+	if n2 != 0 {
+		t.Errorf("second pass reaped %d, want 0 (idempotent)", n2)
+	}
+}

@@ -77,6 +77,70 @@ func NewRunner(store *Store, resolve PackResolver, exec Executor, canceller Sess
 // SetHook wires a terminal-run callback (e.g. audit). Optional.
 func (r *Runner) SetHook(h func(ctx context.Context, r *Run)) { r.hook = h }
 
+// orphanReason is the failure_reason stamped on runs the orphan reaper
+// reconciles at boot. Surfaced verbatim on both the run-level error and
+// every in-flight step's FailureReason so the UI shows WHY a run is
+// suddenly failed without a step that actually crashed.
+const orphanReason = "control plane restarted while this run was in flight"
+
+// ReconcileOrphans reaps runs the store still records as pending/running
+// at startup — their owning goroutine died with a previous control-plane
+// process, so nothing in-process will ever flip them. It is called once
+// from main on boot before the HTTP listener accepts requests, so there
+// is no live goroutine to race with. Each reaped run is marked failed
+// (with failure_class "transient" — a retry is reasonable), and every
+// in-flight step inside is marked the same way so the UI's step badges
+// aren't stuck on "running" inside an overall-failed run. Returns the
+// number reaped (terminal rows are untouched). Safe to call at any time
+// in principle, but only sensible at boot.
+func (r *Runner) ReconcileOrphans(ctx context.Context) (int, error) {
+	runs, err := r.store.ListInFlightRuns(ctx)
+	if err != nil {
+		return 0, err
+	}
+	reaped := 0
+	for _, run := range runs {
+		ended := r.now()
+		for i := range run.Steps {
+			st := run.Steps[i].Status
+			if st != RunPending && st != RunRunning {
+				continue
+			}
+			run.Steps[i].Status = RunFailed
+			if run.Steps[i].Error == "" {
+				run.Steps[i].Error = orphanReason
+			}
+			if run.Steps[i].FailureClass == "" {
+				run.Steps[i].FailureClass = "transient"
+			}
+			if run.Steps[i].FailureReason == "" {
+				run.Steps[i].FailureReason = orphanReason
+			}
+			if run.Steps[i].EndedAt.IsZero() {
+				run.Steps[i].EndedAt = ended
+			}
+		}
+		run.Status = RunFailed
+		if run.Error == "" {
+			run.Error = orphanReason
+		}
+		if run.FailureClass == "" {
+			run.FailureClass = "transient"
+		}
+		if run.FailureReason == "" {
+			run.FailureReason = orphanReason
+		}
+		if run.EndedAt.IsZero() {
+			run.EndedAt = ended
+		}
+		if err := r.store.SaveRun(ctx, run); err != nil {
+			return reaped, fmt.Errorf("reap orphan %s: %w", run.ID, err)
+		}
+		reaped++
+	}
+	return reaped, nil
+}
+
 // RunSync executes a pipeline to completion on the caller's context and
 // returns the finished Run. Used by tests and as the building block for
 // the async StartRun. Never returns an error for a *step* failure — that

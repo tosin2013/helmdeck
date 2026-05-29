@@ -100,7 +100,7 @@ func stubRunner(t *testing.T) (*Runner, *packs.MemoryArtifactStore) {
 	}
 	mem := packs.NewMemoryArtifactStore()
 	eng := packs.New(packs.WithArtifactStore(mem))
-	return NewRunner(testStore(t), resolve, eng, nil), mem
+	return NewRunner(testStore(t), resolve, eng, nil, nil), mem
 }
 
 // builtinRunInputs is a superset of every ${{ inputs.* }} the builtins

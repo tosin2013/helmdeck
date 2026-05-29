@@ -28,20 +28,29 @@ type fakeRuntime struct {
 	createCalls    int
 	terminateCalls int
 	createErr      error
+	// lastSpec captures the Spec the last Create was called with so
+	// label-on-create tests can assert what the engine passed in.
+	lastSpec session.Spec
 }
 
 func (f *fakeRuntime) Create(ctx context.Context, spec session.Spec) (*session.Session, error) {
 	f.createCalls++
+	f.lastSpec = spec
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
 	return &session.Session{ID: "sess-1", Status: session.StatusRunning}, nil
 }
-func (f *fakeRuntime) Get(ctx context.Context, id string) (*session.Session, error) { return nil, nil }
-func (f *fakeRuntime) List(ctx context.Context) ([]*session.Session, error)         { return nil, nil }
-func (f *fakeRuntime) Logs(ctx context.Context, id string) (io.ReadCloser, error)   { return nil, nil }
-func (f *fakeRuntime) Terminate(ctx context.Context, id string) error               { f.terminateCalls++; return nil }
-func (f *fakeRuntime) Close() error                                                  { return nil }
+func (f *fakeRuntime) Get(ctx context.Context, id string) (*session.Session, error) {
+	if id == "" {
+		return nil, nil
+	}
+	return &session.Session{ID: id, Status: session.StatusRunning}, nil
+}
+func (f *fakeRuntime) List(ctx context.Context) ([]*session.Session, error)       { return nil, nil }
+func (f *fakeRuntime) Logs(ctx context.Context, id string) (io.ReadCloser, error) { return nil, nil }
+func (f *fakeRuntime) Terminate(ctx context.Context, id string) error             { f.terminateCalls++; return nil }
+func (f *fakeRuntime) Close() error                                               { return nil }
 
 func TestEngineHappyPath(t *testing.T) {
 	pack := &Pack{
@@ -361,5 +370,53 @@ func TestEngineExecute_EmitsPackSpan_Error(t *testing.T) {
 	}
 	if got["helmdeck.pack.result"] != "handler_failed" {
 		t.Errorf("result attr should be the typed code, got %v", got["helmdeck.pack.result"])
+	}
+}
+
+// TestEngine_WithRunID_LabelsCreatedSession — WithRunID on the ctx ⇒ Execute
+// stamps the helmdeck.run_id label on the session spec it passes to
+// Runtime.Create. TerminateByRunID later finds the container by this label.
+func TestEngine_WithRunID_LabelsCreatedSession(t *testing.T) {
+	rt := &fakeRuntime{}
+	pack := &Pack{
+		Name: "render", Version: "v1", NeedsSession: true,
+		Handler: func(ctx context.Context, ec *ExecutionContext) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		},
+	}
+	eng := New(WithRuntime(rt), WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	ctx := WithRunID(context.Background(), "run_abc")
+	if _, err := eng.Execute(ctx, pack, nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := rt.lastSpec.Labels[session.LabelRunID]; got != "run_abc" {
+		t.Errorf("Create spec.Labels[%s] = %q, want run_abc", session.LabelRunID, got)
+	}
+}
+
+// TestEngine_WithRunID_PinnedSessionNotRelabeled — a reused (_session_id)
+// session belongs to whoever created it. Execute reuses it via Get and must
+// NOT call Create or stamp the run label on the pack's shared SessionSpec.
+func TestEngine_WithRunID_PinnedSessionNotRelabeled(t *testing.T) {
+	rt := &fakeRuntime{}
+	pack := &Pack{
+		Name: "render", Version: "v1", NeedsSession: true,
+		SessionSpec: session.Spec{Image: "shared"},
+		Handler: func(ctx context.Context, ec *ExecutionContext) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		},
+	}
+	eng := New(WithRuntime(rt), WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	ctx := WithRunID(context.Background(), "run_xyz")
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"_session_id":"pinned"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if rt.createCalls != 0 {
+		t.Errorf("pinned session should reuse, not create; createCalls=%d", rt.createCalls)
+	}
+	// The pack's shared SessionSpec must be untouched (no per-run label
+	// stamped on its Labels map across calls).
+	if v, ok := pack.SessionSpec.Labels[session.LabelRunID]; ok {
+		t.Errorf("pack.SessionSpec should not be mutated by Execute, got Labels[%s]=%q", session.LabelRunID, v)
 	}
 }

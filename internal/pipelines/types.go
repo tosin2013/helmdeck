@@ -32,7 +32,22 @@ const (
 	RunRunning   RunStatus = "running"
 	RunSucceeded RunStatus = "succeeded"
 	RunFailed    RunStatus = "failed"
+	RunCancelled RunStatus = "cancelled" // stopped by an explicit cancel request
 )
+
+// IsTerminal reports whether a run/step status is final (no further work).
+func (s RunStatus) IsTerminal() bool {
+	return s == RunSucceeded || s == RunFailed || s == RunCancelled
+}
+
+// StepProgress is one progress milestone a pack emitted via ec.Report while a
+// step ran (coarse — a handful per step). Surfaced in the run record so the UI
+// shows what a step is doing live.
+type StepProgress struct {
+	At      time.Time `json:"at"`
+	Pct     float64   `json:"pct"`
+	Message string    `json:"message"`
+}
 
 // Step is one pack invocation in a pipeline. Input is the pack's input
 // JSON, which may contain ${{ ... }} references resolved at run time.
@@ -73,8 +88,11 @@ type RunStep struct {
 	ErrorCode     packs.ErrorCode `json:"error_code,omitempty"`
 	FailureClass  string          `json:"failure_class,omitempty"`
 	FailureReason string          `json:"failure_reason,omitempty"`
-	StartedAt     time.Time       `json:"started_at"`
-	EndedAt       time.Time       `json:"ended_at,omitempty"`
+	// Progress is the live milestone trail a pack emitted via ec.Report
+	// while this step ran (Part A — surfaced in the UI as the run executes).
+	Progress  []StepProgress `json:"progress,omitempty"`
+	StartedAt time.Time      `json:"started_at"`
+	EndedAt   time.Time      `json:"ended_at,omitempty"`
 }
 
 // Run is one execution of a pipeline with its per-step history.

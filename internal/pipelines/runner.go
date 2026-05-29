@@ -6,6 +6,7 @@ package pipelines
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -19,6 +20,14 @@ type Executor interface {
 	Execute(ctx context.Context, pack *packs.Pack, input json.RawMessage) (*packs.Result, error)
 }
 
+// SessionCanceller force-terminates every session container tagged with a run
+// id. *docker.Runtime satisfies it (TerminateByRunID). Optional — when nil,
+// CancelRun still cancels the run context but can't tear down a stuck
+// container (degrades to a soft cancel).
+type SessionCanceller interface {
+	TerminateByRunID(ctx context.Context, runID string) (int, error)
+}
+
 // PackResolver resolves a pack by name+version. *packs.Registry.Get
 // satisfies it (method value).
 type PackResolver func(name, version string) (*packs.Pack, error)
@@ -28,14 +37,15 @@ type PackResolver func(name, version string) (*packs.Pack, error)
 // immediately; GetRun reads live in-memory status, falling back to the
 // persisted row after the run finishes / is evicted.
 type Runner struct {
-	store   *Store
-	resolve PackResolver
-	exec    Executor
-	logger  *slog.Logger
-	now     func() time.Time
+	store     *Store
+	resolve   PackResolver
+	exec      Executor
+	canceller SessionCanceller // optional — nil ⇒ soft cancel (ctx-only)
+	logger    *slog.Logger
+	now       func() time.Time
 
 	// hook, when set, is called after a run reaches a terminal state
-	// (succeeded/failed) — main.go wires it to the audit log.
+	// (succeeded/failed/cancelled) — main.go wires it to the audit log.
 	hook func(ctx context.Context, r *Run)
 
 	timeout time.Duration // per-run cap on the detached context
@@ -44,19 +54,23 @@ type Runner struct {
 }
 
 // NewRunner constructs a Runner. resolve is typically packReg.Get; exec is
-// the *packs.Engine.
-func NewRunner(store *Store, resolve PackResolver, exec Executor, logger *slog.Logger) *Runner {
+// the *packs.Engine; canceller (optional, may be nil) is the session
+// terminator used by CancelRun to tear down a stuck run — *docker.Runtime
+// satisfies it. When nil, CancelRun still cancels the run context but can't
+// kill an in-flight container (degraded soft cancel).
+func NewRunner(store *Store, resolve PackResolver, exec Executor, canceller SessionCanceller, logger *slog.Logger) *Runner {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Runner{
-		store:   store,
-		resolve: resolve,
-		exec:    exec,
-		logger:  logger,
-		now:     func() time.Time { return time.Now().UTC() },
-		timeout: 30 * time.Minute,
-		reg:     newRunRegistry(),
+		store:     store,
+		resolve:   resolve,
+		exec:      exec,
+		canceller: canceller,
+		logger:    logger,
+		now:       func() time.Time { return time.Now().UTC() },
+		timeout:   30 * time.Minute,
+		reg:       newRunRegistry(),
 	}
 }
 
@@ -69,6 +83,17 @@ func (r *Runner) SetHook(h func(ctx context.Context, r *Run)) { r.hook = h }
 // is recorded on the Run (Status=failed); it errors only on setup faults
 // (bad inputs JSON, store write failure).
 func (r *Runner) RunSync(ctx context.Context, p *Pipeline, inputs json.RawMessage, run *Run) error {
+	// If cancel landed before the goroutine reached this point (pending
+	// run cancelled), short-circuit cleanly — single-writer: this
+	// goroutine owns run.Status, CancelRun only flags + triggers.
+	if r.reg.cancelRequested(run.ID) {
+		run.Status = RunCancelled
+		run.Error = "cancelled before start"
+		run.EndedAt = r.now()
+		r.finish(context.Background(), run)
+		return nil
+	}
+
 	var inputMap map[string]any
 	if len(inputs) > 0 {
 		if err := json.Unmarshal(inputs, &inputMap); err != nil {
@@ -92,9 +117,32 @@ func (r *Runner) RunSync(ctx context.Context, p *Pipeline, inputs json.RawMessag
 		_ = r.store.SaveRun(ctx, run)
 		r.reg.put(run)
 
-		res, serr := r.runStep(ctx, step, inputMap, outputs, &prevSession)
+		// Capture pack progress (ec.Report) onto this step's record live —
+		// the callback runs synchronously inside Execute on this goroutine,
+		// so no race on run.Steps[idx]; reg.put deep-copies. Use a fresh
+		// ctx for the save so a cancelled run ctx doesn't drop the write.
+		stepCtx := packs.WithProgress(ctx, func(pct float64, msg string) {
+			run.Steps[idx].Progress = append(run.Steps[idx].Progress, StepProgress{At: r.now(), Pct: pct, Message: msg})
+			r.reg.put(run)
+			_ = r.store.SaveRun(context.Background(), run)
+		})
+
+		res, serr := r.runStep(stepCtx, step, inputMap, outputs, &prevSession)
 		run.Steps[idx].EndedAt = r.now()
 		if serr != nil {
+			// A cancel request (or an explicit ctx-cancel — distinct from
+			// the 30-min timeout's DeadlineExceeded) resolves the step to
+			// RunCancelled, not RunFailed. The flag is the authoritative
+			// signal; ctx.Err()==Canceled is the secondary, set by
+			// CancelRun's captured cancel().
+			if r.reg.cancelRequested(run.ID) || errors.Is(ctx.Err(), context.Canceled) {
+				run.Steps[idx].Status = RunCancelled
+				run.Status = RunCancelled
+				run.Error = "cancelled by request"
+				run.EndedAt = r.now()
+				r.finish(context.Background(), run)
+				return nil
+			}
 			code, class, reason := classify(serr, step.Pack)
 			run.Steps[idx].Status = RunFailed
 			run.Steps[idx].Error = serr.Error()

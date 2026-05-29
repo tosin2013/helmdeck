@@ -222,14 +222,24 @@ func (r *Runtime) Create(ctx context.Context, spec session.Spec) (*session.Sessi
 	id := uuid.NewString()
 	hostCfg := r.buildHostConfig(memBytes, shmBytes, resolved.CPULimit)
 
+	labels := map[string]string{
+		LabelManaged:   "true",
+		LabelSessionID: id,
+		LabelLabel:     resolved.Label,
+	}
+	// Merge caller-supplied labels (e.g. helmdeck.run_id from the
+	// pipeline runner). Reserved keys above always win — callers can't
+	// spoof managed/session_id/label.
+	for k, v := range resolved.Labels {
+		if _, reserved := labels[k]; reserved {
+			continue
+		}
+		labels[k] = v
+	}
 	cfg := &container.Config{
-		Image: resolved.Image,
-		Env:   envSlice(resolved.Env),
-		Labels: map[string]string{
-			LabelManaged:   "true",
-			LabelSessionID: id,
-			LabelLabel:     resolved.Label,
-		},
+		Image:  resolved.Image,
+		Env:    envSlice(resolved.Env),
+		Labels: labels,
 		ExposedPorts: nat.PortSet{
 			nat.Port(cdpPort + "/tcp"):           {},
 			nat.Port(playwrightMCPPort + "/tcp"): {},
@@ -353,6 +363,61 @@ func (r *Runtime) Terminate(ctx context.Context, id string) error {
 		return fmt.Errorf("remove: %w", rmErr)
 	}
 	return nil
+}
+
+// TerminateByRunID force-removes every helmdeck-managed container labeled
+// helmdeck.run_id=<runID> (set by the pipeline runner via Spec.Labels).
+// Returns the number actually killed. Uses the docker label filter so a
+// session created by another control-plane instance — orphaned across a
+// restart, no entry in r.sessions — is still found and removed. Force
+// removal sends SIGKILL, which is what frees a stuck render's CPU; a
+// plain Stop with a grace period would let the container drain.
+//
+// Idempotent: zero matches returns (0, nil). Not finding a container that
+// just disappeared between List and Remove is treated as success.
+func (r *Runtime) TerminateByRunID(ctx context.Context, runID string) (int, error) {
+	if runID == "" {
+		return 0, nil
+	}
+	args := filters.NewArgs(
+		filters.Arg("label", LabelManaged+"=true"),
+		filters.Arg("label", session.LabelRunID+"="+runID),
+	)
+	containers, err := r.cli.ContainerList(ctx, container.ListOptions{All: true, Filters: args})
+	if err != nil {
+		return 0, fmt.Errorf("list run %q containers: %w", runID, err)
+	}
+	if len(containers) == 0 {
+		return 0, nil
+	}
+	// Drop matching entries from the in-memory session table by
+	// container id, so a follow-up Terminate(sessionID) is a no-op
+	// instead of trying to stop an already-removed container.
+	r.mu.Lock()
+	for _, c := range containers {
+		for id, s := range r.sessions {
+			if s.ContainerID == c.ID {
+				delete(r.sessions, id)
+			}
+		}
+	}
+	r.mu.Unlock()
+	killed := 0
+	var firstErr error
+	for _, c := range containers {
+		if err := r.cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+			if client.IsErrNotFound(err) {
+				killed++
+				continue
+			}
+			if firstErr == nil {
+				firstErr = fmt.Errorf("remove %s: %w", c.ID[:12], err)
+			}
+			continue
+		}
+		killed++
+	}
+	return killed, firstErr
 }
 
 // Close releases the underlying Docker client.

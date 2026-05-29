@@ -6,7 +6,7 @@ tags: [friction, agent-architecture, field-report]
 description: A pipeline render sat at 100% CPU for 25 minutes while seven cores idled. The fix wasn't a bigger box — it was teaching the runtime which packs deserve them.
 image: /img/social-card.png
 date: 2026-05-30
-draft: true
+draft: false
 ---
 
 A `prompt-narrated-video` run on an 8-core / 62 GiB host wedged at 100% CPU for 25 minutes while seven cores sat idle. The render finished about 6 minutes after we fixed it — same host, same composition.

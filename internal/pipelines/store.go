@@ -211,6 +211,30 @@ func (s *Store) ListAllRuns(ctx context.Context, limit int) ([]*Run, error) {
 	return out, rows.Err()
 }
 
+// ListInFlightRuns returns every run the store still records as
+// pending/running — the candidates the orphan reaper reconciles at boot.
+// Ordered oldest-first so log output reads chronologically.
+func (s *Store) ListInFlightRuns(ctx context.Context) ([]*Run, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at
+		FROM pipeline_runs
+		WHERE status IN ('pending','running')
+		ORDER BY started_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Run
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // --- scan helpers ---
 
 type scanner interface {

@@ -47,7 +47,7 @@ func Builtins() []*Pipeline {
 		pipe("builtin.research-podcast", "Research → podcast",
 			"Deep-research a topic, then generate a multi-speaker podcast.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
-			step("podcast", "podcast.generate", `{"source_text":"${{ steps.research.output.synthesis }}","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
+			step("podcast", "podcast.generate", `{"source_text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
 		),
 		pipe("builtin.scrape-ground-blog", "Scrape → ground → blog",
 			"Scrape a URL to markdown, cite its factual claims against web sources and strengthen the cited sentences (content.ground), then save the result as a blog-post artifact (clone with a Ghost credential to publish).",
@@ -97,7 +97,7 @@ func Builtins() []*Pipeline {
 		pipe("builtin.repo-readme-podcast", "Repo → podcast",
 			"Clone a repo and generate a podcast about it from its README.",
 			step("fetch", "repo.fetch", `{"url":"${{ inputs.repo_url }}"}`),
-			step("podcast", "podcast.generate", `{"source_text":"${{ steps.fetch.output.readme.content }}","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
+			step("podcast", "podcast.generate", `{"source_text":"${{ steps.fetch.output.readme.content }}","model":"openrouter/auto","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
 		),
 		pipe("builtin.html-video", "HTML composition → MP4",
 			"Render an HTML/CSS/JS composition (authored by your agent, not hand-typed) to a deterministic MP4. To generate the composition from a plain description instead, use builtin.prompt-video.",
@@ -110,7 +110,7 @@ func Builtins() []*Pipeline {
 		),
 		pipe("builtin.prompt-narrated-video", "Describe → narrated video",
 			"Describe a video; generate a podcast narration (podcast.generate), compose visuals synced to it (hyperframes.compose), and render a narrated MP4 (hyperframes.render). Silent without an elevenlabs-key.",
-			step("podcast", "podcast.generate", `{"source_text":"${{ inputs.description }}","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
+			step("podcast", "podcast.generate", `{"source_text":"${{ inputs.description }}","model":"openrouter/auto","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
 			// audio_url + duration_s flow from the podcast step so the composition
 			// embeds the narration and matches its length; podcast.generate always
 			// emits both (audio_url is "" on a keyless store → a silent video).

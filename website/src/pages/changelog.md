@@ -16,6 +16,10 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-05-30
+
+**Theme:** Pipelines you can see into, stop, and resize. Running runs now surface each step's live progress in the UI; a `Cancel` button (+ `helmdeck__pipeline-cancel` MCP tool, + REST) genuinely stops a wedged run by tearing down its session container; the runner auto-cleans in-flight runs orphaned by a control-plane restart; and CPU-bound packs (`hyperframes.render`, `slides.narrate`) declare a host-aware compute profile instead of inheriting the legacy 1-core default. Plus a new `hyperframes.compose` pack turns a plain-language description into a HyperFrames composition so callers no longer hand-author the `data-*` / `window.__timelines` contract.
+
 ### Added
 
 - **CPU profiles for session packs.** A pack now declares its workload class — `session.ProfileIO` (the default, 1 core) or `session.ProfileCompute` (host-aware autodetect) — instead of a raw core count. The runtime resolves the compute profile to `clamp(host_cores - 1, 1, 6)` so an 8-core box gives a video render 6 cores instead of 1, and operators tune per-profile via `HELMDECK_IO_CPU_LIMIT` / `HELMDECK_COMPUTE_CPU_LIMIT`. `hyperframes.render` and `slides.narrate` (MP4 encode) migrate to `ProfileCompute`; every other session pack stays on the implicit `ProfileIO` default (no behavior change). On boot the control plane logs the resolved per-profile caps. New CPU-bound packs (and marketplace packs) pick a profile instead of reimplementing the host-aware math. See [ADR 045](docs/adrs/045-pack-resource-sizing.md) for the policy and [`docs/reference/hardware-sizing.md`](docs/reference/hardware-sizing.md) for operator-facing numbers.

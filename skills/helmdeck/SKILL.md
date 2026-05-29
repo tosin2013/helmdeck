@@ -133,7 +133,9 @@ A **pipeline** is a saved, named, ordered sequence of pack steps that runs serve
 - `helmdeck__pipeline-list` — List all pipelines (built-in starters + ones you/others created). **Call this first** when a user asks for a multi-step workflow — there may already be one (e.g. `builtin.grounded-deck`, `builtin.research-podcast`, `builtin.repo-readme-narrate`).
 - `helmdeck__pipeline-get` — Get one pipeline's full step definition by `id`.
 - `helmdeck__pipeline-run` — Run a pipeline (async). Pass `inputs` for its `${{ inputs.* }}` refs; returns a `run_id` immediately. Then poll `helmdeck__pipeline-run-status`.
-- `helmdeck__pipeline-run-status` — Poll a run by `run_id`: overall status (`pending|running|succeeded|failed`) + per-step outputs/errors.
+- `helmdeck__pipeline-run-status` — Poll a run by `run_id`: overall status (`pending|running|succeeded|failed|cancelled`) + per-step outputs/errors/progress. While a step is running, its latest `ec.Report(pct, message)` milestone appears under `steps[i].progress[]` — surface those to the user so a long run isn't a black box.
+- `helmdeck__pipeline-rerun` — Re-run an existing run from the top with the same pipeline + inputs (the CI/CD "retry this job" affordance). Use after fixing a `caller_fixable` failure, or to retry a transient one. Returns a new `run_id`.
+- `helmdeck__pipeline-cancel` — Hard-stop a `running` or `pending` run by `run_id`. Force-removes the run's session container(s) so an in-flight render frees CPU within ~1–2s. Already-terminal runs return an error. Partial output from the in-flight step is discarded.
 - `helmdeck__pipeline-create` — **Codify** a repeatable workflow as a new pipeline. Steps are `[{id, pack, input}]`; reference earlier steps with `${{ steps.<id>.output.<field> }}`. Discover valid chat-model IDs from `helmdeck://models`, and voice/image-model IDs from `helmdeck://voices` / `helmdeck://image-models`, *before* setting a `model` or referencing podcast/image packs.
 
 ### Operator-supplied subprocess packs (`cmd.*`, v0.12.0)

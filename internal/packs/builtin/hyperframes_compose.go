@@ -38,9 +38,11 @@ import (
 const (
 	hyperframesComposeDefaultDuration = 8.0
 	hyperframesComposeMaxDuration     = 720.0 // 12 min — matches hyperframes.render's cap
-	hyperframesComposeDefaultTokens   = 4096
-	hyperframesComposeMaxTokensFloor  = 2048
-	hyperframesComposeMaxTokensCeil   = 8192
+	// 6144 gives headroom so a chatty model finishes all three sections; a
+	// verbose STYLES block at 4096 truncated before ===BODY===.
+	hyperframesComposeDefaultTokens  = 6144
+	hyperframesComposeMaxTokensFloor = 2048
+	hyperframesComposeMaxTokensCeil  = 8192
 	// gsapCDN is the exact GSAP build the upstream CLI's `blank` template loads.
 	gsapCDN = "https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"
 
@@ -54,19 +56,20 @@ const (
 
 The canvas is EXACTLY %d×%d pixels and the video is %g seconds long. Animate with GSAP into a single paused timeline variable named ` + "`tl`" + ` (already declared for you — just add tweens to it).%s%s
 
-Respond with EXACTLY these three sections and NOTHING else. Put each marker on its OWN line and write raw CSS / HTML / JS between them — NO JSON, NO escaping, NO markdown fences:
+Respond with EXACTLY these three sections in THIS ORDER and NOTHING else. Put each marker on its OWN line and write raw CSS / HTML / JS between them — NO JSON, NO escaping, NO markdown fences. ALWAYS finish BODY and TIMELINE before STYLES — they are required; STYLES is the least important:
 
-===STYLES===
-(extra CSS rules for your elements; the canvas sizing + reset are already provided)
 ===BODY===
 (the visible elements that go inside the root div)
 ===TIMELINE===
 (GSAP statements that add tweens to the existing 'tl' timeline)
+===STYLES===
+(a FEW concise extra CSS rules — keep this short; the canvas sizing + reset are already provided)
 
 Hard rules (the render fails if you break them):
 - Every visible, timed element MUST have class="clip" and the attributes data-start, data-duration, data-track-index (integers; data-start+data-duration must stay within 0..%g). Give each element a unique id you reference from the timeline.
 - Position elements with absolute CSS inside the %d×%d canvas; use large, legible type (this is video, not a web page).
-- DETERMINISTIC ONLY: no Date.now(), no Math.random(), no network/fetch, no external images or fonts. Use solid colors, CSS gradients, shapes, and text.
+- Keep STYLES brief — a handful of rules, plain colors and simple gradients; do NOT write long or elaborate CSS (it can truncate the response).
+- DETERMINISTIC ONLY: no Date.now(), no Math.random(), no network/fetch, no external images or fonts. Use solid colors, simple CSS gradients, shapes, and text.
 - Do NOT emit <html>, <head>, <body>, <style> tags, the root div, the GSAP <script>, or the window.__timelines line — those are added for you. Only the three marked sections above.`
 
 	composeSecStyles   = "===STYLES==="
@@ -260,17 +263,25 @@ func parseComposeSpec(raw string) (composeSpec, *packs.PackError) {
 		return composeSpec{}, &packs.PackError{Code: packs.CodeInvalidInput,
 			Message: fmt.Sprintf("model did not return the expected ===STYLES===/===BODY===/===TIMELINE=== sections (try a more capable model or a richer description): %s", snippet)}
 	}
+	// Order-agnostic: each section runs from its marker to the NEXT marker
+	// (whichever comes next), so it doesn't matter what order the model emits
+	// them, and a truncated tail just yields a shorter/empty optional section.
+	sectionEnd := func(start int) int {
+		end := len(raw)
+		for _, o := range []int{iStyles, iBody, iTimeline} {
+			if o > start && o < end {
+				end = o
+			}
+		}
+		return end
+	}
 	var s composeSpec
-	if iStyles >= 0 && iStyles < iBody {
-		s.Styles = composeSection(raw, iStyles+len(composeSecStyles), iBody)
+	if iStyles >= 0 {
+		s.Styles = composeSection(raw, iStyles+len(composeSecStyles), sectionEnd(iStyles))
 	}
-	bodyEnd := len(raw)
-	if iTimeline > iBody {
-		bodyEnd = iTimeline
-	}
-	s.Body = composeSection(raw, iBody+len(composeSecBody), bodyEnd)
-	if iTimeline > iBody {
-		s.Timeline = composeSection(raw, iTimeline+len(composeSecTimeline), len(raw))
+	s.Body = composeSection(raw, iBody+len(composeSecBody), sectionEnd(iBody))
+	if iTimeline >= 0 {
+		s.Timeline = composeSection(raw, iTimeline+len(composeSecTimeline), sectionEnd(iTimeline))
 	}
 	return s, nil
 }

@@ -174,6 +174,28 @@ func TestCompose_EmptyBody(t *testing.T) {
 	}
 }
 
+// TestCompose_BodyFirstAndTruncatedStyles — the prompt now emits BODY/TIMELINE
+// before STYLES, and the parser is order-agnostic. If a chatty model truncates
+// inside the (now-last) STYLES section, the required BODY/TIMELINE still survive
+// and the composition assembles — the opposite of the real failure, where a
+// verbose leading STYLES section truncated before BODY ever appeared.
+func TestCompose_BodyFirstAndTruncatedStyles(t *testing.T) {
+	reply := "===BODY===\n" +
+		`<div id="t" class="clip" data-start="0" data-duration="5" data-track-index="1">Hi</div>` + "\n" +
+		"===TIMELINE===\n" +
+		"tl.from('#t',{opacity:0,duration:1},0);\n" +
+		"===STYLES===\n" // truncated: marker present, content cut off
+	disp := &scriptedDispatcherWT{replies: []string{reply}}
+	raw, err := runCompose(t, disp, `{"description":"x","model":"openrouter/auto"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	out := decodeCompose(t, raw)
+	if !strings.Contains(out.CompositionHTML, `class="clip"`) || !strings.Contains(out.CompositionHTML, "tl.from('#t'") {
+		t.Errorf("BODY/TIMELINE before a truncated STYLES must survive: %q", out.CompositionHTML)
+	}
+}
+
 func TestCompose_MissingFields(t *testing.T) {
 	for _, tc := range []struct{ name, input string }{
 		{"no description", `{"model":"openrouter/auto"}`},

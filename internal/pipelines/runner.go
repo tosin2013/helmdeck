@@ -148,7 +148,14 @@ func (r *Runner) runStep(ctx context.Context, step Step, inputs map[string]any, 
 	if err != nil {
 		return nil, err
 	}
-	if res.SessionID != "" {
+	// Carry the session forward ONLY when this pack PRESERVES it. A
+	// non-preserved session is torn down the moment the step ends, so
+	// threading its id into a later step yields "session not found" — which
+	// is exactly what broke podcast.generate (PreserveSession:false) →
+	// hyperframes.render (which needs its own hyperframes-sidecar session
+	// anyway). Preserved creators like repo.fetch still thread to their
+	// follow-on packs (repo.map, fs.*, git.*, repo.push) via _session_id.
+	if res.SessionID != "" && pack.PreserveSession {
 		*prevSession = res.SessionID
 	}
 	return res, nil

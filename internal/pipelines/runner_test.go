@@ -42,7 +42,16 @@ func (e *recordingExec) Execute(_ context.Context, p *packs.Pack, in json.RawMes
 }
 
 func resolverFor(_ ...string) PackResolver {
-	return func(name, _ string) (*packs.Pack, error) { return &packs.Pack{Name: name}, nil }
+	return func(name, _ string) (*packs.Pack, error) {
+		p := &packs.Pack{Name: name}
+		// Mirror the real registry: repo.fetch preserves its session so
+		// follow-on packs (repo.map, fs.*, git.*, repo.push) reuse it. The
+		// runner only threads a session forward from a preserving pack.
+		if name == "repo.fetch" {
+			p.PreserveSession = true
+		}
+		return p, nil
+	}
 }
 
 func newTestRunner(t *testing.T, ex Executor) *Runner {
@@ -104,6 +113,33 @@ func TestRunner_ThreadsSessionID(t *testing.T) {
 	}
 	if in1["markdown"] != "R" {
 		t.Errorf("nested readme.content not threaded: %v", in1["markdown"])
+	}
+}
+
+// TestRunner_DoesNotThreadNonPreservedSession is the prompt-narrated-video
+// regression: podcast.generate produces a session but does NOT preserve it, so
+// its id must not be threaded into a later step — doing so made
+// hyperframes.render fail "session_unavailable: session not found" (the session
+// was already torn down, and render needs its own hyperframes session anyway).
+func TestRunner_DoesNotThreadNonPreservedSession(t *testing.T) {
+	ex := &recordingExec{
+		outputs: map[string]string{"podcast.generate": `{"audio_url":"a"}`, "hyperframes.render": `{"artifact_key":"k"}`},
+		session: map[string]string{"podcast.generate": "dead-sess"}, // produced but not preserved
+	}
+	r := newTestRunner(t, ex)
+	p := &Pipeline{ID: "p", Name: "n", Steps: []Step{
+		{ID: "podcast", Pack: "podcast.generate", Input: json.RawMessage(`{}`)},
+		{ID: "render", Pack: "hyperframes.render", Input: json.RawMessage(`{}`)},
+	}}
+	run := &Run{ID: "run-nopreserve", PipelineID: "p", StartedAt: r.now()}
+	_ = r.store.CreateRun(context.Background(), run)
+	if err := r.RunSync(context.Background(), p, nil, run); err != nil {
+		t.Fatal(err)
+	}
+	var in1 map[string]any
+	_ = json.Unmarshal(ex.calls[1].input, &in1)
+	if v, ok := in1["_session_id"]; ok {
+		t.Errorf("render must NOT inherit podcast's non-preserved session, got _session_id=%v", v)
 	}
 }
 

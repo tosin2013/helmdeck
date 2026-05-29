@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -22,15 +23,23 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// memDBSeq gives each in-memory Open a unique db name (see Open).
+var memDBSeq int64
+
 // Open opens (and creates if missing) the SQLite database at path and runs
 // every embedded migration that hasn't been applied yet. The special path
 // ":memory:" yields an ephemeral in-memory database, used by tests.
 func Open(path string) (*sql.DB, error) {
 	dsn := path
 	if path == ":memory:" {
-		// shared cache so multiple connections from the same process see
-		// the same in-memory database (sqlite default behavior is per-conn)
-		dsn = "file::memory:?cache=shared"
+		// Unique shared-cache name per Open so the pool's connection(s) for
+		// THIS handle share one in-memory db, while each Open gets its OWN
+		// isolated db. A fixed `file::memory:?cache=shared` is shared
+		// PROCESS-WIDE — every Open returns the same db — which silently
+		// couples tests: a leaked async run from one test kept the shared db
+		// alive, so a pipeline id created in one test collided with the next
+		// ("UNIQUE constraint failed: pipelines.id"). Unique names isolate them.
+		dsn = fmt.Sprintf("file:helmdeck-mem-%d?mode=memory&cache=shared", atomic.AddInt64(&memDBSeq, 1))
 	} else {
 		dsn = "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
 	}

@@ -16,6 +16,10 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Added
+
+- **`hyperframes.compose` + describe-a-video pipelines.** A new pack turns a plain-language description into a HyperFrames HTML/CSS/JS composition ready for `hyperframes.render` — so callers no longer hand-author the `data-*` / `window.__timelines` contract. The pack guarantees the render contract (canvas sized to the aspect ratio, root scaffolding, a paused GSAP `window.__timelines` registration); the model writes only the creative visuals. Two one-call pipelines chain it: `builtin.prompt-video` (describe → compose → render, silent) and `builtin.prompt-narrated-video` (describe → `podcast.generate` → compose with the narration synced → render). `podcast.generate` now always emits `audio_url` (empty when no presigned store is configured) so the narrated pipeline degrades to a silent video instead of failing on a missing reference. `builtin.html-video` stays for agent-authored compositions, with its description/docs reworded to make clear the HTML is agent-authored, not hand-typed.
+
 ## [0.20.0] - 2026-05-28
 
 **Theme:** A more trustworthy agent surface. Pipelines reject unfilled `{{PLACEHOLDER}}` inputs instead of running with them; built-in pipeline descriptions say what the packs actually do (cite + save, not "rewrite + publish"); `slides.outline` guarantees a title slide and gains audience personas so decks open and close properly; and a new installable `helmdeck-debug` skill sweeps every pipeline + pack and drafts GitHub issues for what it finds.

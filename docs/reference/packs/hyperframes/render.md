@@ -171,6 +171,7 @@ The render pipeline emits progress at:
 
 ## Related
 
+- [`hyperframes.compose`](./compose.md) — generate the `composition_html` from a plain-language description (so you don't hand-author the `data-*`/`window.__timelines` contract). `builtin.prompt-video` chains compose → render.
 - [`podcast.generate`](../podcast/generate.md) — pairs naturally: podcast MP3 → embed presigned URL → narrated video.
 - [`slides.narrate`](../slides/narrate.md) — different shape: Marp slide deck → narrated MP4. `slides.narrate` is the "slide presentation" pack; `hyperframes.render` is the "freeform animation" pack.
 - [`image.generate`](../image/generate.md) — hero artwork for compositions (embed the resulting artifact's presigned URL as an `<img src>` in your HTML).

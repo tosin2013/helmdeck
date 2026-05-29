@@ -623,6 +623,11 @@ func main() {
 			// The deck/narrate pipelines (seed.go) insert it so prose no
 			// longer collapses to a single slide.
 			builtin.SlidesOutline(visionDispatcher),
+			// hyperframes.compose — generate a HyperFrames HTML/CSS/JS video
+			// composition from a description so callers don't hand-author the
+			// data-*/window.__timelines scaffolding. LLM-backed; the prompt→video
+			// pipelines (seed.go) chain it before hyperframes.render.
+			builtin.HyperframesCompose(visionDispatcher),
 			// T406 (revived): slides.narrate — Marp slides → narrated
 			// MP4 video via ElevenLabs TTS + ffmpeg + YouTube metadata
 			// via gateway LLM. Vault-stored ElevenLabs API key; degrades

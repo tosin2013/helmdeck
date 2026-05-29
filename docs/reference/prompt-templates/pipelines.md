@@ -257,7 +257,33 @@ repo_url = {{REPO_URL}}
 
 **Notes** — `repo.fetch` → `podcast.generate` from the README (default voices). Silent without an `elevenlabs-key`.
 
-#### `builtin.html-video` — render an HTML/CSS/JS composition to MP4
+#### `builtin.prompt-video` — describe a video, render a silent MP4
+
+**Template**
+```
+Use helmdeck__pipeline-run to run the builtin.prompt-video pipeline with inputs:
+description = {{DESCRIPTION}}
+```
+
+**Variables**
+- `{{DESCRIPTION}}` — plain-language description of the video to make (input `description`, required).
+
+**Notes** — `hyperframes.compose` (LLM generates the composition) → `hyperframes.render` (1080p, 16:9). No HTML to hand-write; short-form only (≤12 min, 512 MiB).
+
+#### `builtin.prompt-narrated-video` — describe a video, render a narrated MP4
+
+**Template**
+```
+Use helmdeck__pipeline-run to run the builtin.prompt-narrated-video pipeline with inputs:
+description = {{DESCRIPTION}}
+```
+
+**Variables**
+- `{{DESCRIPTION}}` — the video's topic/script intent (input `description`, required).
+
+**Notes** — `podcast.generate` (narration) → `hyperframes.compose` (visuals synced to the audio) → `hyperframes.render`. Silent (no narration track) without an `elevenlabs-key`.
+
+#### `builtin.html-video` — render a hand-authored HTML/CSS/JS composition to MP4
 
 **Template**
 ```
@@ -266,6 +292,6 @@ composition_html = {{COMPOSITION_HTML}}
 ```
 
 **Variables**
-- `{{COMPOSITION_HTML}}` — the HTML/CSS/JS composition to render (input `composition_html`, required). Embed an `<audio src>` (e.g. a `podcast.generate` `audio_url`) for narrated video.
+- `{{COMPOSITION_HTML}}` — the HTML/CSS/JS composition to render (input `composition_html`, required). **Your agent authors this** (it's not hand-typed) following the HyperFrames contract; or use `builtin.prompt-video` to generate it from a description. Embed an `<audio src>` (e.g. a `podcast.generate` `audio_url`) for narrated video.
 
 **Notes** — single step `hyperframes.render` (1080p, 16:9). Short-form only (≤12 min, 512 MiB).

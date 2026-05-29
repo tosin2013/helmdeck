@@ -10,8 +10,8 @@ import "testing"
 // seed.go fails CI rather than a deployment.
 func TestBuiltins_Valid(t *testing.T) {
 	b := Builtins()
-	if len(b) != 13 {
-		t.Errorf("expected 13 starter pipelines, got %d", len(b))
+	if len(b) != 15 {
+		t.Errorf("expected 15 starter pipelines, got %d", len(b))
 	}
 	anyPack := func(_, _ string) bool { return true }
 	ids := map[string]bool{}
@@ -28,7 +28,7 @@ func TestBuiltins_Valid(t *testing.T) {
 		}
 	}
 	// The two the user explicitly asked for must exist.
-	for _, want := range []string{"builtin.grounded-deck", "builtin.grounded-blog", "builtin.repo-presentation"} {
+	for _, want := range []string{"builtin.grounded-deck", "builtin.grounded-blog", "builtin.repo-presentation", "builtin.prompt-video", "builtin.prompt-narrated-video"} {
 		if !ids[want] {
 			t.Errorf("missing expected starter %q", want)
 		}

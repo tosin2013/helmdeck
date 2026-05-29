@@ -100,8 +100,22 @@ func Builtins() []*Pipeline {
 			step("podcast", "podcast.generate", `{"source_text":"${{ steps.fetch.output.readme.content }}","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
 		),
 		pipe("builtin.html-video", "HTML composition → MP4",
-			"Render an author-supplied HTML/CSS/JS composition to a deterministic MP4.",
+			"Render an HTML/CSS/JS composition (authored by your agent, not hand-typed) to a deterministic MP4. To generate the composition from a plain description instead, use builtin.prompt-video.",
 			step("render", "hyperframes.render", `{"composition_html":"${{ inputs.composition_html }}","resolution":"1080p","aspect_ratio":"16:9"}`),
+		),
+		pipe("builtin.prompt-video", "Describe → video",
+			"Describe a video in plain language; an LLM generates a HyperFrames composition (hyperframes.compose) and renders it to a silent MP4 (hyperframes.render) — no hand-written HTML.",
+			step("compose", "hyperframes.compose", `{"description":"${{ inputs.description }}","model":"openrouter/auto","aspect_ratio":"16:9"}`),
+			step("render", "hyperframes.render", `{"composition_html":"${{ steps.compose.output.composition_html }}","resolution":"1080p","aspect_ratio":"16:9"}`),
+		),
+		pipe("builtin.prompt-narrated-video", "Describe → narrated video",
+			"Describe a video; generate a podcast narration (podcast.generate), compose visuals synced to it (hyperframes.compose), and render a narrated MP4 (hyperframes.render). Silent without an elevenlabs-key.",
+			step("podcast", "podcast.generate", `{"source_text":"${{ inputs.description }}","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
+			// audio_url + duration_s flow from the podcast step so the composition
+			// embeds the narration and matches its length; podcast.generate always
+			// emits both (audio_url is "" on a keyless store → a silent video).
+			step("compose", "hyperframes.compose", `{"description":"${{ inputs.description }}","model":"openrouter/auto","aspect_ratio":"16:9","audio_url":"${{ steps.podcast.output.audio_url }}","duration_seconds":"${{ steps.podcast.output.duration_s }}"}`),
+			step("render", "hyperframes.render", `{"composition_html":"${{ steps.compose.output.composition_html }}","resolution":"1080p","aspect_ratio":"16:9"}`),
 		),
 	}
 }

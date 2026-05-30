@@ -11,6 +11,11 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Added
+
+- **Pipelines page is grouped by output format.** The flat table of every built-in is gone; the page now renders one section per output category — **Video / Slides / Blog / Podcast / Other** — in a fixed order, with each row showing its output as a badge (`MP4` / `PDF` / `MP3` / `Blog`). So "I want to make a video" is one heading and four rows away instead of a description-by-description scan. Category is inferred client-side from each pipeline's terminal pack (`slides.render` → PDF / Slides, `slides.narrate` & `hyperframes.render` → MP4 / Video, `podcast.generate` → MP3 / Podcast, `blog.publish` → Blog; anything else falls to "Other") — no SQL migration, no MCP wire change.
+- **`builtin.grounded-narrate` and `builtin.grounded-podcast` pipelines.** Mirrors of the existing `builtin.grounded-deck` / `builtin.grounded-blog` for the video and podcast outputs — a single `markdown` input is grounded against web sources via `content.ground` (so un-citable claims are marked `skipped` rather than silently passed through), then turned into a narrated MP4 (`slides.outline` → `slides.narrate`) or a multi-speaker MP3 (`podcast.generate`). Closes the matrix: paste a chunk of pre-researched notes and produce any of the four output formats in one call.
+
 ## [0.21.0] - 2026-05-30
 
 **Theme:** Pipelines you can see into, stop, and resize. Running runs now surface each step's live progress in the UI; a `Cancel` button (+ `helmdeck__pipeline-cancel` MCP tool, + REST) genuinely stops a wedged run by tearing down its session container; the runner auto-cleans in-flight runs orphaned by a control-plane restart; and CPU-bound packs (`hyperframes.render`, `slides.narrate`) declare a host-aware compute profile instead of inheriting the legacy 1-core default. Plus a new `hyperframes.compose` pack turns a plain-language description into a HyperFrames composition so callers no longer hand-author the `data-*` / `window.__timelines` contract.

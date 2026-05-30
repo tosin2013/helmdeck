@@ -41,6 +41,42 @@ interface Step {
   input?: unknown;
 }
 
+// Categorize a pipeline by the pack name of its terminal step — the
+// terminal pack is what determines the output format (slides.render → PDF,
+// slides.narrate / hyperframes.render → MP4, podcast.generate → MP3,
+// blog.publish → blog post). Done UI-side rather than as a backend field
+// so adding a category doesn't require an SQL migration or wire-shape
+// change; an unknown terminal pack falls through to "Other".
+type PipelineCategory = 'Video' | 'Slides' | 'Blog' | 'Podcast' | 'Other';
+
+const CATEGORY_ORDER: PipelineCategory[] = ['Video', 'Slides', 'Blog', 'Podcast', 'Other'];
+
+interface CategoryInfo {
+  category: PipelineCategory;
+  outputLabel: string; // short badge text ("PDF", "MP4", "MP3", "Blog")
+}
+
+function categorize(p: Pipeline): CategoryInfo {
+  const terminal = p.steps?.[p.steps.length - 1]?.pack ?? '';
+  switch (terminal) {
+    case 'slides.render':
+      return { category: 'Slides', outputLabel: 'PDF' };
+    case 'slides.narrate':
+    case 'hyperframes.render':
+    case 'hyperframes.compose':
+      // hyperframes.compose only appears as the terminal pack in chains
+      // that hand its composition off elsewhere — categorize defensively
+      // as Video so a future pipeline doesn't fall into "Other".
+      return { category: 'Video', outputLabel: 'MP4' };
+    case 'podcast.generate':
+      return { category: 'Podcast', outputLabel: 'MP3' };
+    case 'blog.publish':
+      return { category: 'Blog', outputLabel: 'Blog' };
+    default:
+      return { category: 'Other', outputLabel: terminal || '—' };
+  }
+}
+
 interface Pipeline {
   id: string;
   name: string;
@@ -149,78 +185,121 @@ export function PipelinesPage() {
           </CardContent>
         </Card>
       ) : (
-        !error && (
+        !error &&
+        (!pipelines || pipelines.length === 0 ? (
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Steps</TableHead>
+                <TableHead>Output</TableHead>
                 <TableHead>Kind</TableHead>
                 <TableHead>Updated</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {!pipelines || pipelines.length === 0 ? (
-                <TableEmpty colSpan={5}>
-                  <Workflow className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" />
-                  No pipelines yet. Ask an agent to create one, or POST to{' '}
-                  <code className="rounded bg-muted px-1 py-0.5">/api/v1/pipelines</code>.
-                </TableEmpty>
-              ) : (
-                pipelines.map((p) => (
-                  <TableRow
-                    key={p.id}
-                    className="cursor-pointer"
-                    onClick={() => setSelected(p)}
-                  >
-                    <TableCell>
-                      <div className="flex items-center gap-2 font-medium">
-                        {p.name}
-                        {activeIds.has(p.id) && (
-                          <Badge variant="warning" className="gap-1">
-                            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
-                            running
-                          </Badge>
-                        )}
-                      </div>
-                      {p.description && (
-                        <div className="text-xs text-muted-foreground">{p.description}</div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {p.steps?.map((s) => s.pack).join(' → ')}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={p.builtin ? 'secondary' : 'outline'}>
-                        {p.builtin ? 'built-in' : 'custom'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {formatRelative(p.updated_at)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <CopyPromptButton pipeline={p} />
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setRunOpen(p);
-                          }}
-                        >
-                          <Play className="mr-1 h-3 w-3" />
-                          Run
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
+              <TableEmpty colSpan={6}>
+                <Workflow className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" />
+                No pipelines yet. Ask an agent to create one, or POST to{' '}
+                <code className="rounded bg-muted px-1 py-0.5">/api/v1/pipelines</code>.
+              </TableEmpty>
             </TableBody>
           </Table>
-        )
+        ) : (
+          // Group pipelines by inferred category and render one section per
+          // non-empty category in fixed order. Inside each section the order
+          // matches the API response (today: by updated_at DESC), so the
+          // visual reshuffle is only between-section, not within.
+          (() => {
+            const groups = new Map<PipelineCategory, Pipeline[]>();
+            for (const p of pipelines) {
+              const { category } = categorize(p);
+              const arr = groups.get(category) ?? [];
+              arr.push(p);
+              groups.set(category, arr);
+            }
+            return CATEGORY_ORDER.filter((c) => (groups.get(c)?.length ?? 0) > 0).map(
+              (category) => (
+                <section key={category} className="space-y-2">
+                  <h2 className="flex items-center gap-2 text-base font-semibold">
+                    {category}
+                    <Badge variant="outline">{groups.get(category)!.length}</Badge>
+                  </h2>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Steps</TableHead>
+                        <TableHead>Output</TableHead>
+                        <TableHead>Kind</TableHead>
+                        <TableHead>Updated</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {groups.get(category)!.map((p) => {
+                        const { outputLabel } = categorize(p);
+                        return (
+                          <TableRow
+                            key={p.id}
+                            className="cursor-pointer"
+                            onClick={() => setSelected(p)}
+                          >
+                            <TableCell>
+                              <div className="flex items-center gap-2 font-medium">
+                                {p.name}
+                                {activeIds.has(p.id) && (
+                                  <Badge variant="warning" className="gap-1">
+                                    <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+                                    running
+                                  </Badge>
+                                )}
+                              </div>
+                              {p.description && (
+                                <div className="text-xs text-muted-foreground">{p.description}</div>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {p.steps?.map((s) => s.pack).join(' → ')}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{outputLabel}</Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={p.builtin ? 'secondary' : 'outline'}>
+                                {p.builtin ? 'built-in' : 'custom'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {formatRelative(p.updated_at)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-2">
+                                <CopyPromptButton pipeline={p} />
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRunOpen(p);
+                                  }}
+                                >
+                                  <Play className="mr-1 h-3 w-3" />
+                                  Run
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </section>
+              ),
+            );
+          })()
+        ))
       )}
 
       {selected && <RunHistory pipeline={selected} onClose={() => setSelected(null)} />}

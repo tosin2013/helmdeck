@@ -32,6 +32,20 @@ func Builtins() []*Pipeline {
 			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":true}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
+		pipe("builtin.grounded-narrate", "Grounded narrated video",
+			"Cite markdown's factual claims against web sources (content.ground), structure it into a deck (slides.outline), then render a narrated MP4 (slides.narrate). Falls back to silent video when no elevenlabs-key is configured.",
+			// rewrite:false matches grounded-deck — slides.outline restructures
+			// the cited prose into slides next, so a full rewrite would be
+			// wasted work.
+			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":false}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto"}`),
+			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":true}`),
+		),
+		pipe("builtin.grounded-podcast", "Grounded podcast",
+			"Cite markdown's factual claims against web sources (content.ground), then generate a multi-speaker podcast (podcast.generate).",
+			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":false}`),
+			step("podcast", "podcast.generate", `{"source_text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
+		),
 		pipe("builtin.research-deck", "Research → slide deck",
 			"Deep-research a topic, structure the synthesis into a deck (slides.outline), then render a PDF.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),

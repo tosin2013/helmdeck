@@ -64,6 +64,11 @@ var builtinPackStubs = map[string]stubSpec{
 	"podcast.generate":   {output: `{"audio_url":"https://example.com/a.mp3","duration_s":60,"artifact_key":"%KEY%"}`, artifact: true, artName: "podcast.mp3", contentType: "audio/mpeg", content: []byte("ID3 stub")},
 	"blog.publish":       {output: `{"artifact_key":"%KEY%","format":"markdown"}`, artifact: true, artName: "post.md", contentType: "text/markdown", content: []byte("# Post")},
 	"hyperframes.render": {output: `{"artifact_key":"%KEY%","format":"mp4"}`, artifact: true, artName: "video.mp4", contentType: "video/mp4", content: []byte("\x00\x00\x00\x18ftypmp42 stub")},
+	// Coding pipelines (ADR 046). github.get_issue feeds title+body into
+	// swe.solve; swe.solve is the terminal artifact producer (trajectory
+	// JSON) for the four builtin.{issue-to-pr,repo-solve-*} pipelines.
+	"github.get_issue": {output: `{"number":42,"title":"Fix the thing","body":"the readme is wrong","state":"open","labels":[],"html_url":"https://github.com/o/r/issues/42"}`},
+	"swe.solve":        {output: `{"success":true,"summary":"agent completed","patch":"diff --git a/x b/x","branch":"helmdeck/swe-solve-abc","commit":"deadbeef","pr_url":"https://github.com/o/r/pull/1","trajectory_artifact_key":"%KEY%","steps_executed":3}`, artifact: true, artName: "trajectory.json", contentType: "application/json", content: []byte(`{"trajectory":[]}`)},
 }
 
 // stubHandler builds a handler that emits the spec's output and, when the
@@ -113,7 +118,10 @@ const builtinRunInputs = `{
   "source_url": "https://example.com/whitepaper.pdf",
   "title": "My Title",
   "composition_html": "<html><body>hi</body></html>",
-  "description": "a 30-second explainer about kubernetes operators"
+  "description": "a 30-second explainer about kubernetes operators",
+  "repo": "example/repo",
+  "issue_number": 42,
+  "task": "rename the constant Foo to Bar"
 }`
 
 // TestBuiltins_RunEndToEnd runs every built-in pipeline through the runner

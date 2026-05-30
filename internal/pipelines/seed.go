@@ -131,6 +131,29 @@ func Builtins() []*Pipeline {
 			step("compose", "hyperframes.compose", `{"description":"${{ inputs.description }}","model":"openrouter/auto","aspect_ratio":"16:9","audio_url":"${{ steps.podcast.output.audio_url }}","duration_seconds":"${{ steps.podcast.output.duration_s }}"}`),
 			step("render", "hyperframes.render", `{"composition_html":"${{ steps.compose.output.composition_html }}","resolution":"1080p","aspect_ratio":"16:9"}`),
 		),
+
+		// ── Coding (beta) — ADR 046 ─────────────────────────────────
+		// Each name ends with " (beta)" so the UI renders a beta Badge;
+		// each description starts with "[beta]" so MCP-listing agents
+		// see the status too. Drop both markers when the pipelines
+		// graduate.
+		pipe("builtin.issue-to-pr", "Issue → PR (beta)",
+			"[beta] Read a GitHub issue by number (github.get_issue), hand its title + body to swe.solve in pull_request mode, and emit the opened PR's URL. Requires a `github-token` vault credential and an LLM gateway key for swe.solve. Single-issue scope; the production batch loop (process every open issue, conditional skip) is ADR 044 slice 2.",
+			step("issue", "github.get_issue", `{"repo":"${{ inputs.repo }}","issue_number":"${{ inputs.issue_number }}"}`),
+			step("solve", "swe.solve", `{"repo_url":"https://github.com/${{ inputs.repo }}.git","task":"${{ steps.issue.output.title }}\n\n${{ steps.issue.output.body }}","mode":"pull_request"}`),
+		),
+		pipe("builtin.repo-solve-pr", "Repo + task → PR (beta)",
+			"[beta] Hand swe.solve a repo URL + a free-form task description; it clones, runs the mini-swe-agent loop, pushes a branch, and opens a pull request. For tasks not yet tracked as an issue. Returns pr_url.",
+			step("solve", "swe.solve", `{"repo_url":"${{ inputs.repo_url }}","task":"${{ inputs.task }}","mode":"pull_request"}`),
+		),
+		pipe("builtin.repo-solve-patch", "Repo + task → diff (beta)",
+			"[beta] Safe preview: swe.solve runs the agent loop and returns the unified diff WITHOUT pushing a branch or opening a PR. Use this when you want a human review of the agent's work before anything reaches the remote.",
+			step("solve", "swe.solve", `{"repo_url":"${{ inputs.repo_url }}","task":"${{ inputs.task }}","mode":"patch"}`),
+		),
+		pipe("builtin.repo-solve-branch", "Repo + task → branch (beta)",
+			"[beta] swe.solve pushes a branch with the agent's commits but does NOT open a pull request. Use when PR creation lives in another system (GitLab MR, a custom bot) and you want to wire it up downstream.",
+			step("solve", "swe.solve", `{"repo_url":"${{ inputs.repo_url }}","task":"${{ inputs.task }}","mode":"branch"}`),
+		),
 	}
 }
 

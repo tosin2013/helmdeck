@@ -576,6 +576,12 @@ func main() {
 	for _, p := range []*packs.Pack{
 		builtin.GitHubCreateIssue(vaultStore),
 		builtin.GitHubListIssues(vaultStore),
+		// github.get_issue: read one issue by number. Pairs with
+		// swe.solve to feed an issue body into a coding-agent pipeline
+		// (builtin.issue-to-pr). github.list_issues filters by
+		// state/labels but NOT by number, so a single-issue read had
+		// to template http.fetch by hand before this.
+		builtin.GitHubGetIssue(vaultStore),
 		builtin.GitHubListPRs(vaultStore),
 		builtin.GitHubPostComment(vaultStore),
 		builtin.GitHubCreateRelease(vaultStore),

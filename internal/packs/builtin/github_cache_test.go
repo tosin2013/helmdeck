@@ -73,3 +73,68 @@ func TestGitHubListIssuesCacheSkipsAPI(t *testing.T) {
 		t.Fatalf("expected exactly 1 githubAPI call (2nd served from cache), got %d", apiCalls)
 	}
 }
+
+// TestGitHubGetIssueShape — the new pack must reject inputs missing
+// repo or issue_number (the issue-to-pr pipeline relies on both),
+// accept an output that includes title + body (what swe.solve consumes),
+// and opt into the same 5-minute read-through cache as list_issues so a
+// pipeline rerun for the same issue doesn't re-hit the REST API.
+func TestGitHubGetIssueShape(t *testing.T) {
+	p := GitHubGetIssue(nil)
+	if p.Name != "github.get_issue" {
+		t.Errorf("pack name = %q", p.Name)
+	}
+	// Validate the schema enforcement publicly (the Schema interface
+	// hides Required/Properties; .Validate is the production gate).
+	for _, bad := range []string{`{}`, `{"repo":"o/r"}`, `{"issue_number":42}`} {
+		if err := p.InputSchema.Validate(json.RawMessage(bad)); err == nil {
+			t.Errorf("InputSchema should reject %q", bad)
+		}
+	}
+	if err := p.InputSchema.Validate(json.RawMessage(`{"repo":"o/r","issue_number":42}`)); err != nil {
+		t.Errorf("InputSchema rejected a well-formed input: %v", err)
+	}
+	// A realistic GitHub issue response satisfies the OutputSchema.
+	if err := p.OutputSchema.Validate(json.RawMessage(`{"number":42,"title":"T","body":"B","state":"open","labels":[],"html_url":"https://github.com/o/r/issues/42","user":{"login":"alice"}}`)); err != nil {
+		t.Errorf("OutputSchema rejected a realistic issue payload: %v", err)
+	}
+	if p.Memory == nil || !p.Memory.Cache {
+		t.Fatal("github.get_issue should opt into the read-through cache")
+	}
+	if p.Memory.TTL != 5*time.Minute {
+		t.Fatalf("expected 5m cache TTL (matching list_issues), got %v", p.Memory.TTL)
+	}
+}
+
+// TestGitHubGetIssueCacheSkipsAPI mirrors the list_issues cache test: a
+// 2nd identical github.get_issue call within the TTL must NOT re-invoke
+// the handler (which stands in for the real githubAPI call).
+func TestGitHubGetIssueCacheSkipsAPI(t *testing.T) {
+	apiCalls := 0
+	real := GitHubGetIssue(nil)
+	pack := &packs.Pack{
+		Name:         real.Name,
+		Version:      real.Version,
+		InputSchema:  real.InputSchema,
+		OutputSchema: real.OutputSchema,
+		Memory:       real.Memory,
+		Handler: func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+			apiCalls++
+			return json.RawMessage(`{"number":42,"title":"T","body":"B","state":"open","labels":[],"html_url":"https://github.com/o/r/issues/42"}`), nil
+		},
+	}
+	eng := packs.New(
+		packs.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		packs.WithMemoryStore(memory.NewInMemoryStore()),
+	)
+	ctx := packs.WithCaller(context.Background(), "tester")
+	input := json.RawMessage(`{"repo":"octocat/hello-world","issue_number":42}`)
+	for i := 0; i < 2; i++ {
+		if _, err := eng.Execute(ctx, pack, input); err != nil {
+			t.Fatalf("call %d: %v", i+1, err)
+		}
+	}
+	if apiCalls != 1 {
+		t.Fatalf("expected exactly 1 handler call (2nd served from cache), got %d", apiCalls)
+	}
+}

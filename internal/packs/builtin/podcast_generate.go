@@ -64,9 +64,16 @@ func zeroFloorOptedIn(raw json.RawMessage) bool {
 // return CodeInternal at handler time.
 func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) *packs.Pack {
 	return &packs.Pack{
-		Name:            "podcast.generate",
-		Version:         "v1",
-		Description:     "Multi-speaker podcast (1..N) → MP3 artifact via pluggable TTS engine. Day 1: ElevenLabs. Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to produce a silence-padded MP3 when no key is configured (CI smoke / demo placeholder).",
+		Name:        "podcast.generate",
+		Version:     "v1",
+		Description: "Multi-speaker podcast (1..N) → MP3 artifact via pluggable TTS engine. Day 1: ElevenLabs. Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to produce a silence-padded MP3 when no key is configured (CI smoke / demo placeholder).",
+		Metadata: packs.PackMetadata{
+			Accepts:        []string{"source_text", "source_url", "prompt", "markdown"},
+			Produces:       []string{"mp3", "podcast_script"},
+			IntentKeywords: []string{"make podcast", "audio narration", "multi-speaker dialogue", "voice over"},
+			TypicalUse:     "Generator pack — turns source text or a prompt into a multi-speaker podcast. ElevenLabs by default.",
+			Limitations:    []string{"requires vault credential 'elevenlabs-key' (or allow_silent_output:true)", "does not produce video — pair with hyperframes.render or slides.narrate for a/v output", "voice selection is per-speaker — discover IDs via helmdeck://voices"},
+		},
 		NeedsSession:    true,
 		PreserveSession: false,
 		SessionSpec: session.Spec{

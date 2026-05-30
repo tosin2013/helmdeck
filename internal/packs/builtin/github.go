@@ -348,6 +348,13 @@ func GitHubGetIssue(v *vault.Store) *packs.Pack {
 		Name:        "github.get_issue",
 		Version:     "v1",
 		Description: "Fetch one GitHub issue by repo + number (title, body, state, labels, html_url). Read-through cached for 5 minutes; pairs with swe.solve for issue→PR pipelines.",
+		Metadata: packs.PackMetadata{
+			Accepts:        []string{"repo", "issue_number"},
+			Produces:       []string{"github_issue"},
+			IntentKeywords: []string{"read GitHub issue", "get issue body", "fetch issue by number"},
+			TypicalUse:     "Source pack for issue-driven workflows — feed its title+body into swe.solve as the task description (the issue-to-pr pipeline).",
+			Limitations:    []string{"reads ONE issue by number — for listing/filtering use github.list_issues", "requires vault github-token for private repos", "writes are out of scope (see github.create_issue / github.post_comment)"},
+		},
 		// Same read-through cache pattern as github.list_issues — a
 		// pipeline that retries (or batches by issue) won't re-hit the
 		// REST API for the same number.

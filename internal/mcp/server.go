@@ -386,6 +386,18 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 				MimeType:    "application/json",
 			})
 		}
+		// helmdeck://routing-guide is always available — it doesn't
+		// depend on any optional lister. The structured catalog
+		// (packs + pipelines with their PackMetadata / PipelineMetadata)
+		// is the source of truth for routing decisions per ADR 047.
+		// SKILL.md is the offline-fallback; this resource is what the
+		// agent should query first for a multi-step request.
+		resources = append(resources, Resource{
+			URI:         "helmdeck://routing-guide",
+			Name:        "Pipeline + pack routing guide",
+			Description: "The structured catalog the chat agent queries to pick the right pipeline or pack for a user request. Each entry carries `accepts` / `produces` / `intent_keywords` / `typical_use` / `limitations` (and `supersedes` for pipelines) so routing decisions are deterministic. Prefer pipelines over chaining packs when an entry's `supersedes` lists those packs. Use the top-level `policy` block as system-prompt context. ADR 047.",
+			MimeType:    "application/json",
+		})
 		return mk(map[string]any{"resources": resources}, nil)
 
 	case "resources/read":
@@ -499,6 +511,20 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			body, err := json.Marshal(payload)
 			if err != nil {
 				return mk(nil, &rpcError{Code: -32603, Message: "encode model list: " + err.Error()})
+			}
+			return mk(map[string]any{
+				"contents": []ResourceContent{
+					{URI: params.URI, MimeType: "application/json", Text: string(body)},
+				},
+			}, nil)
+		case "helmdeck://routing-guide":
+			payload, perr := s.buildRoutingGuide(ctx)
+			if perr != nil {
+				return mk(nil, perr)
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				return mk(nil, &rpcError{Code: -32603, Message: "encode routing-guide: " + err.Error()})
 			}
 			return mk(map[string]any{
 				"contents": []ResourceContent{

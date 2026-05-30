@@ -116,6 +116,13 @@ func BlogRewriteForAudience(d vision.Dispatcher) *packs.Pack {
 		Name:        "blog.rewrite_for_audience",
 		Version:     "v1",
 		Description: "Translate a source document (markdown) into an original blog post for a stated audience and angle. NOT a summarizer — leads with why-it-matters, de-jargons, connects to the audience's tools, adds perspective. Stays grounded in source_content (no claims that aren't in the source). Pair with content.ground (rewrite:false) downstream for a citation pass.",
+		Metadata: packs.PackMetadata{
+			Accepts:        []string{"markdown", "source_content"},
+			Produces:       []string{"blog_markdown"},
+			IntentKeywords: []string{"rewrite for audience", "expand brief into blog", "translate source into blog post", "make this technical/marketing/executive"},
+			TypicalUse:     "Generator pack at the heart of every *-rewrite-blog pipeline — turns a brief/scrape/parsed-doc into an original post for a stated audience.",
+			Limitations:    []string{"does not fetch sources (call doc.parse / web.scrape / research.deep first)", "does not insert inline citations (chain content.ground rewrite:false after)", "does not publish to a CMS (chain blog.publish to save the artifact)"},
+		},
 		InputSchema: packs.BasicSchema{
 			Required: []string{"source_content", "audience", "model"},
 			Properties: map[string]string{

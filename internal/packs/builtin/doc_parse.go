@@ -177,6 +177,13 @@ func DocParse(eg *security.EgressGuard) *packs.Pack {
 		Name:        "doc.parse",
 		Version:     "v1",
 		Description: "Parse a document file to clean markdown via Docling. Layout-aware, table-aware. Accepts source_url ending in .pdf, .docx, .pptx, .xlsx, .odt/.ods/.odp, or an image extension (.png, .jpg, .tiff); web-page URLs and extensionless URLs are rejected — for web pages use web.scrape. Alternatively pass source_b64 + filename for any file you already have in memory.",
+		Metadata: packs.PackMetadata{
+			Accepts:        []string{"pdf", "docx", "pptx", "xlsx", "odt", "ods", "odp", "image", "source_url", "source_b64"},
+			Produces:       []string{"markdown"},
+			IntentKeywords: []string{"parse pdf", "extract from document", "ocr document", "convert docx to markdown"},
+			TypicalUse:     "Source pack for document-shaped content. Chain into blog.rewrite_for_audience or slides.outline downstream.",
+			Limitations:    []string{"web-page URLs rejected at input validation (use web.scrape instead)", "extension-less URLs rejected (download first and pass source_b64 + filename)", "requires HELMDECK_DOCLING_ENABLED + the Docling overlay"},
+		},
 		InputSchema: packs.BasicSchema{
 			Properties: map[string]string{
 				"source_url": "string",

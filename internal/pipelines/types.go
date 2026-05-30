@@ -66,8 +66,46 @@ type Pipeline struct {
 	Builtin     bool            `json:"builtin"`
 	Inputs      json.RawMessage `json:"inputs,omitempty"` // informational declared-input schema
 	Steps       []Step          `json:"steps"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	// Metadata is the structured routing surface ADR 047 ships in PR #1
+	// of the routing roadmap. Zero value is valid — pipelines without
+	// metadata still work, they just don't show up in agent-side gap
+	// analysis or routing decisions. Surfaced via /api/v1/pipelines and
+	// the helmdeck://routing-guide MCP resource.
+	Metadata  PipelineMetadata `json:"metadata,omitempty"`
+	CreatedAt time.Time        `json:"created_at"`
+	UpdatedAt time.Time        `json:"updated_at"`
+}
+
+// PipelineMetadata is structured routing intel a pipeline declares so the
+// chat agent (and the helmdeck.route meta-pack, ADR 047 PR #3) can pick
+// the right pipeline without needing a hand-written SKILL.md rule. Same
+// shape as packs.PackMetadata plus Supersedes — empty fields mean
+// "unspecified" and are a no-op for the routing-guide consumer.
+type PipelineMetadata struct {
+	// Accepts lists the kinds of input the pipeline consumes. Mirrors
+	// packs.PackMetadata.Accepts — see that for examples.
+	Accepts []string `json:"accepts,omitempty"`
+
+	// Produces lists the kinds of output the pipeline emits. Mirrors
+	// packs.PackMetadata.Produces.
+	Produces []string `json:"produces,omitempty"`
+
+	// IntentKeywords are short phrases agents match against user intent.
+	IntentKeywords []string `json:"intent_keywords,omitempty"`
+
+	// TypicalUse is a one-sentence "use this when…" hint.
+	TypicalUse string `json:"typical_use,omitempty"`
+
+	// Limitations are explicit things the pipeline does NOT do —
+	// gap-analysis seed for ADR 047 PR #3.
+	Limitations []string `json:"limitations,omitempty"`
+
+	// Supersedes is the list of pack IDs (e.g. "content.ground +
+	// blog.publish") that this pipeline replaces — so an agent reading
+	// "found a pipeline that accepts your input AND supersedes these
+	// packs" knows not to chain those packs by hand. Encodes the
+	// "prefer pipeline over pack" policy from ADR 047.
+	Supersedes []string `json:"supersedes,omitempty"`
 }
 
 // RunStep is the per-step record within a run.

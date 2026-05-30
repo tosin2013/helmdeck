@@ -26,13 +26,27 @@ func Builtins() []*Pipeline {
 			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":false}`),
 			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
-		),
+		).withMeta(PipelineMetadata{
+			Accepts:        []string{"markdown"},
+			Produces:       []string{"pdf", "slide_deck"},
+			IntentKeywords: []string{"make deck", "slide deck from notes", "presentation from markdown", "grounded slides"},
+			TypicalUse:     "When the user has markdown notes / a README and wants a cited PDF slide deck with audience-aware persona.",
+			Limitations:    []string{"PDF only — use grounded-narrate for an MP4", "needs ≥2 slides of source material (slides.outline rejects thin content caller_fixable)"},
+			Supersedes:     []string{"content.ground", "slides.outline", "slides.render"},
+		}),
 		pipe("builtin.brief-rewrite-blog", "Brief → rewrite → blog",
 			"Translate a pasted brief / pitch / outline of ideas into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — expands the brief, leads with why-it-matters, de-jargons, connects to the audience's tools, adds perspective; stays grounded in the brief's framing), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: brief, audience, angle?, persona?, title. Use this when the user pastes a brief like \"Title Idea: …\\nThe Hook: …\\nWhat to Cover: …\\nTarget Audience: …\" — NOT for a finished draft. Replaces builtin.grounded-blog, which only added citations to whatever it received (an annotator, not a generator) so a brief came back as ~the brief, not a real blog post.",
 			step("rewrite", "blog.rewrite_for_audience", `{"source_content":"${{ inputs.brief }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","persona":"${{ inputs.persona }}","title":"${{ inputs.title }}","model":"openrouter/auto"}`),
 			step("ground", "content.ground", `{"text":"${{ steps.rewrite.output.markdown }}","model":"openrouter/auto","rewrite":false}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
-		),
+		).withMeta(PipelineMetadata{
+			Accepts:        []string{"brief", "markdown"},
+			Produces:       []string{"blog_markdown"},
+			IntentKeywords: []string{"make blog from brief", "expand pitch into blog post", "write blog from outline notes", "title idea + hook + what to cover"},
+			TypicalUse:     "When the user pastes a brief (Title Idea / Hook / What to Cover / Target Audience) and wants an original blog post.",
+			Limitations:    []string{"not for finished drafts — use content.ground directly for citation-only", "not for documents (use doc-rewrite-blog) or URLs (use scrape-rewrite-blog)"},
+			Supersedes:     []string{"blog.rewrite_for_audience", "content.ground", "blog.publish"},
+		}),
 		pipe("builtin.grounded-narrate", "Grounded narrated video",
 			"Cite markdown's factual claims against web sources (content.ground), structure it into a deck (slides.outline), then render a narrated MP4 (slides.narrate). Falls back to silent video when no elevenlabs-key is configured. Optional inputs: persona?, audience?, angle?, title?, author?, export_outline? (Marp markdown artifact), include_image_prompts? — same set as builtin.grounded-deck.",
 			// rewrite:false matches grounded-deck — slides.outline restructures
@@ -91,7 +105,14 @@ func Builtins() []*Pipeline {
 			// against web sources and inserts inline citations.
 			step("ground", "content.ground", `{"text":"${{ steps.rewrite.output.markdown }}","model":"openrouter/auto","rewrite":false}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
-		),
+		).withMeta(PipelineMetadata{
+			Accepts:        []string{"pdf", "docx", "source_url"},
+			Produces:       []string{"blog_markdown"},
+			IntentKeywords: []string{"blog from PDF", "blog from document", "summarize paper as blog", "post about this paper"},
+			TypicalUse:     "When the user has a document (PDF / DOCX / academic paper) and wants an original blog post for a stated audience.",
+			Limitations:    []string{"requires HELMDECK_DOCLING_ENABLED", "source_url must have a document extension (web pages → scrape-rewrite-blog)"},
+			Supersedes:     []string{"doc.parse", "blog.rewrite_for_audience", "content.ground", "blog.publish"},
+		}),
 		pipe("builtin.scrape-deck", "Scrape → slide deck",
 			"Scrape a URL to markdown, structure it into a deck (slides.outline), then render a PDF (no grounding). Optional inputs: persona?, audience?, angle?, title?, author?, export_outline?, include_image_prompts? — same set as builtin.grounded-deck.",
 			step("scrape", "web.scrape", `{"url":"${{ inputs.url }}"}`),
@@ -117,7 +138,14 @@ func Builtins() []*Pipeline {
 			// the repo has none (repo.fetch always emits it), so this resolves.
 			step("outline", "slides.outline", `{"text":"# README\n${{ steps.fetch.output.readme.content }}\n\n# Project docs\n${{ steps.fetch.output.docs.content }}\n\n# Code structure (symbol map)\n${{ steps.map.output.map }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
 			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":true}`),
-		),
+		).withMeta(PipelineMetadata{
+			Accepts:        []string{"repo_url"},
+			Produces:       []string{"mp4", "narrated_video"},
+			IntentKeywords: []string{"video about repo", "narrate this codebase", "presentation from GitHub project", "explain repo as a video"},
+			TypicalUse:     "When the user wants a narrated MP4 walkthrough of a GitHub repo — uses README + docs + code map as source.",
+			Limitations:    []string{"narrated video only — for a podcast use repo-readme-podcast", "requires ElevenLabs key for narration (falls back to silent video)"},
+			Supersedes:     []string{"repo.fetch", "repo.map", "slides.outline", "slides.narrate"},
+		}),
 		pipe("builtin.repo-readme-podcast", "Repo → podcast",
 			"Clone a repo and generate a podcast about it from its README.",
 			step("fetch", "repo.fetch", `{"url":"${{ inputs.repo_url }}"}`),
@@ -151,7 +179,14 @@ func Builtins() []*Pipeline {
 			"[beta] Read a GitHub issue by number (github.get_issue), hand its title + body to swe.solve in pull_request mode, and emit the opened PR's URL. Requires a `github-token` vault credential and an LLM gateway key for swe.solve. Single-issue scope; the production batch loop (process every open issue, conditional skip) is ADR 044 slice 2.",
 			step("issue", "github.get_issue", `{"repo":"${{ inputs.repo }}","issue_number":"${{ inputs.issue_number }}"}`),
 			step("solve", "swe.solve", `{"repo_url":"https://github.com/${{ inputs.repo }}.git","task":"${{ steps.issue.output.title }}\n\n${{ steps.issue.output.body }}","mode":"pull_request"}`),
-		),
+		).withMeta(PipelineMetadata{
+			Accepts:        []string{"repo", "issue_number"},
+			Produces:       []string{"pr_url"},
+			IntentKeywords: []string{"fix issue and open PR", "implement GitHub issue", "issue to PR", "close this issue with a PR"},
+			TypicalUse:     "When the user has a specific GitHub issue and wants an agent-driven PR opened against it.",
+			Limitations:    []string{"beta — single issue per run", "requires github-token vault credential + LLM gateway", "no conditional skip for wontfix/closed (ADR 044 slice 2)"},
+			Supersedes:     []string{"github.get_issue", "swe.solve"},
+		}),
 		pipe("builtin.repo-solve-pr", "Repo + task → PR (beta)",
 			"[beta] Hand swe.solve a repo URL + a free-form task description; it clones, runs the mini-swe-agent loop, pushes a branch, and opens a pull request. For tasks not yet tracked as an issue. Returns pr_url.",
 			step("solve", "swe.solve", `{"repo_url":"${{ inputs.repo_url }}","task":"${{ inputs.task }}","mode":"pull_request"}`),
@@ -177,4 +212,13 @@ func step(id, pack, input string) Step {
 
 func pipe(id, name, desc string, steps ...Step) *Pipeline {
 	return &Pipeline{ID: id, Name: name, Description: desc, Builtin: true, Steps: steps}
+}
+
+// withMeta attaches the structured routing metadata declared in ADR 047
+// onto a pipeline. Designed to be chained off pipe(...) at the call site
+// so the metadata reads next to the steps — kept as a method rather
+// than a pipe() variadic so the common no-metadata case stays terse.
+func (p *Pipeline) withMeta(m PipelineMetadata) *Pipeline {
+	p.Metadata = m
+	return p
 }

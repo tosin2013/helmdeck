@@ -152,6 +152,13 @@ func SlidesOutline(d vision.Dispatcher) *packs.Pack {
 		Name:        "slides.outline",
 		Version:     "v1",
 		Description: "Restate prose/markdown as a structured Marp slide deck (--- separated slides with titles, bullets, and speaker notes), ready for slides.render or slides.narrate. Guarantees a multi-slide deck or fails caller_fixable when the content is too thin.",
+		Metadata: packs.PackMetadata{
+			Accepts:        []string{"markdown", "text"},
+			Produces:       []string{"marp_markdown", "outline_markdown"},
+			IntentKeywords: []string{"outline as slides", "make this a deck", "structure as presentation", "persona-aware deck"},
+			TypicalUse:     "Generator pack — turns prose into a structured Marp deck honoring persona/audience/angle. Chain slides.render after for PDF or slides.narrate after for narrated MP4.",
+			Limitations:    []string{"does not render PDF (chain slides.render)", "does not produce video (chain slides.narrate)", "fails caller_fixable when source is too thin for ≥2 slides — give it a full README/synthesis, not a single sentence"},
+		},
 		InputSchema: packs.BasicSchema{
 			Required: []string{"text", "model"},
 			Properties: map[string]string{

@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -625,8 +626,13 @@ func main() {
 	// Vision packs (T408) need a gateway dispatcher. Register only when
 	// one is configured — operators running in stub mode without
 	// providers should still get the rest of the pack catalog.
+	// visionDispatcher is hoisted out of the gateway-conditional block
+	// so helmdeck.route (registered below, after the pipeline store is
+	// wired) can capture the same handle. Nil-when-no-gateway is the
+	// inherited zero value; the route handler degrades gracefully.
+	var visionDispatcher vision.Dispatcher
 	if deps.GatewayChain != nil || deps.Gateway != nil {
-		var visionDispatcher = pickVisionDispatcher(deps)
+		visionDispatcher = pickVisionDispatcher(deps)
 		for _, p := range []*packs.Pack{
 			builtin.VisionClickAnywhere(visionDispatcher),
 			builtin.VisionExtractVisibleText(visionDispatcher),
@@ -756,6 +762,16 @@ func main() {
 	}
 	deps.PipelineStore = pipeStore
 	deps.PipelineRunner = pipeRunner
+
+	// helmdeck.route — LLM-backed routing meta-pack (ADR 047 PR #3).
+	// Registered here because it captures the dispatcher, the pack
+	// registry, and a pipeline-list adapter — all three need to be in
+	// scope. When no gateway is configured the dispatcher is nil and
+	// the handler returns CodeInternal with a clear message at call
+	// time; the rest of the catalog still functions.
+	if err := packReg.Register(builtin.Route(visionDispatcher, packReg, mainPipelinesLister{store: pipeStore})); err != nil {
+		logger.Warn("register helmdeck.route pack failed", "err", err)
+	}
 	// Reap any in-flight rows the previous control-plane process left
 	// behind — their owning goroutines died with that process and
 	// nothing will ever flip them. Runs once here, before the HTTP
@@ -865,6 +881,26 @@ func loadOrGenerateMemoryMaster() ([]byte, bool, error) {
 	}
 	b, err := vault.ParseMasterKey(hex)
 	return b, true, err
+}
+
+// mainPipelinesLister adapts *pipelines.Store to builtin.PipelinesLister
+// for the helmdeck.route pack. Returns the canonical pipelines JSON the
+// route pack's catalog projection expects. Kept inline because it's the
+// only call site; if a second pack needs this surface it should move to
+// internal/pipelines as an exported method.
+type mainPipelinesLister struct {
+	store *pipelines.Store
+}
+
+func (m mainPipelinesLister) List(ctx context.Context) (json.RawMessage, error) {
+	if m.store == nil {
+		return json.RawMessage("[]"), nil
+	}
+	ps, err := m.store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(ps)
 }
 
 // pickVisionDispatcher mirrors the precedence used by api/vision.go:

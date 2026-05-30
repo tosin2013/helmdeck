@@ -126,6 +126,7 @@ const builtinRunInputs = `{
   "repo": "example/repo",
   "issue_number": 42,
   "task": "rename the constant Foo to Bar",
+  "brief": "Title Idea: AI agent orchestration on bare-metal Kubernetes\nWhat to Cover: Architecture for agent-to-agent comms; resource allocation; OpenShift virtualization.",
   "audience": "developers building AI agents",
   "angle": "connect to practical tool-calling patterns",
   "persona": "technical"

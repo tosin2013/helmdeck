@@ -53,13 +53,96 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/security"
 )
+
+// docParseAllowedExtensions is the closed set of file extensions
+// doc.parse accepts on a source_url. Anything else (notably web pages
+// like https://medium.com/... and arxiv abstract URLs that don't have
+// a .pdf suffix) is rejected at input validation with a caller_fixable
+// error that routes the agent to web.scrape instead — so a wrong-tool
+// mismatch fails fast at the pack boundary rather than as a cryptic
+// docling 4xx after a wasted network round trip.
+//
+// Extensions cover what docling-serve can actually parse via its input
+// backends: PDF, common office docs, and image OCR. HTML is
+// deliberately omitted; web pages route to web.scrape (which is also
+// Firecrawl-backed and handles anti-scrape defenses doc.parse cannot).
+// Extensionless URLs that *do* host a document (arxiv /abs/, content-
+// negotiating landing pages) must be downloaded first and passed via
+// source_b64 + filename, which carries the type explicitly.
+var docParseAllowedExtensions = map[string]struct{}{
+	".pdf":  {},
+	".docx": {},
+	".pptx": {},
+	".xlsx": {},
+	".odt":  {},
+	".ods":  {},
+	".odp":  {},
+	".png":  {},
+	".jpg":  {},
+	".jpeg": {},
+	".tif":  {},
+	".tiff": {},
+}
+
+// validateDocParseURL enforces docParseAllowedExtensions on a source URL
+// at input-validation time. The path is parsed and its lowercased
+// extension is matched against the allowlist; anything else returns a
+// caller_fixable error that says what the pack accepts and where to
+// route web pages instead. Empty URL is a no-op (the caller already
+// validated source presence).
+func validateDocParseURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: fmt.Sprintf("source_url is not a valid URL: %v", err), Cause: err}
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: "source_url must be an absolute URL (scheme + host)"}
+	}
+	ext := strings.ToLower(path.Ext(u.Path))
+	// path.Ext treats anything after the last "." as the extension, so
+	// an arxiv-style URL "/abs/1706.03762" returns ".03762". Numeric-
+	// only "extensions" are a version-number identifier, not a file
+	// type — collapse them to "no extension" so the rejection message
+	// reads naturally.
+	if ext != "" && isAllDigits(ext[1:]) {
+		ext = ""
+	}
+	if _, ok := docParseAllowedExtensions[ext]; ok {
+		return nil
+	}
+	hint := "doc.parse handles document files (.pdf, .docx, .pptx, .xlsx, .odt/.ods/.odp, .png/.jpg/.tiff). " +
+		"For web pages, use web.scrape (it handles anti-scrape defenses doc.parse cannot). " +
+		"For URLs without a document extension (e.g. an arxiv abstract page), download the file first and pass it via source_b64 + filename."
+	if ext == "" {
+		return &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: fmt.Sprintf("source_url %q has no file extension. %s", raw, hint)}
+	}
+	return &packs.PackError{Code: packs.CodeInvalidInput,
+		Message: fmt.Sprintf("source_url extension %q is not a supported document type. %s", ext, hint)}
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
 
 const (
 	// defaultDoclingURL matches the service name in
@@ -93,7 +176,7 @@ func DocParse(eg *security.EgressGuard) *packs.Pack {
 	return &packs.Pack{
 		Name:        "doc.parse",
 		Version:     "v1",
-		Description: "Parse a document to clean markdown via Docling (PDF, DOCX, PPTX, HTML, images). Layout-aware, table-aware, multi-format.",
+		Description: "Parse a document file to clean markdown via Docling. Layout-aware, table-aware. Accepts source_url ending in .pdf, .docx, .pptx, .xlsx, .odt/.ods/.odp, or an image extension (.png, .jpg, .tiff); web-page URLs and extensionless URLs are rejected — for web pages use web.scrape. Alternatively pass source_b64 + filename for any file you already have in memory.",
 		InputSchema: packs.BasicSchema{
 			Properties: map[string]string{
 				"source_url": "string",
@@ -229,6 +312,22 @@ func docParseHandler(eg *security.EgressGuard) packs.HandlerFunc {
 			// instead of surfacing a confusing upstream error.
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
 				Message: "filename is required when source_b64 is set (extension picks the parser)"}
+		}
+
+		// Source-URL extension allowlist. Web-page URLs (medium.com,
+		// blog posts, anything ending in .html) and extensionless
+		// URLs are rejected up front with a caller_fixable error that
+		// routes the agent to web.scrape — the wrong-tool mismatch
+		// fails at the pack boundary instead of as a cryptic docling
+		// 4xx after a wasted network round trip. Edge case
+		// (arxiv /abs/, content-negotiating landing pages): download
+		// the file first and pass it as source_b64 + filename, which
+		// carries the type explicitly. See docParseAllowedExtensions
+		// for the closed set.
+		if in.SourceURL != "" {
+			if err := validateDocParseURL(in.SourceURL); err != nil {
+				return nil, err
+			}
 		}
 
 		// Closed-set formats — Docling accepts more, but the pack

@@ -139,3 +139,60 @@ func TestStore_ListAllRuns(t *testing.T) {
 		t.Errorf("ListAllRuns should span pipelines, got %v", pids)
 	}
 }
+
+// TestStore_PruneStaleBuiltins — builtin rows whose ID isn't in the
+// current set are reaped on boot, but user-created pipelines (built-
+// in=false) survive even if their ID happens to start with "builtin.".
+func TestStore_PruneStaleBuiltins(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	ok := func(_, _ string) bool { return true }
+
+	// Seed two builtins. Reuse two real Builtins() entries so the
+	// Seed call's pack-validation passes via the always-ok shim.
+	keep := Builtins()[0]   // simulates a builtin still in source
+	remove := Builtins()[1] // simulates one removed in source
+	for _, p := range []*Pipeline{keep, remove} {
+		if err := s.Seed(ctx, p, ok); err != nil {
+			t.Fatalf("seed %s: %v", p.ID, err)
+		}
+	}
+	// Also create a user pipeline with a builtin-looking ID — must
+	// NOT be touched (the guard is the builtin column, not the
+	// id prefix).
+	user := &Pipeline{ID: "builtin.user-clone", Name: "User clone", Builtin: false, Steps: keep.Steps}
+	if err := s.Create(ctx, user); err != nil {
+		t.Fatal(err)
+	}
+
+	reaped, err := s.PruneStaleBuiltins(ctx, []string{keep.ID})
+	if err != nil {
+		t.Fatalf("PruneStaleBuiltins: %v", err)
+	}
+	if reaped != 1 {
+		t.Errorf("reaped = %d, want 1 (just %s)", reaped, remove.ID)
+	}
+	list, _ := s.List(ctx)
+	gotIDs := map[string]bool{}
+	for _, p := range list {
+		gotIDs[p.ID] = true
+	}
+	if !gotIDs[keep.ID] {
+		t.Errorf("keep id %s missing after prune", keep.ID)
+	}
+	if gotIDs[remove.ID] {
+		t.Errorf("stale builtin %s still present after prune", remove.ID)
+	}
+	if !gotIDs["builtin.user-clone"] {
+		t.Error("user-created pipeline with builtin-looking id was wrongly reaped")
+	}
+
+	// Second pass: nothing left to reap.
+	reaped, err = s.PruneStaleBuiltins(ctx, []string{keep.ID})
+	if err != nil {
+		t.Fatalf("PruneStaleBuiltins pass 2: %v", err)
+	}
+	if reaped != 0 {
+		t.Errorf("second pass reaped %d, want 0 (idempotent)", reaped)
+	}
+}

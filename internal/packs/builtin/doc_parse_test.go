@@ -525,3 +525,95 @@ func TestDocParse_EmptyMarkdownIsError(t *testing.T) {
 		t.Errorf("expected handler_failed, got %v", err)
 	}
 }
+
+// TestDocParse_URLExtensionAllowlist — source_url must end in a known
+// document extension. Web pages (.html, no extension, Medium-style
+// blog URLs) are rejected at input validation with a caller_fixable
+// error routing the agent to web.scrape. The pack never reaches
+// Docling for these inputs, so no cryptic 4xx surfaces.
+func TestDocParse_URLExtensionAllowlist(t *testing.T) {
+	// The handler should reject without ever calling docling, so the
+	// stub's t.Fatal fires if the request leaks through.
+	srv := stubDocling(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("docling should not be called for a non-document URL")
+	})
+	defer srv.Close()
+	enableDocling(t, srv.URL)
+	eng := packs.New()
+	pack := DocParse(permissiveEgressGuard())
+
+	for _, tc := range []struct {
+		name       string
+		url        string
+		wantSubstr string // a substring expected in the error message
+	}{
+		{"Medium webpage", "https://medium.com/@author/some-post-abc123", "no file extension"},
+		{"raw .html", "https://example.com/article.html", "not a supported document type"},
+		{"arxiv abstract (no extension)", "https://arxiv.org/abs/1706.03762", "no file extension"},
+		{"unsupported .epub", "https://example.com/book.epub", "not a supported document type"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]any{"source_url": tc.url})
+			_, err := eng.Execute(context.Background(), pack, body)
+			pe, _ := err.(*packs.PackError)
+			if pe == nil || pe.Code != packs.CodeInvalidInput {
+				t.Fatalf("want CodeInvalidInput, got %v", err)
+			}
+			if !strings.Contains(pe.Message, tc.wantSubstr) {
+				t.Errorf("error msg = %q, want substring %q", pe.Message, tc.wantSubstr)
+			}
+			// The routing hint must always be present so the agent
+			// knows what to do next — that's the whole point of
+			// failing here instead of letting Docling fail later.
+			if !strings.Contains(pe.Message, "web.scrape") {
+				t.Errorf("error msg should route to web.scrape, got: %q", pe.Message)
+			}
+		})
+	}
+}
+
+// TestDocParse_URLExtensionAllowlist_AcceptedShapes — extensions in
+// the allowlist (case-insensitive, with query strings) make it
+// through input validation and reach docling.
+func TestDocParse_URLExtensionAllowlist_AcceptedShapes(t *testing.T) {
+	for _, url := range []string{
+		"https://arxiv.org/pdf/1706.03762.pdf",
+		"https://example.com/paper.PDF",          // upper case
+		"https://example.com/deck.pptx?v=2",      // query string
+		"https://example.com/scan.tiff",
+	} {
+		t.Run(url, func(t *testing.T) {
+			called := false
+			srv := stubDocling(t, func(w http.ResponseWriter, _ *http.Request) {
+				called = true
+				_, _ = w.Write([]byte(`{"document":{"md_content":"# ok"},"status":"success","processing_time":0.1}`))
+			})
+			defer srv.Close()
+			enableDocling(t, srv.URL)
+			eng := packs.New()
+			pack := DocParse(permissiveEgressGuard())
+			body, _ := json.Marshal(map[string]any{"source_url": url})
+			if _, err := eng.Execute(context.Background(), pack, body); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if !called {
+				t.Error("docling should have been called for an allowlisted extension")
+			}
+		})
+	}
+}
+
+// TestDocParse_URLExtensionAllowlist_MalformedURL — a non-URL string
+// short-circuits with invalid_input rather than crashing url.Parse
+// downstream.
+func TestDocParse_URLExtensionAllowlist_MalformedURL(t *testing.T) {
+	enableDocling(t, "http://unused")
+	eng := packs.New()
+	pack := DocParse(permissiveEgressGuard())
+	body, _ := json.Marshal(map[string]any{"source_url": "not a url"})
+	_, err := eng.Execute(context.Background(), pack, body)
+	pe, _ := err.(*packs.PackError)
+	if pe == nil || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("want CodeInvalidInput, got %v", err)
+	}
+}

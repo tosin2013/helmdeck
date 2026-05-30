@@ -146,6 +146,22 @@ All four take `audience` (e.g. "developers building AI agents"), `angle` (e.g. "
 
 When the user pastes a pitch like *"Title Idea: …\\nThe Hook: …\\nWhat to Cover: …\\nTarget Audience: …"* → `builtin.brief-rewrite-blog`. **Do NOT** try `helmdeck__pipeline-create` to chain `content.ground → blog.publish` by hand: that path was `builtin.grounded-blog` and is removed precisely because `content.ground` annotates rather than expands, so a brief came back as ~the brief.
 
+**When the user wants a slide deck or narrated video**, all seven slide pipelines accept the same `persona` / `audience` / `angle` vocabulary as the blog rewrite pipelines — plus two opt-in flags worth knowing about. Pick by source type:
+
+| Source type            | Pipeline                              | Source-specific input |
+| ---------------------- | ------------------------------------- | --------------------- |
+| Paste / write markdown | `builtin.grounded-deck` (PDF) · `builtin.grounded-narrate` (MP4) | `markdown` |
+| Research a topic       | `builtin.research-deck` (PDF) · `builtin.research-narrate` (MP4) · `builtin.research-ground-deck` (PDF, with citations) | `query` |
+| Web page (URL)         | `builtin.scrape-deck` (PDF)            | `url` |
+| Repo (GitHub URL)      | `builtin.repo-presentation` (narrated MP4) | `repo_url` |
+
+All seven take optional `persona` (`general` / `technical` / `marketing` / `executive` / `educational` / `academic` — same vocabulary as blog), `audience`, `angle`, `title`, `author`. **Ask the user for persona + audience + angle before running** — defaults exist but produce generic decks. Persona doesn't just shape tone — for `technical` decks it asks the model to include fenced code blocks and mermaid diagrams; for `educational` decks it asks for a "Try this" slide; for `marketing` it asks for scannable bullets + CTA; for `executive` it asks for numbers + decisions; for `academic` it asks for hedged language + open-questions closing.
+
+Two optional boolean flags worth surfacing:
+
+- `export_outline: true` — saves the Marp markdown as an `outline.md` artifact alongside the PDF/MP4 so the user can review or edit the structure and re-render.
+- `include_image_prompts: true` — tells the model to embed `<!-- image_prompt: A flowchart showing… -->` comments in each slide's speaker notes AND emits a structured `image_prompts: [{slide_index, prompt}]` array on the outline-step output (downstream image-generation tools can consume the structured form; presenters see the inline hints).
+
 **When the user asks for a code change against a repo** — `builtin.issue-to-pr` reads a GitHub issue by `{repo, issue_number}` and hands the title+body to `swe.solve` in pull_request mode, returning a `pr_url`. For tasks not yet tracked as an issue, use `builtin.repo-solve-pr` (open a PR), `builtin.repo-solve-branch` (push a branch only), or `builtin.repo-solve-patch` (preview as a diff, no remote write). All four are **beta** — a `github-token` vault credential is required for any path that pushes, and an LLM gateway key is required for the agent loop. See ADR 046 for the roadmap on other coding agents.
 
 - `helmdeck__pipeline-list` — List all pipelines (built-in starters + ones you/others created). **Call this first** when a user asks for a multi-step workflow — there may already be one (e.g. `builtin.brief-rewrite-blog`, `builtin.grounded-deck`, `builtin.grounded-narrate`, `builtin.research-podcast`, `builtin.issue-to-pr`, `builtin.repo-readme-narrate`).

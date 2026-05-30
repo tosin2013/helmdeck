@@ -19,12 +19,12 @@ import "encoding/json"
 func Builtins() []*Pipeline {
 	return []*Pipeline{
 		pipe("builtin.grounded-deck", "Grounded slide deck",
-			"Cite markdown's factual claims against web sources (content.ground), structure it into a deck (slides.outline), then render a PDF.",
+			"Cite markdown's factual claims against web sources (content.ground), structure it into a deck (slides.outline), then render a PDF. Optional inputs: persona? (general/technical/marketing/executive/educational/academic — tunes register + per-slide content like code blocks for technical, CTA for marketing), audience?, angle?, title?, author?, export_outline? (saves the Marp markdown as outline.md alongside the PDF), include_image_prompts? (per-slide image-prompt comments + image_prompts: [{slide_index, prompt}] output array).",
 			// rewrite:false — citation-only grounding (a full-document
 			// rewrite is wasted here since slides.outline restructures the
 			// text into slides next). Blog pipelines keep rewrite:true.
 			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":false}`),
-			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto"}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.brief-rewrite-blog", "Brief → rewrite → blog",
@@ -34,12 +34,12 @@ func Builtins() []*Pipeline {
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
 		pipe("builtin.grounded-narrate", "Grounded narrated video",
-			"Cite markdown's factual claims against web sources (content.ground), structure it into a deck (slides.outline), then render a narrated MP4 (slides.narrate). Falls back to silent video when no elevenlabs-key is configured.",
+			"Cite markdown's factual claims against web sources (content.ground), structure it into a deck (slides.outline), then render a narrated MP4 (slides.narrate). Falls back to silent video when no elevenlabs-key is configured. Optional inputs: persona?, audience?, angle?, title?, author?, export_outline? (Marp markdown artifact), include_image_prompts? — same set as builtin.grounded-deck.",
 			// rewrite:false matches grounded-deck — slides.outline restructures
 			// the cited prose into slides next, so a full rewrite would be
 			// wasted work.
 			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":false}`),
-			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto"}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
 			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":true}`),
 		),
 		pipe("builtin.grounded-podcast", "Grounded podcast",
@@ -48,15 +48,15 @@ func Builtins() []*Pipeline {
 			step("podcast", "podcast.generate", `{"source_text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
 		),
 		pipe("builtin.research-deck", "Research → slide deck",
-			"Deep-research a topic, structure the synthesis into a deck (slides.outline), then render a PDF.",
+			"Deep-research a topic, structure the synthesis into a deck (slides.outline), then render a PDF. Optional inputs: persona?, audience?, angle?, title?, author?, export_outline?, include_image_prompts? — same set as builtin.grounded-deck.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
-			step("outline", "slides.outline", `{"text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto"}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.research-narrate", "Research → narrated video",
-			"Deep-research a topic, structure the synthesis into a deck (slides.outline), then render a narrated video.",
+			"Deep-research a topic, structure the synthesis into a deck (slides.outline), then render a narrated video. Optional inputs: persona?, audience?, angle?, title?, author?, export_outline?, include_image_prompts? — same set as builtin.grounded-deck.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
-			step("outline", "slides.outline", `{"text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto"}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
 			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":true}`),
 		),
 		pipe("builtin.research-podcast", "Research → podcast",
@@ -72,12 +72,12 @@ func Builtins() []*Pipeline {
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
 		pipe("builtin.research-ground-deck", "Research → ground → deck",
-			"Deep-research a topic, cite the synthesis against web sources (content.ground), structure it into a deck (slides.outline), then render.",
+			"Deep-research a topic, cite the synthesis against web sources (content.ground), structure it into a deck (slides.outline), then render. Optional inputs: persona?, audience?, angle?, title?, author?, export_outline?, include_image_prompts? — same set as builtin.grounded-deck.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
 			// rewrite:false — citation-only; slides.outline structures the
 			// cited synthesis into slides next, so a prose rewrite is wasted.
 			step("ground", "content.ground", `{"text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto","rewrite":false}`),
-			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto"}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.doc-rewrite-blog", "Document → rewrite → blog",
@@ -93,9 +93,9 @@ func Builtins() []*Pipeline {
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
 		pipe("builtin.scrape-deck", "Scrape → slide deck",
-			"Scrape a URL to markdown, structure it into a deck (slides.outline), then render a PDF (no grounding).",
+			"Scrape a URL to markdown, structure it into a deck (slides.outline), then render a PDF (no grounding). Optional inputs: persona?, audience?, angle?, title?, author?, export_outline?, include_image_prompts? — same set as builtin.grounded-deck.",
 			step("scrape", "web.scrape", `{"url":"${{ inputs.url }}"}`),
-			step("outline", "slides.outline", `{"text":"${{ steps.scrape.output.markdown }}","model":"openrouter/auto"}`),
+			step("outline", "slides.outline", `{"text":"${{ steps.scrape.output.markdown }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.research-rewrite-blog", "Research → rewrite → blog",
@@ -106,7 +106,7 @@ func Builtins() []*Pipeline {
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
 		pipe("builtin.repo-presentation", "Repo → presentation video",
-			"Clone a repo, map its code structure (repo.map) and gather its docs, outline a deck from the README + docs + structure (slides.outline), then render a narrated video — a fuller picture than the README alone.",
+			"Clone a repo, map its code structure (repo.map) and gather its docs, outline a deck from the README + docs + structure (slides.outline), then render a narrated video — a fuller picture than the README alone. Optional inputs: persona?, audience?, angle?, title?, author?, export_outline?, include_image_prompts? — same set as builtin.grounded-deck.",
 			step("fetch", "repo.fetch", `{"url":"${{ inputs.repo_url }}"}`),
 			// repo.map reuses repo.fetch's session (the runner auto-threads
 			// _session_id) so it reads the same clone and returns a symbol map.
@@ -115,7 +115,7 @@ func Builtins() []*Pipeline {
 			// structure, so the deck reflects what the project is AND how it's
 			// built — not a paraphrase of the front page. docs.content is "" when
 			// the repo has none (repo.fetch always emits it), so this resolves.
-			step("outline", "slides.outline", `{"text":"# README\n${{ steps.fetch.output.readme.content }}\n\n# Project docs\n${{ steps.fetch.output.docs.content }}\n\n# Code structure (symbol map)\n${{ steps.map.output.map }}","model":"openrouter/auto"}`),
+			step("outline", "slides.outline", `{"text":"# README\n${{ steps.fetch.output.readme.content }}\n\n# Project docs\n${{ steps.fetch.output.docs.content }}\n\n# Code structure (symbol map)\n${{ steps.map.output.map }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
 			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":true}`),
 		),
 		pipe("builtin.repo-readme-podcast", "Repo → podcast",

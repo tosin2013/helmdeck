@@ -731,10 +731,22 @@ func main() {
 		})
 	})
 	packExists := func(name, ver string) bool { _, e := packReg.Get(name, ver); return e == nil }
+	currentBuiltinIDs := make([]string, 0, len(pipelines.Builtins()))
 	for _, p := range pipelines.Builtins() {
 		if err := pipeStore.Seed(ctx, p, packExists); err != nil {
 			logger.Warn("seed pipeline skipped", "id", p.ID, "err", err)
 		}
+		currentBuiltinIDs = append(currentBuiltinIDs, p.ID)
+	}
+	// Reap builtin rows from a previous deployment whose source-side
+	// Builtins() entry has since been removed (e.g. v0.21 → v0.22 drops
+	// builtin.doc-ground-blog in favor of doc-rewrite-blog). User-created
+	// pipelines are NEVER touched by this — the WHERE clause guards on
+	// builtin=1. See internal/pipelines/store.go PruneStaleBuiltins.
+	if reaped, err := pipeStore.PruneStaleBuiltins(ctx, currentBuiltinIDs); err != nil {
+		logger.Warn("prune stale builtin pipelines failed", "err", err)
+	} else if reaped > 0 {
+		logger.Info("pruned stale builtin pipelines", "count", reaped)
 	}
 	deps.PipelineStore = pipeStore
 	deps.PipelineRunner = pipeRunner

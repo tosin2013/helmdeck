@@ -78,10 +78,16 @@ func Builtins() []*Pipeline {
 			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto"}`),
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
-		pipe("builtin.doc-ground-blog", "Document → ground → blog",
-			"Parse a document (PDF/DOCX/…) to markdown, cite its factual claims against web sources and strengthen the cited sentences (content.ground), then save the result as a blog-post artifact (clone with a Ghost credential to publish).",
+		pipe("builtin.doc-rewrite-blog", "Document → rewrite → blog",
+			"Parse a document (PDF/DOCX/…), then translate it into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — de-jargons, leads with why-it-matters, connects to the audience's tools, adds perspective; stays grounded in the source), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: source_url, audience, angle?, title. Replaces builtin.doc-ground-blog, which produced a citation-strengthened transcription that read as republishing rather than as an original post.",
 			step("parse", "doc.parse", `{"source_url":"${{ inputs.source_url }}"}`),
-			step("ground", "content.ground", `{"text":"${{ steps.parse.output.markdown }}","model":"openrouter/auto","rewrite":true}`),
+			// rewrite is the new step — turns the source into an
+			// original post for the audience+angle the caller supplied.
+			step("rewrite", "blog.rewrite_for_audience", `{"source_content":"${{ steps.parse.output.markdown }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","model":"openrouter/auto"}`),
+			// citation-only ground (rewrite:false) — the rewrite step
+			// already restructured the prose; this pass verifies it
+			// against web sources and inserts inline citations.
+			step("ground", "content.ground", `{"text":"${{ steps.rewrite.output.markdown }}","model":"openrouter/auto","rewrite":false}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
 		pipe("builtin.scrape-deck", "Scrape → slide deck",

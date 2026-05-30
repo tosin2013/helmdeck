@@ -653,6 +653,13 @@ func main() {
 			// The deck/narrate pipelines (seed.go) insert it so prose no
 			// longer collapses to a single slide.
 			builtin.SlidesOutline(visionDispatcher),
+			// blog.rewrite_for_audience — translate a source document
+			// into an original blog post for a stated audience+angle.
+			// Replaces the old doc-ground-blog chain's republishing
+			// result with actual perspective writing. LLM-backed, so
+			// it rides this block. The doc-rewrite-blog pipeline
+			// (seed.go) chains it after doc.parse.
+			builtin.BlogRewriteForAudience(visionDispatcher),
 			// hyperframes.compose — generate a HyperFrames HTML/CSS/JS video
 			// composition from a description so callers don't hand-author the
 			// data-*/window.__timelines scaffolding. LLM-backed; the prompt→video

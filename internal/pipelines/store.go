@@ -126,6 +126,46 @@ func (s *Store) Seed(ctx context.Context, p *Pipeline, packExists func(name, ver
 	return err
 }
 
+// PruneStaleBuiltins removes builtin pipeline rows whose IDs are NOT in
+// currentIDs — i.e. builtins that this binary used to seed but no longer
+// does (a Builtins() entry was removed in source). User-created pipelines
+// (builtin=0) are NEVER touched, even if their ID happens to start with
+// "builtin." — the WHERE clause filters by the builtin flag, not the id
+// prefix. Returns the number reaped. Called once from main on boot, after
+// the Seed loop, so an operator who upgrades sees a clean catalog without
+// running SQL by hand. Idempotent: a second call with the same currentIDs
+// reaps 0.
+func (s *Store) PruneStaleBuiltins(ctx context.Context, currentIDs []string) (int, error) {
+	keep := make(map[string]struct{}, len(currentIDs))
+	for _, id := range currentIDs {
+		keep[id] = struct{}{}
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM pipelines WHERE builtin=1`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var stale []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		if _, ok := keep[id]; !ok {
+			stale = append(stale, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range stale {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM pipelines WHERE id=? AND builtin=1`, id); err != nil {
+			return 0, fmt.Errorf("prune stale builtin %s: %w", id, err)
+		}
+	}
+	return len(stale), nil
+}
+
 // --- runs ---
 
 // CreateRun inserts a pending run row and returns it.

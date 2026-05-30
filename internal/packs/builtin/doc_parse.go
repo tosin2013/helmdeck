@@ -131,16 +131,23 @@ type docParseInput struct {
 	OCRLang []string `json:"ocr_lang"`
 }
 
-// doclingHTTPSource is the shape Docling expects inside the
-// "http_sources" array of the /v1/convert/source request body.
+// doclingHTTPSource is the shape Docling expects for an entry in the
+// `sources` array. Docling switched from separate `http_sources` /
+// `file_sources` arrays to a single discriminated `sources` array
+// keyed by `kind` — we set kind=http here so the right input backend
+// is picked. Empty `kind` makes the request fail with HTTP 422
+// "missing body.sources".
 type doclingHTTPSource struct {
-	URL string `json:"url"`
+	Kind string `json:"kind"` // always "http"
+	URL  string `json:"url"`
 }
 
 // doclingFileSource is the shape Docling expects inside the
-// "file_sources" array — a base64 blob plus its filename so Docling
-// can pick the right input backend by extension.
+// `sources` array for a base64 blob plus its filename so Docling
+// can pick the right input backend by extension. kind="file" tags
+// the entry for the discriminator.
 type doclingFileSource struct {
+	Kind         string `json:"kind"` // always "file"
 	Base64String string `json:"base64_string"`
 	Filename     string `json:"filename"`
 }
@@ -157,10 +164,15 @@ type doclingOptions struct {
 	AbortOnError    bool     `json:"abort_on_error"`
 }
 
+// doclingRequest is the /v1/convert/source body. As of the upstream
+// schema change, every source is an entry in a single `sources` array
+// discriminated by its `kind` field (http / file / s3 / track) — there
+// is no separate `http_sources` array anymore. json.RawMessage keeps
+// the entry types unmixed at the Go level without needing a sealed
+// interface.
 type doclingRequest struct {
-	Options      doclingOptions       `json:"options"`
-	HTTPSources  []doclingHTTPSource  `json:"http_sources,omitempty"`
-	FileSources  []doclingFileSource  `json:"file_sources,omitempty"`
+	Options doclingOptions    `json:"options"`
+	Sources []json.RawMessage `json:"sources"`
 }
 
 // doclingResponse matches the /v1/convert/source response shape.
@@ -292,7 +304,11 @@ func docParseHandler(eg *security.EgressGuard) packs.HandlerFunc {
 		}
 		var sourceLabel string
 		if in.SourceURL != "" {
-			reqBody.HTTPSources = []doclingHTTPSource{{URL: in.SourceURL}}
+			src, merr := json.Marshal(doclingHTTPSource{Kind: "http", URL: in.SourceURL})
+			if merr != nil {
+				return nil, &packs.PackError{Code: packs.CodeInternal, Message: merr.Error(), Cause: merr}
+			}
+			reqBody.Sources = []json.RawMessage{src}
 			sourceLabel = in.SourceURL
 		} else {
 			// Validate the base64 up front so we fail with
@@ -314,10 +330,15 @@ func docParseHandler(eg *security.EgressGuard) packs.HandlerFunc {
 				return nil, &packs.PackError{Code: packs.CodeInvalidInput,
 					Message: fmt.Sprintf("source_b64 %d bytes exceeds %d byte cap", len(decoded), maxDoclingRequestBytes)}
 			}
-			reqBody.FileSources = []doclingFileSource{{
+			src, merr := json.Marshal(doclingFileSource{
+				Kind:         "file",
 				Base64String: in.SourceB64,
 				Filename:     in.Filename,
-			}}
+			})
+			if merr != nil {
+				return nil, &packs.PackError{Code: packs.CodeInternal, Message: merr.Error(), Cause: merr}
+			}
+			reqBody.Sources = []json.RawMessage{src}
 			sourceLabel = in.Filename
 		}
 

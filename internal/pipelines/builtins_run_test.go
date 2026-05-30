@@ -55,6 +55,10 @@ var builtinPackStubs = map[string]stubSpec{
 	"repo.fetch":     {output: `{"readme":{"content":"# README\n\n---\n\n## Two"},"docs":{"content":"## docs/guide.md\n\nguide body","file_count":1,"truncated":false},"clone_path":"/repos/x"}`},
 	"repo.map":       {output: `{"map":"pkg/x.go:\n  func Foo\n  struct Bar","tokens_estimated":42}`},
 	"slides.outline": {output: `{"markdown":"# Deck\n\n---\n\n## Two\n\n---\n\n## Three","slide_count":3,"model":"openrouter/auto"}`},
+	// blog.rewrite_for_audience feeds its markdown into a downstream
+	// content.ground citation pass, so the stub returns markdown the
+	// pre-existing ground stub can consume.
+	"blog.rewrite_for_audience": {output: `{"markdown":"# Original post for the audience\n\nbody…","model":"openrouter/auto"}`},
 	// hyperframes.compose produces the composition_html the render step consumes.
 	"hyperframes.compose": {output: `{"composition_html":"<!doctype html><html><body><div id=\"root\" data-composition-id=\"main\" data-width=\"1920\" data-height=\"1080\"></div></body></html>","model":"openrouter/auto","width":1920,"height":1080,"duration_seconds":8,"has_audio":false,"duration_source":"timeline"}`},
 	// Artifact producers (the terminal step of every built-in pipeline).
@@ -121,7 +125,9 @@ const builtinRunInputs = `{
   "description": "a 30-second explainer about kubernetes operators",
   "repo": "example/repo",
   "issue_number": 42,
-  "task": "rename the constant Foo to Bar"
+  "task": "rename the constant Foo to Bar",
+  "audience": "developers building AI agents",
+  "angle": "connect to practical tool-calling patterns"
 }`
 
 // TestBuiltins_RunEndToEnd runs every built-in pipeline through the runner

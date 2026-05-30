@@ -129,7 +129,10 @@ const builtinRunInputs = `{
   "brief": "Title Idea: AI agent orchestration on bare-metal Kubernetes\nWhat to Cover: Architecture for agent-to-agent comms; resource allocation; OpenShift virtualization.",
   "audience": "developers building AI agents",
   "angle": "connect to practical tool-calling patterns",
-  "persona": "technical"
+  "persona": "technical",
+  "author": "A. Maintainer",
+  "export_outline": true,
+  "include_image_prompts": true
 }`
 
 // TestBuiltins_RunEndToEnd runs every built-in pipeline through the runner

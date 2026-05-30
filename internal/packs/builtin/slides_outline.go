@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/tosin2013/helmdeck/internal/gateway"
@@ -47,7 +48,7 @@ const (
 
 	slidesOutlineDefaultPersona = "general"
 
-	slidesOutlineSystemPrompt = `You are a presentation designer. Restate the user's content as a Marp slide deck.
+	slidesOutlineSystemPrompt = `You are a presentation designer. Restate the user's content as a Marp slide deck.%s
 
 Rules:
 - Output ONLY Marp markdown. No preamble, no explanation, and do NOT wrap the whole deck in a code fence.
@@ -67,21 +68,30 @@ Rules:
     ---
 
     ## Closing
-    - the closing for this audience%s%s`
+    - the closing for this audience%s%s%s`
 
 	slidesOutlineNarrationRule = "\n- After each slide's visible content, add an HTML comment with 1-3 sentences of spoken narration for that slide: <!-- narration here -->"
+
+	// slidesOutlineImagePromptRule is appended when IncludeImagePrompts=true.
+	// The model is told to embed one image_prompt comment per slide; a
+	// handler-side parser then extracts them into the typed output array.
+	slidesOutlineImagePromptRule = "\n- For each slide, also add a one-line HTML comment describing the ideal supporting visual: <!-- image_prompt: a one-sentence description of the chart/diagram/illustration/photo that would best support this slide --> (place it after the speaker-notes comment when narration is on, otherwise after the bullets)."
 )
 
-// slidesOutlinePersonas maps a known audience persona to a 1-2 line style
-// directive injected into the system prompt — it shapes tone, what to emphasize,
-// and what the closing slide should do. An unknown non-empty persona is treated
-// as a freeform audience hint (see resolvePersonaDirective), never rejected.
+// slidesOutlinePersonas maps a known audience persona to a 2-3 line style
+// directive injected into the system prompt — it shapes tone, slide content
+// (code blocks, diagrams, scannability), and what the closing slide does. An
+// unknown non-empty persona is treated as a freeform audience hint (see
+// resolvePersonaDirective), never rejected. Vocabulary matches
+// blog.rewrite_for_audience and content.ground so the picker is consistent
+// across packs (the user has to learn one set of personas).
 var slidesOutlinePersonas = map[string]string{
-	"general":     "Audience: general. Use clear, jargon-light language. Closing slide: a concise recap of the key takeaways.",
-	"technical":   "Audience: technical/engineering. Be precise; keep concrete details, APIs, and trade-offs. Closing slide: a recap plus clear next steps / how to get started.",
-	"marketing":   "Audience: marketing/prospects. Lead with benefits and outcomes, not internals. Closing slide: a strong call-to-action (what to do next, where to learn more).",
-	"executive":   "Audience: executives. Emphasize impact, cost, risk, and decisions; minimize detail. Closing slide: the decision/ask and expected outcome.",
-	"educational": "Audience: learners. Build concepts step by step with simple examples. Closing slide: a recap plus suggested practice / further reading.",
+	"general":     "Audience: general. Use clear, jargon-light language. Mix prose paragraphs sparingly with bullets where they earn their keep. Closing slide: a concise recap of the key takeaways.",
+	"technical":   "Audience: technical/engineering. Be precise; keep concrete details, APIs, and trade-offs. Include a fenced code block on any slide whose claim is best shown in code. Suggest a mermaid `flowchart` or `sequenceDiagram` block when a slide describes a process or architecture. Closing slide: a recap plus clear next steps / how to get started.",
+	"marketing":   "Audience: marketing/prospects. Lead with benefits and outcomes, not internals. Scannable bullets; one outcome per bullet; avoid long paragraphs. Closing slide: a strong call-to-action (what to do next, where to learn more).",
+	"executive":   "Audience: executives. Emphasize impact, cost, risk, and decisions; minimize detail. Use numbers wherever the source supports them; one chart-worthy claim per slide max. Closing slide: the decision/ask and expected outcome.",
+	"educational": "Audience: learners. Build concepts step by step with simple examples. Include a 'Try this' slide near the end with a concrete exercise. Suggest a mermaid diagram on any slide that describes a sequence of steps. Closing slide: a recap plus suggested practice / further reading.",
+	"academic":    "Audience: peer / conference / research summary. Hedged language ('appears to', 'suggests'). Preserve the source's limitations and counter-examples in view. Closing slide: a paragraph on open questions / future work.",
 }
 
 // resolvePersonaDirective returns the style directive to inject into the prompt
@@ -107,13 +117,32 @@ type slidesOutlineInput struct {
 	Title     string `json:"title"`
 	// Author, when set, becomes the title-slide byline.
 	Author string `json:"author"`
-	// Persona shapes tone + the closing slide (general/technical/marketing/
-	// executive/educational, or any freeform audience string). Default general.
+	// Persona shapes tone + slide content + closing slide (general /
+	// technical / marketing / executive / educational / academic, or any
+	// freeform audience string). Default general. Same vocabulary as
+	// blog.rewrite_for_audience.
 	Persona string `json:"persona"`
+	// Audience is a free-form audience description (e.g. "platform engineers
+	// at a Series B startup") layered on top of Persona. Persona controls
+	// register/structure; Audience is a who-they-are hint.
+	Audience string `json:"audience"`
+	// Angle is what the deck is about for this audience (e.g. "what to copy
+	// vs what to skip"). Layered on top of Persona + Audience.
+	Angle string `json:"angle"`
 	// Narration is a *bool so absent means "default on" — emit `<!-- … -->`
 	// speaker notes (needed by slides.narrate; harmless for slides.render).
 	Narration *bool `json:"narration,omitempty"`
 	MaxTokens int   `json:"max_tokens"`
+	// ExportOutline, when true, persists the final deck markdown as a
+	// downloadable artifact alongside whatever the downstream render/narrate
+	// step produces. Surfaces outline_artifact_key on the output.
+	ExportOutline bool `json:"export_outline"`
+	// IncludeImagePrompts, when true, asks the model to embed a one-line
+	// `<!-- image_prompt: … -->` comment in each slide's speaker notes
+	// describing the ideal supporting visual. The handler then parses those
+	// comments back out into a structured image_prompts: [{slide_index,
+	// prompt}] array on the output — for downstream image-gen consumers.
+	IncludeImagePrompts bool `json:"include_image_prompts"`
 }
 
 // SlidesOutline constructs the pack. It uses the same gateway dispatcher as
@@ -126,24 +155,30 @@ func SlidesOutline(d vision.Dispatcher) *packs.Pack {
 		InputSchema: packs.BasicSchema{
 			Required: []string{"text", "model"},
 			Properties: map[string]string{
-				"text":       "string",
-				"model":      "string",
-				"max_slides": "number",
-				"title":      "string",
-				"author":     "string",
-				"persona":    "string",
-				"narration":  "boolean",
-				"max_tokens": "number",
+				"text":                  "string",
+				"model":                 "string",
+				"max_slides":            "number",
+				"title":                 "string",
+				"author":                "string",
+				"persona":               "string",
+				"audience":              "string",
+				"angle":                 "string",
+				"narration":             "boolean",
+				"max_tokens":            "number",
+				"export_outline":        "boolean",
+				"include_image_prompts": "boolean",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
 			Required: []string{"markdown", "slide_count", "model"},
 			Properties: map[string]string{
-				"markdown":        "string",
-				"slide_count":     "number",
-				"model":           "string",
-				"has_title_slide": "boolean",
-				"persona_used":    "string",
+				"markdown":             "string",
+				"slide_count":          "number",
+				"model":                "string",
+				"has_title_slide":      "boolean",
+				"persona_used":         "string",
+				"outline_artifact_key": "string",
+				"image_prompts":        "array",
 			},
 		},
 		Handler: slidesOutlineHandler(d),
@@ -192,8 +227,28 @@ func slidesOutlineHandler(d vision.Dispatcher) packs.HandlerFunc {
 		if in.Narration != nil && !*in.Narration {
 			narrationRule = ""
 		}
+		imagePromptRule := ""
+		if in.IncludeImagePrompts {
+			imagePromptRule = slidesOutlineImagePromptRule
+		}
 		personaDirective, personaUsed := resolvePersonaDirective(in.Persona)
-		system := fmt.Sprintf(slidesOutlineSystemPrompt, maxSlides, narrationRule, "\n- "+personaDirective)
+		// Optional audience+angle block — appended after "Marp slide deck."
+		// when either is set. Persona shapes register; audience/angle layer
+		// on top with who-they-are + what-this-is-about context.
+		audienceBlock := ""
+		if a := strings.TrimSpace(in.Audience); a != "" {
+			audienceBlock = "\n\nAudience: " + a + "."
+		}
+		if g := strings.TrimSpace(in.Angle); g != "" {
+			audienceBlock += "\nAngle: " + g + "."
+		}
+		system := fmt.Sprintf(slidesOutlineSystemPrompt,
+			audienceBlock,
+			maxSlides,
+			narrationRule,
+			imagePromptRule,
+			"\n- "+personaDirective,
+		)
 
 		// Carry the title + author into the user message so the model places
 		// them on the title slide it generates.
@@ -270,8 +325,62 @@ func slidesOutlineHandler(d vision.Dispatcher) packs.HandlerFunc {
 			"has_title_slide": hasTitleSlide,
 			"persona_used":    personaUsed,
 		}
+
+		// Image-prompt post-pass: when include_image_prompts is on, walk
+		// each slide's body, pull out every "<!-- image_prompt: … -->"
+		// comment, and emit a typed image_prompts array so downstream
+		// consumers don't have to parse markdown. Always include the field
+		// when requested (empty array if the model didn't comply) so
+		// downstream pipeline refs are well-defined.
+		if in.IncludeImagePrompts {
+			out["image_prompts"] = extractImagePrompts(slides)
+		}
+
+		// Outline artifact emission: when export_outline=true, persist the
+		// final deck markdown as a downloadable artifact alongside whatever
+		// the downstream render/narrate step produces. The artifact key
+		// surfaces on the output so a pipeline step can reference it.
+		if in.ExportOutline && ec.Artifacts != nil {
+			art, err := ec.Artifacts.Put(ctx, "slides.outline", "outline.md", []byte(deck), "text/markdown")
+			if err != nil {
+				return nil, &packs.PackError{Code: packs.CodeInternal,
+					Message: fmt.Sprintf("export_outline: artifact write failed: %v", err), Cause: err}
+			}
+			out["outline_artifact_key"] = art.Key
+		}
+
 		return json.Marshal(out)
 	}
+}
+
+// imagePrompt is one parsed `<!-- image_prompt: … -->` comment together with
+// the 1-indexed slide it came from (so 1 = title slide).
+type imagePrompt struct {
+	SlideIndex int    `json:"slide_index"`
+	Prompt     string `json:"prompt"`
+}
+
+// imagePromptRE matches the image_prompt comment shape the system prompt
+// asks for. Permissive on whitespace so a model that formats the comment
+// slightly differently still gets parsed.
+var imagePromptRE = regexp.MustCompile(`<!--\s*image_prompt\s*:\s*([\s\S]*?)\s*-->`)
+
+// extractImagePrompts walks each slide body and pulls out every image_prompt
+// comment, returning the structured array surfaced on the pack output.
+// Always returns a non-nil slice (may be empty) so downstream pipeline
+// templating sees a well-defined array.
+func extractImagePrompts(slides []string) []imagePrompt {
+	prompts := []imagePrompt{}
+	for i, body := range slides {
+		for _, m := range imagePromptRE.FindAllStringSubmatch(body, -1) {
+			text := strings.TrimSpace(m[1])
+			if text == "" {
+				continue
+			}
+			prompts = append(prompts, imagePrompt{SlideIndex: i + 1, Prompt: text})
+		}
+	}
+	return prompts
 }
 
 // slidesOutlineFirstHeading returns the lowercased heading text of the deck's

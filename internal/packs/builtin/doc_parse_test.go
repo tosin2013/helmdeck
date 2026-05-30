@@ -36,21 +36,42 @@ func enableDocling(t *testing.T, url string) {
 func TestDocParse_HTTPSourceHappyPath(t *testing.T) {
 	srv := stubDocling(t, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		var in doclingRequest
-		if err := json.Unmarshal(body, &in); err != nil {
+		// Assert the new discriminated `sources` shape — a single
+		// array of {kind, …} entries instead of the old http_sources
+		// / file_sources arrays. Docling now rejects the old shape
+		// with HTTP 422 "missing body.sources".
+		var raw struct {
+			Options doclingOptions    `json:"options"`
+			Sources []json.RawMessage `json:"sources"`
+			// Old field names — if any of these leaked back in, the
+			// new Docling rejects the request. Fail loud.
+			HTTPSources json.RawMessage `json:"http_sources"`
+			FileSources json.RawMessage `json:"file_sources"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
 			t.Fatalf("bad request: %v", err)
 		}
-		if len(in.HTTPSources) != 1 || in.HTTPSources[0].URL != "https://example.com/paper.pdf" {
-			t.Errorf("http_sources not forwarded: %+v", in.HTTPSources)
+		if len(raw.HTTPSources) > 0 || len(raw.FileSources) > 0 {
+			t.Errorf("legacy http_sources/file_sources fields must not be sent: %s", body)
 		}
-		if len(in.FileSources) != 0 {
-			t.Errorf("file_sources should be empty for url source: %+v", in.FileSources)
+		if len(raw.Sources) != 1 {
+			t.Fatalf("expected exactly 1 entry in sources, got %d: %s", len(raw.Sources), body)
+		}
+		var src doclingHTTPSource
+		if err := json.Unmarshal(raw.Sources[0], &src); err != nil {
+			t.Fatalf("source[0] not the http shape: %v (raw=%s)", err, raw.Sources[0])
+		}
+		if src.Kind != "http" {
+			t.Errorf("source[0].kind = %q, want \"http\"", src.Kind)
+		}
+		if src.URL != "https://example.com/paper.pdf" {
+			t.Errorf("source[0].url not forwarded: %q", src.URL)
 		}
 		// Default options — md format, ocr on
-		if len(in.Options.ToFormats) != 1 || in.Options.ToFormats[0] != "md" {
-			t.Errorf("default to_formats should be [md], got %v", in.Options.ToFormats)
+		if len(raw.Options.ToFormats) != 1 || raw.Options.ToFormats[0] != "md" {
+			t.Errorf("default to_formats should be [md], got %v", raw.Options.ToFormats)
 		}
-		if !in.Options.DoOCR {
+		if !raw.Options.DoOCR {
 			t.Error("do_ocr should default to true")
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -99,20 +120,30 @@ func TestDocParse_FileSourceHappyPath(t *testing.T) {
 
 	srv := stubDocling(t, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		var in doclingRequest
-		_ = json.Unmarshal(body, &in)
-		if len(in.FileSources) != 1 {
-			t.Fatalf("file_sources missing: %+v", in.FileSources)
+		var raw struct {
+			Sources     []json.RawMessage `json:"sources"`
+			HTTPSources json.RawMessage   `json:"http_sources"`
+			FileSources json.RawMessage   `json:"file_sources"`
 		}
-		fs := in.FileSources[0]
+		_ = json.Unmarshal(body, &raw)
+		if len(raw.HTTPSources) > 0 || len(raw.FileSources) > 0 {
+			t.Errorf("legacy http_sources/file_sources fields must not be sent: %s", body)
+		}
+		if len(raw.Sources) != 1 {
+			t.Fatalf("expected exactly 1 entry in sources, got %d: %s", len(raw.Sources), body)
+		}
+		var fs doclingFileSource
+		if err := json.Unmarshal(raw.Sources[0], &fs); err != nil {
+			t.Fatalf("source[0] not the file shape: %v (raw=%s)", err, raw.Sources[0])
+		}
+		if fs.Kind != "file" {
+			t.Errorf("source[0].kind = %q, want \"file\"", fs.Kind)
+		}
 		if fs.Filename != "upload.pdf" {
 			t.Errorf("filename not forwarded: %q", fs.Filename)
 		}
 		if fs.Base64String != b64 {
 			t.Errorf("base64_string not forwarded: got %q", fs.Base64String)
-		}
-		if len(in.HTTPSources) != 0 {
-			t.Errorf("http_sources should be empty for file source")
 		}
 		_, _ = w.Write([]byte(`{
 			"document": {"md_content": "# Uploaded\n\nhi"},

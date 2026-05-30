@@ -130,7 +130,10 @@ Every deck should **open with a title slide** (a single `#` deck title, plus a o
 
 ### Pipelines (v0.15.0, ADR 041)
 A **pipeline** is a saved, named, ordered sequence of pack steps that runs server-side, threading each step's output into the next via `${{ steps.<id>.output.<field> }}` (and run inputs via `${{ inputs.<name> }}`). Use these tools to run a known workflow in one call instead of orchestrating packs by hand — see "Pipelines vs. packs" below for *when*.
-- `helmdeck__pipeline-list` — List all pipelines (built-in starters + ones you/others created). **Call this first** when a user asks for a multi-step workflow — there may already be one (e.g. `builtin.grounded-deck`, `builtin.research-podcast`, `builtin.repo-readme-narrate`).
+
+**When the user pastes a chunk of pre-researched markdown notes** and wants a fact-checked output, prefer the `builtin.grounded-*` family — every one takes a single `markdown` input, runs `content.ground` to cite claims against web sources (un-citable claims are marked `skipped`, not silently passed through), then produces the chosen format: `grounded-blog` (markdown blog post), `grounded-deck` (PDF slide deck), `grounded-narrate` (narrated MP4), `grounded-podcast` (multi-speaker MP3). Saves the user reasoning about which packs to chain.
+
+- `helmdeck__pipeline-list` — List all pipelines (built-in starters + ones you/others created). **Call this first** when a user asks for a multi-step workflow — there may already be one (e.g. `builtin.grounded-deck`, `builtin.grounded-narrate`, `builtin.research-podcast`, `builtin.repo-readme-narrate`).
 - `helmdeck__pipeline-get` — Get one pipeline's full step definition by `id`.
 - `helmdeck__pipeline-run` — Run a pipeline (async). Pass `inputs` for its `${{ inputs.* }}` refs; returns a `run_id` immediately. Then poll `helmdeck__pipeline-run-status`.
 - `helmdeck__pipeline-run-status` — Poll a run by `run_id`: overall status (`pending|running|succeeded|failed|cancelled`) + per-step outputs/errors/progress. While a step is running, its latest `ec.Report(pct, message)` milestone appears under `steps[i].progress[]` — surface those to the user so a long run isn't a black box.

@@ -10,8 +10,8 @@ import "testing"
 // seed.go fails CI rather than a deployment.
 func TestBuiltins_Valid(t *testing.T) {
 	b := Builtins()
-	if len(b) != 15 {
-		t.Errorf("expected 15 starter pipelines, got %d", len(b))
+	if len(b) != 17 {
+		t.Errorf("expected 17 starter pipelines, got %d", len(b))
 	}
 	anyPack := func(_, _ string) bool { return true }
 	ids := map[string]bool{}

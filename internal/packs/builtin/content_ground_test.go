@@ -568,7 +568,7 @@ func TestRewriteWithSources_DiscardsTruncated(t *testing.T) {
 		finishReasons: []string{"length"},
 	}
 	gs := []grounding{{Claim: "x", URL: "https://example.com", Snippet: "s"}}
-	_, err := rewriteWithSources(context.Background(), disp, "openai/gpt-4o-mini", "original text", gs)
+	_, err := rewriteWithSources(context.Background(), disp, "openai/gpt-4o-mini", "original text", gs, "")
 	if !errors.Is(err, errRewriteTruncated) {
 		t.Fatalf("expected errRewriteTruncated on FinishReason=length, got %v", err)
 	}
@@ -603,7 +603,7 @@ func TestRewriteWithSources_TokenBudgetScales(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			disp := &scriptedDispatcherWT{replies: []string{"rewritten"}}
-			if _, err := rewriteWithSources(context.Background(), disp, "m", tc.text, gs); err != nil {
+			if _, err := rewriteWithSources(context.Background(), disp, "m", tc.text, gs, ""); err != nil {
 				t.Fatalf("rewriteWithSources: %v", err)
 			}
 			if len(disp.captured) != 1 || disp.captured[0].MaxTokens == nil {
@@ -613,5 +613,61 @@ func TestRewriteWithSources_TokenBudgetScales(t *testing.T) {
 				t.Errorf("MaxTokens = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestContentGround_PersonaDirectiveInRewritePrompt — closed-set persona
+// keys resolve to a distinct directive injected into the rewrite system
+// prompt. Without this, every rewrite came back formal-academic — the
+// observation that prompted #346.
+func TestContentGround_PersonaDirectiveInRewritePrompt(t *testing.T) {
+	gs := []grounding{{Claim: "x", URL: "https://example.com", Snippet: "s"}}
+	for _, tc := range []struct {
+		persona  string
+		mustHave string
+	}{
+		{"general", "conversational"},
+		{"technical", "hands-on"},
+		{"marketing", "benefits-led"},
+		{"executive", "impact-led"},
+		{"educational", "step-by-step"},
+		{"academic", "hedged"},
+	} {
+		t.Run(tc.persona, func(t *testing.T) {
+			directive, used := resolveContentGroundPersona(tc.persona)
+			if used != tc.persona {
+				t.Errorf("persona_used = %q, want %q", used, tc.persona)
+			}
+			disp := &scriptedDispatcherWT{replies: []string{"rewritten"}}
+			if _, err := rewriteWithSources(context.Background(), disp, "m", "original", gs, directive); err != nil {
+				t.Fatalf("rewriteWithSources: %v", err)
+			}
+			sys := disp.captured[0].Messages[0].Content.Text()
+			if !strings.Contains(sys, tc.mustHave) {
+				t.Errorf("rewrite system prompt should contain %q for persona %q, got:\n%s", tc.mustHave, tc.persona, sys)
+			}
+		})
+	}
+}
+
+// TestContentGround_FreeformPersonaPassThrough — unknown persona keys are
+// passed through as a freeform tone hint; persona_used echoes the
+// original string.
+func TestContentGround_FreeformPersonaPassThrough(t *testing.T) {
+	directive, used := resolveContentGroundPersona("crisp newsroom")
+	if used != "crisp newsroom" {
+		t.Errorf("persona_used = %q, want freeform passthrough", used)
+	}
+	if !strings.Contains(directive, "crisp newsroom") {
+		t.Errorf("directive should include the freeform hint, got: %q", directive)
+	}
+}
+
+// TestContentGround_DefaultPersonaWhenOmitted — empty persona resolves
+// to "general" so the rewrite always has a tone directive.
+func TestContentGround_DefaultPersonaWhenOmitted(t *testing.T) {
+	_, used := resolveContentGroundPersona("")
+	if used != "general" {
+		t.Errorf("empty persona resolved to %q, want general", used)
 	}
 }

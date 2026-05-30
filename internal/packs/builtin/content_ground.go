@@ -151,6 +151,7 @@ func ContentGround(d vision.Dispatcher) *packs.Pack {
 				"max_claims": "number",
 				"topic":      "string",
 				"rewrite":    "boolean",
+				"persona":    "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -165,6 +166,7 @@ func ContentGround(d vision.Dispatcher) *packs.Pack {
 				"file_changed":      "boolean",
 				"grounded_text":     "string",
 				"artifact_key":      "string",
+				"persona_used":      "string",
 			},
 		},
 		Handler: contentGroundHandler(d),
@@ -191,6 +193,12 @@ type contentGroundInput struct {
 	// long claim summaries or when running against a weak model that
 	// produces verbose JSON. Hard upper bound: 8192.
 	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
+	// Persona tunes the rewrite step's tone/register when Rewrite=true.
+	// Closed set: general / technical / marketing / executive /
+	// educational / academic; anything else is a freeform tone hint.
+	// Ignored when Rewrite=false (citation-only mode doesn't change
+	// voice). See contentGroundPersonas.
+	Persona string `json:"persona,omitempty"`
 }
 
 // claimPlan is the parsed shape the extractor LLM returns.
@@ -235,6 +243,10 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 		if strings.TrimSpace(in.Model) == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "model is required (provider/model)"}
 		}
+		// Resolve persona once, up front, so every successful return
+		// path can echo persona_used — including the "no claims found"
+		// early return. directive is only consumed when Rewrite=true.
+		personaDirective, personaUsed := resolveContentGroundPersona(in.Persona)
 		maxClaims := in.MaxClaims
 		if maxClaims <= 0 {
 			maxClaims = defaultContentGroundClaims
@@ -340,6 +352,7 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 				// reference failing when a post had no groundable
 				// claims. Here the text is unchanged from the input.
 				"grounded_text": original,
+				"persona_used":  personaUsed,
 			})
 		}
 		_ = rawModel // retained for future audit logging; not surfaced today
@@ -429,10 +442,15 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 		// 5. Rewrite (optional). When rewrite=true, ask the LLM to
 		// improve each grounded claim using the source content so
 		// the prose is stronger, more specific, and properly cited
-		// inline — not just a bare [source](url) appended.
+		// inline — not just a bare [source](url) appended. Persona
+		// (when set) tunes the register of the rewrite without
+		// changing structure — without it, the model defaulted to
+		// formal-academic for every input. Citation-only mode
+		// (rewrite=false) doesn't touch the prose, so persona is
+		// ignored there by design.
 		if in.Rewrite && len(groundings) > 0 {
-			ec.Report(85, "rewriting prose with sources")
-			rewritten, err := rewriteWithSources(ctx, d, in.Model, patched, groundings)
+			ec.Report(85, fmt.Sprintf("rewriting prose with sources (persona: %s)", personaUsed))
+			rewritten, err := rewriteWithSources(ctx, d, in.Model, patched, groundings, personaDirective)
 			if err != nil {
 				ec.Logger.Warn("rewrite failed, keeping citation-only version", "err", err)
 			} else if strings.TrimSpace(rewritten) != "" {
@@ -476,6 +494,7 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 			"sha256":            hex.EncodeToString(sum[:]),
 			"file_changed":      fileChanged,
 			"grounded_text":     patched,
+			"persona_used":      personaUsed,
 		}
 		if artifactKey != "" {
 			out["artifact_key"] = artifactKey
@@ -648,6 +667,41 @@ Rules:
 	return &items[result.Pick], result.Snippet
 }
 
+// contentGroundDefaultPersona is the fallback when no persona is set on
+// input; empty/unknown personas resolve via resolveContentGroundPersona.
+const contentGroundDefaultPersona = "general"
+
+// contentGroundPersonas maps a closed-set persona key to a tone/register
+// directive injected into the rewrite system prompt. Same vocabulary as
+// blog.rewrite_for_audience and slides.outline so operators only have to
+// learn the picker once. Directives are content.ground-specific: they
+// tune register WITHOUT licensing structural change (the rewrite must
+// still preserve every slide separator and the overall flow).
+var contentGroundPersonas = map[string]string{
+	"general":     "Tone: conversational, accessible. Light editorial polish only — preserve the source's structure and pacing.",
+	"technical":   "Tone: precise, hands-on. Keep specific terms, file paths, function signatures, and config snippets from the source. Don't soften jargon when it's load-bearing.",
+	"marketing":   "Tone: benefits-led, scannable. Shorter sentences. Lead each grounded claim with the outcome it produces, not the mechanism.",
+	"executive":   "Tone: brief, impact-led. Use numbers where the sources support them. Strip implementation detail; keep what affects a decision.",
+	"educational": "Tone: step-by-step, beginner-friendly. Define each term inline the first time it appears. Build context before claims.",
+	"academic":    "Tone: formal register, hedged language (\"appears to\", \"suggests\"). Third person mostly. Preserve qualifications and counter-examples from the sources.",
+}
+
+// resolveContentGroundPersona returns the directive to inject into the
+// rewrite system prompt and the canonical key to echo on output. Empty →
+// the default; a known key (case-insensitive) → its directive; an unknown
+// non-empty string → a freeform tone hint.
+func resolveContentGroundPersona(p string) (directive, used string) {
+	key := strings.ToLower(strings.TrimSpace(p))
+	if key == "" {
+		key = contentGroundDefaultPersona
+	}
+	if d, ok := contentGroundPersonas[key]; ok {
+		return d, key
+	}
+	trimmed := strings.TrimSpace(p)
+	return "Tone: tailor register and emphasis for this audience: " + trimmed, trimmed
+}
+
 // errRewriteTruncated signals that the rewrite response hit the
 // completion-token ceiling and is missing the tail of the document.
 // The caller treats it like any rewrite failure: keep the
@@ -663,8 +717,10 @@ func estimatedTokens(s string) int { return len(s) / 4 }
 // rewriting weak claims into stronger prose backed by what the
 // sources actually say. The LLM sees the full text (with [source]
 // links already inserted) plus the grounding report (claim →
-// snippet pairs) and produces a polished version.
-func rewriteWithSources(ctx context.Context, d vision.Dispatcher, model, text string, gs []grounding) (string, error) {
+// snippet pairs) and produces a polished version. personaDirective
+// tunes register/tone (e.g. "Tone: hands-on, precise…") so the
+// rewrite isn't always formal-academic.
+func rewriteWithSources(ctx context.Context, d vision.Dispatcher, model, text string, gs []grounding, personaDirective string) (string, error) {
 	// Budget the rewrite's output to fit the document. The rewrite
 	// returns the WHOLE text (rewritten), so the old fixed 2048-token
 	// cap silently truncated long inputs — a 20-25 slide deck blew
@@ -693,12 +749,7 @@ func rewriteWithSources(ctx context.Context, d vision.Dispatcher, model, text st
 		sourcesMsg.WriteString("\n")
 	}
 
-	req := gateway.ChatRequest{
-		Model:     model,
-		MaxTokens: &maxTokens,
-		Messages: []gateway.Message{
-			{Role: "system", Content: gateway.TextContent(
-				`You are an expert editor who improves factual writing by making claims more specific and authoritative using source material.
+	systemPrompt := `You are an expert editor who improves factual writing by making claims more specific and authoritative using source material.
 
 You will receive:
 1. ORIGINAL TEXT — markdown with [source](url) citation links already inserted
@@ -708,13 +759,20 @@ Your job: rewrite the text so that:
 - Weak or vague claims become specific and authoritative, drawing on the source excerpts
 - Every rewritten claim naturally integrates its citation as an inline [source](url) link
 - Claims that were NOT grounded (no [source] link) are left unchanged
-- The overall structure, tone, and flow of the original are preserved
+- The overall structure and flow of the original are preserved
 - Do NOT add new claims or information not supported by the sources
 - Do NOT remove any content — only improve what has a source backing it
 - Keep the same markdown format
 - If the text is a slide deck (Marp/markdown using "---" as slide separators), preserve EVERY "---" separator and keep the exact same number of slides — never merge, split, drop, or reorder slides, and keep each slide's heading
 
-Return ONLY the rewritten markdown text. No commentary, no explanation, no code fences.`)},
+` + personaDirective + `
+
+Return ONLY the rewritten markdown text. No commentary, no explanation, no code fences.`
+	req := gateway.ChatRequest{
+		Model:     model,
+		MaxTokens: &maxTokens,
+		Messages: []gateway.Message{
+			{Role: "system", Content: gateway.TextContent(systemPrompt)},
 			{Role: "user", Content: gateway.TextContent(
 				fmt.Sprintf("ORIGINAL TEXT:\n%s\n\n%s\nRewrite the text, improving grounded claims using the source excerpts.", text, sourcesMsg.String()))},
 		},

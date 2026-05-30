@@ -1,6 +1,6 @@
 # 47. Catalog Metadata, Memory-Driven Routing, and Gap Analysis
 
-**Status**: Accepted (slice 1 shipped: catalog metadata + `helmdeck://routing-guide` MCP resource; memory hooks + routing pack are PR #2 and #3 of this roadmap)
+**Status**: Accepted (slice 1 shipped: catalog metadata + `helmdeck://routing-guide` MCP resource; memory hooks + routing pack + UI are PR #2, #3, and #4 of this roadmap)
 **Date**: 2026-05-31
 **Domain**: pack-engine, pipelines, mcp, memory, agent-integrations
 
@@ -33,9 +33,18 @@ Define structured metadata that packs and pipelines declare alongside their exis
 - **SKILL.md** — collapsed to point at the resource as the source of truth; existing picker rows kept short as a fallback for offline reads.
 - **Initial metadata population** — 10 packs and 5 pipelines covering the diverse cases. Rest of the catalog populated incrementally in follow-up PRs as packs are touched. Empty metadata is the zero value, so missing-metadata packs are valid (additive contract).
 
-### PR #2 — Memory audit hooks + `helmdeck://my-defaults`
+### PR #2 — Memory audit hooks + `helmdeck://my-defaults` + `helmdeck.memory_forget`
 
-Hook `*packs.Engine.Execute` and `*pipelines.Runner.RunSync` to write per-caller audit entries to the existing memory layer on every successful run. Expose a new resource `helmdeck://my-defaults` that aggregates the caller's recent runs into a defaults projection (typical `persona`, typical `audience`, typical `model` per pipeline). Memory category `pipeline_history` / `pack_history` (TTL bounded; user-resettable).
+Hook `*packs.Engine.Execute` and `*pipelines.Runner.RunSync` to write per-caller audit entries to the existing memory layer on every terminal outcome (success and caller-fixable failure). The projection only learns from successes; outcomes are recorded for both so observability isn't selective. Expose two new surfaces:
+
+- **`helmdeck://my-defaults`** — always-listed MCP resource. Aggregates the caller's recent runs into top-N packs + top-N pipelines, each with a `common_inputs` map carrying the most-used value per learnable field (`persona`, `audience`, `angle`, `model`, `theme`, `voice`, `persona_used`, `kind`, `format`, `title`, `author`). Empty when the caller has no history; the agent's contract is to peek here before asking the user for inputs that have learned defaults.
+- **`helmdeck.memory_forget`** — pack the chat agent calls when the user says "forget my defaults" or "start fresh." Inputs: `scope` (`all` | `packs` | `pipelines` | `pack:<id>` | `pipeline:<id>`). Targets only the audit categories (`pack_history` / `pipeline_history`) so pack caches and vault credentials are never touched.
+
+Bounded retention: every audit row writes with `memory.WithTTL(packs.AuditTTL)` where `AuditTTL` is **30 days** today. Long enough to learn monthly usage patterns; short enough that SQLite stays bounded on heavy callers. Manual forget is the escape hatch before the TTL expires.
+
+Audit rows write to the caller's **bare namespace** (just `callerFromContext(ctx)`), not the session-scoped namespace `ec.Memory` uses for per-session caches. This is the design point that lets learning span sessions: every chat agent, every CLI invocation, every cron job under the same JWT subject contributes to and benefits from the same defaults pool.
+
+Learnable input fields are a closed set (see `internal/packs/audit.go`). Markdown bodies, URLs, raw queries, and other large/opaque values are dropped at audit-write time — audit memory is for routing hints, not data retention.
 
 Pack-level audit (per the user's PR #1 spec) captures every `Engine.Execute` outcome, not just pipeline runs — so single-pack usage patterns are visible. Acceptable volume given memory's existing cache TTLs.
 
@@ -71,6 +80,12 @@ When nothing matches, `gap_warning` is populated with a structured proposal:
 Agent confirms the gap with the user and optionally files a GitHub issue via `github.create_issue`.
 
 SKILL.md collapses to: *"For any multi-step request, call `helmdeck__route` first. It returns the recommended pipeline/pack plus suggested inputs. Confirm with the user, then run."*
+
+### PR #4 — Memory-management UI in `web/`
+
+A page in the existing web app that surfaces what PR #2 wrote: lists recent audit rows (pack name, when, outcome), shows the `helmdeck://my-defaults` projection visually, and exposes the forget surface as buttons (per-row "forget this run", per-pack "forget pack history", global "clear all"). No new backend — this PR wires UI to existing PR #2 endpoints (REST shim around `helmdeck.memory_forget` and an MCP-over-WS read of `helmdeck://my-defaults`).
+
+Rationale for splitting it out: the *capability* to inspect and clear ships in PR #2 (resource + pack). The *visual surface* is a UX concern with its own design loop. Coupling them would slow PR #2's review (Go reviewers vs. React reviewers) and bloat the diff. Users who want CLI/MCP-only management never need this PR.
 
 ## Consequences
 

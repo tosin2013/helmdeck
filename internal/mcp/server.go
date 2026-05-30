@@ -398,6 +398,17 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			Description: "The structured catalog the chat agent queries to pick the right pipeline or pack for a user request. Each entry carries `accepts` / `produces` / `intent_keywords` / `typical_use` / `limitations` (and `supersedes` for pipelines) so routing decisions are deterministic. Prefer pipelines over chaining packs when an entry's `supersedes` lists those packs. Use the top-level `policy` block as system-prompt context. ADR 047.",
 			MimeType:    "application/json",
 		})
+		// helmdeck://my-defaults is always listed; when no memory store is
+		// wired or the caller has no audit history yet, the payload returns
+		// empty arrays + a "note" string explaining the empty state. The
+		// agent's hard contract: peek at this resource before asking the
+		// user for inputs that already have learned defaults.
+		resources = append(resources, Resource{
+			URI:         "helmdeck://my-defaults",
+			Name:        "Caller's learned defaults",
+			Description: "Per-caller projection over recent pack/pipeline runs (ADR 047 PR #2). Returns `packs[]` and `pipelines[]` ranked by frequency, each with `common_inputs` — the most-used value for each learnable input field (persona, audience, angle, model, theme, ...). Empty when the caller has no history. Use before asking the user for inputs that already have a learned default; pre-fill from `common_inputs` and confirm rather than re-asking from scratch.",
+			MimeType:    "application/json",
+		})
 		return mk(map[string]any{"resources": resources}, nil)
 
 	case "resources/read":
@@ -525,6 +536,20 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			body, err := json.Marshal(payload)
 			if err != nil {
 				return mk(nil, &rpcError{Code: -32603, Message: "encode routing-guide: " + err.Error()})
+			}
+			return mk(map[string]any{
+				"contents": []ResourceContent{
+					{URI: params.URI, MimeType: "application/json", Text: string(body)},
+				},
+			}, nil)
+		case "helmdeck://my-defaults":
+			payload, perr := s.buildMyDefaults(ctx, packs.CallerFromContext(ctx))
+			if perr != nil {
+				return mk(nil, perr)
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				return mk(nil, &rpcError{Code: -32603, Message: "encode my-defaults: " + err.Error()})
 			}
 			return mk(map[string]any{
 				"contents": []ResourceContent{

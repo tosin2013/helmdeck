@@ -31,9 +31,9 @@ import (
 	"github.com/tosin2013/helmdeck/internal/mcp"
 	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
+	"github.com/tosin2013/helmdeck/internal/packs/builtin"
 	"github.com/tosin2013/helmdeck/internal/pipelines"
 	"github.com/tosin2013/helmdeck/internal/repos"
-	"github.com/tosin2013/helmdeck/internal/packs/builtin"
 	"strconv"
 
 	"github.com/tosin2013/helmdeck/internal/security"
@@ -605,6 +605,12 @@ func main() {
 	if err := packReg.Register(builtin.BlogPublish(vaultStore, egressGuard, nil)); err != nil {
 		logger.Warn("register blog.publish pack failed", "err", err)
 	}
+	// helmdeck.memory_forget — programmatic reset of audit memory (ADR
+	// 047 PR #2). Always registered: nil memory store is a soft-success
+	// no-op so behavior degrades gracefully on memory-disabled deploys.
+	if err := packReg.Register(builtin.MemoryForget()); err != nil {
+		logger.Warn("register helmdeck.memory_forget pack failed", "err", err)
+	}
 	// podcast.generate body/script mode (mode A) works without a gateway, so
 	// register the nil-dispatcher version here — BEFORE the gated block — so it
 	// exists in gateway-less deployments. When a gateway IS present, the
@@ -715,7 +721,7 @@ func main() {
 
 	if err := packReg.Register(builtin.EmailSend(vaultStore)); err != nil {
 		logger.Warn("register command pack failed", "err", err)
-	}	
+	}
 
 	// Pipelines (ADR 041). Built after all packs are registered so seeding
 	// can confirm each starter's packs exist; a starter whose packs aren't

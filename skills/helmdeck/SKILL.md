@@ -22,6 +22,8 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 
 > **Routing tip (ADR 047):** for any multi-step request, query the `helmdeck://routing-guide` resource first. It returns the structured catalog (packs + pipelines + their `accepts` / `produces` / `intent_keywords` / `typical_use` / `limitations`) plus a top-level `policy` block telling you how to use it. Prefer a pipeline over chaining packs when the pipeline's `metadata.supersedes` lists those packs. The picker tables and decision trees below in THIS skill are the offline fallback — the resource is canonical.
 
+> **Memory tip (ADR 047 PR #2):** before asking the user for inputs that have learned defaults (`persona`, `audience`, `angle`, `model`, `theme`, `voice`, `title`, `author`), read `helmdeck://my-defaults`. The `packs[]` / `pipelines[]` arrays carry `common_inputs` — the most-used value per learnable field for this caller across recent runs. Pre-fill from `common_inputs` and confirm ("I'll use persona=technical like last time, OK?") rather than re-asking from scratch. Empty arrays mean no history yet; ask normally. To clear history call `helmdeck.memory_forget` with `scope` = `all` (or `packs` / `pipelines` / `pack:<id>` / `pipeline:<id>` for targeted resets); audit rows otherwise expire automatically after 30 days.
+
 ## Pack catalog
 
 ### Browser

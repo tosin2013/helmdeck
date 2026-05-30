@@ -20,6 +20,13 @@ type Executor interface {
 	Execute(ctx context.Context, pack *packs.Pack, input json.RawMessage) (*packs.Result, error)
 }
 
+// PipelineAuditWriter is satisfied by executors that want a callback
+// on terminal pipeline states (ADR 047 PR #2). *packs.Engine
+// satisfies it; tests that don't care can implement only Executor.
+type PipelineAuditWriter interface {
+	WritePipelineAudit(ctx context.Context, pipelineID, runID string, inputs json.RawMessage, outcome string, duration time.Duration)
+}
+
 // SessionCanceller force-terminates every session container tagged with a run
 // id. *docker.Runtime satisfies it (TerminateByRunID). Optional — when nil,
 // CancelRun still cancels the run context but can't tear down a stuck
@@ -147,6 +154,19 @@ func (r *Runner) ReconcileOrphans(ctx context.Context) (int, error) {
 // is recorded on the Run (Status=failed); it errors only on setup faults
 // (bad inputs JSON, store write failure).
 func (r *Runner) RunSync(ctx context.Context, p *Pipeline, inputs json.RawMessage, run *Run) error {
+	start := r.now()
+	// ADR 047 PR #2: record one pipeline-level audit row on every
+	// terminal outcome. Type-asserted off the executor so tests with
+	// a minimal fake aren't forced to implement it. Outcome strings
+	// mirror Run.Status so downstream projection logic doesn't have
+	// to translate.
+	defer func() {
+		aw, ok := r.exec.(PipelineAuditWriter)
+		if !ok || p == nil || run == nil {
+			return
+		}
+		aw.WritePipelineAudit(ctx, p.ID, run.ID, inputs, string(run.Status), r.now().Sub(start))
+	}()
 	// If cancel landed before the goroutine reached this point (pending
 	// run cancelled), short-circuit cleanly — single-writer: this
 	// goroutine owns run.Status, CancelRun only flags + triggers.

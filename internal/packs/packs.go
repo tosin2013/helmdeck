@@ -316,6 +316,13 @@ type Pack struct {
 	// analysis or routing decisions. Surfaced via /api/v1/packs and the
 	// helmdeck://routing-guide MCP resource.
 	Metadata PackMetadata
+
+	// NoAudit exempts this pack from the audit hook in Engine.Execute
+	// (ADR 047 PR #2). Meta-packs that clean audit memory — currently
+	// helmdeck.memory_forget — set this so calling forget doesn't
+	// immediately write back the very category it just cleared. Default
+	// false: every pack call writes one audit row.
+	NoAudit bool
 }
 
 // PackMetadata is structured routing intel a pack declares alongside its
@@ -535,19 +542,25 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 		),
 	)
 	defer func() {
+		outcome := "ok"
 		if retErr != nil {
 			span.RecordError(retErr)
 			span.SetStatus(codes.Error, retErr.Error())
 			if pe, ok := retErr.(*PackError); ok {
-				span.SetAttributes(telemetry.Helmdeck.PackResult.String(string(pe.Code)))
+				outcome = string(pe.Code)
 			} else {
-				span.SetAttributes(telemetry.Helmdeck.PackResult.String("error"))
+				outcome = "error"
 			}
+			span.SetAttributes(telemetry.Helmdeck.PackResult.String(outcome))
 		} else {
 			span.SetAttributes(telemetry.Helmdeck.PackResult.String("ok"))
 			span.SetStatus(codes.Ok, "")
 		}
 		span.End()
+		// ADR 047 PR #2: audit hook. Writes one row per Execute call
+		// under the caller's bare namespace (cross-session learning).
+		// Nil-store-safe inside writePackAudit; never fails the call.
+		e.writePackAudit(ctx, pack, input, outcome, e.now().Sub(start))
 	}()
 
 	// Step 1: input schema. Validation runs against the raw bytes so a

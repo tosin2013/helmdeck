@@ -84,13 +84,13 @@ func TestResourcesList_PacksOnly_WhenNoSessionLister(t *testing.T) {
 	if err := json.Unmarshal([]byte(resp), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	// helmdeck://packs is always present; helmdeck://routing-guide is
-	// also always present (ADR 047 — unconditional). The optional
-	// resources (sessions/voices/image-models/models) are absent here.
-	if len(got.Result.Resources) != 2 {
-		t.Fatalf("want 2 resources (packs + routing-guide), got %d: %s", len(got.Result.Resources), resp)
+	// helmdeck://packs / helmdeck://routing-guide / helmdeck://my-defaults
+	// are always present (ADR 047 — unconditional). The optional resources
+	// (sessions/voices/image-models/models) are absent here.
+	if len(got.Result.Resources) != 3 {
+		t.Fatalf("want 3 resources (packs + routing-guide + my-defaults), got %d: %s", len(got.Result.Resources), resp)
 	}
-	want := map[string]bool{"helmdeck://packs": false, "helmdeck://routing-guide": false}
+	want := map[string]bool{"helmdeck://packs": false, "helmdeck://routing-guide": false, "helmdeck://my-defaults": false}
 	for _, r := range got.Result.Resources {
 		if _, ok := want[r.URI]; ok {
 			want[r.URI] = true
@@ -755,4 +755,96 @@ func TestCollapseEmptyJSON(t *testing.T) {
 	// Verify the errors import is exercised by referencing it once so
 	// go vet's "declared and not used" stays quiet across the file.
 	_ = errors.New("sentinel")
+}
+
+// TestResources_MyDefaults_AlwaysListed — my-defaults resource is
+// always present in resources/list (ADR 047 PR #2) regardless of
+// whether a memory store is configured.
+func TestResources_MyDefaults_AlwaysListed(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`)
+	resp := read()
+
+	var got struct {
+		Result struct {
+			Resources []Resource `json:"resources"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, r := range got.Result.Resources {
+		if r.URI == "helmdeck://my-defaults" {
+			return
+		}
+	}
+	t.Errorf("helmdeck://my-defaults should always be listed, got %+v", got.Result.Resources)
+}
+
+// TestResources_MyDefaults_Read_EmptyWithoutMemory — when no memory
+// store is wired, the projection returns a well-shaped empty payload
+// with an explanatory note (not an error).
+func TestResources_MyDefaults_Read_EmptyWithoutMemory(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://my-defaults"}}`)
+	resp := read()
+
+	var rpc struct {
+		Result struct {
+			Contents []ResourceContent `json:"contents"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(resp), &rpc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if rpc.Error != nil {
+		t.Fatalf("expected success, got error: %+v", rpc.Error)
+	}
+	var md MyDefaults
+	if err := json.Unmarshal([]byte(rpc.Result.Contents[0].Text), &md); err != nil {
+		t.Fatalf("decode my-defaults body: %v", err)
+	}
+	if len(md.Packs) != 0 || len(md.Pipelines) != 0 {
+		t.Errorf("want empty projection without memory, got packs=%d pipelines=%d", len(md.Packs), len(md.Pipelines))
+	}
+	if md.Note == "" {
+		t.Errorf("expected an explanatory note in empty projection; got none")
+	}
+}
+
+// TestProjectPackEntries_PicksMostCommon proves the projection (a)
+// only learns from outcome="ok" rows, (b) picks the most-common value
+// per learnable field, and (c) caps to top-N by call count.
+func TestProjectPackEntries_PicksMostCommon(t *testing.T) {
+	audits := []packs.PackAudit{
+		{Pack: "blog.rewrite_for_audience", Outcome: "ok", AtUnix: 100, LearnInputs: map[string]string{"persona": "technical", "audience": "engineers"}},
+		{Pack: "blog.rewrite_for_audience", Outcome: "ok", AtUnix: 200, LearnInputs: map[string]string{"persona": "technical", "audience": "engineers"}},
+		{Pack: "blog.rewrite_for_audience", Outcome: "ok", AtUnix: 300, LearnInputs: map[string]string{"persona": "marketing"}},
+		{Pack: "blog.rewrite_for_audience", Outcome: "invalid_input", AtUnix: 400, LearnInputs: map[string]string{"persona": "executive"}},
+		{Pack: "slides.outline", Outcome: "ok", AtUnix: 500, LearnInputs: map[string]string{"persona": "marketing"}},
+	}
+	out := projectPackEntries(audits)
+	if len(out) != 2 {
+		t.Fatalf("want 2 packs, got %d", len(out))
+	}
+	if out[0].ID != "blog.rewrite_for_audience" {
+		t.Errorf("want blog.rewrite_for_audience ranked first by call count; got %q", out[0].ID)
+	}
+	if out[0].Calls != 3 {
+		t.Errorf("want 3 successful calls (failure excluded), got %d", out[0].Calls)
+	}
+	if out[0].CommonInputs["persona"] != "technical" {
+		t.Errorf("want persona=technical (2 of 3), got %q", out[0].CommonInputs["persona"])
+	}
+	if out[0].CommonInputs["audience"] != "engineers" {
+		t.Errorf("want audience=engineers (2 of 3), got %q", out[0].CommonInputs["audience"])
+	}
 }

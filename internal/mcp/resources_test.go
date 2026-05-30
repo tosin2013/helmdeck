@@ -820,31 +820,7 @@ func TestResources_MyDefaults_Read_EmptyWithoutMemory(t *testing.T) {
 	}
 }
 
-// TestProjectPackEntries_PicksMostCommon proves the projection (a)
-// only learns from outcome="ok" rows, (b) picks the most-common value
-// per learnable field, and (c) caps to top-N by call count.
-func TestProjectPackEntries_PicksMostCommon(t *testing.T) {
-	audits := []packs.PackAudit{
-		{Pack: "blog.rewrite_for_audience", Outcome: "ok", AtUnix: 100, LearnInputs: map[string]string{"persona": "technical", "audience": "engineers"}},
-		{Pack: "blog.rewrite_for_audience", Outcome: "ok", AtUnix: 200, LearnInputs: map[string]string{"persona": "technical", "audience": "engineers"}},
-		{Pack: "blog.rewrite_for_audience", Outcome: "ok", AtUnix: 300, LearnInputs: map[string]string{"persona": "marketing"}},
-		{Pack: "blog.rewrite_for_audience", Outcome: "invalid_input", AtUnix: 400, LearnInputs: map[string]string{"persona": "executive"}},
-		{Pack: "slides.outline", Outcome: "ok", AtUnix: 500, LearnInputs: map[string]string{"persona": "marketing"}},
-	}
-	out := projectPackEntries(audits)
-	if len(out) != 2 {
-		t.Fatalf("want 2 packs, got %d", len(out))
-	}
-	if out[0].ID != "blog.rewrite_for_audience" {
-		t.Errorf("want blog.rewrite_for_audience ranked first by call count; got %q", out[0].ID)
-	}
-	if out[0].Calls != 3 {
-		t.Errorf("want 3 successful calls (failure excluded), got %d", out[0].Calls)
-	}
-	if out[0].CommonInputs["persona"] != "technical" {
-		t.Errorf("want persona=technical (2 of 3), got %q", out[0].CommonInputs["persona"])
-	}
-	if out[0].CommonInputs["audience"] != "engineers" {
-		t.Errorf("want audience=engineers (2 of 3), got %q", out[0].CommonInputs["audience"])
-	}
-}
+// Projection coverage lives in internal/packs/defaults_test.go now —
+// the aggregation logic moved there in PR #3 so helmdeck.route can
+// reuse it. The MCP wrapper is exercised by the always-listed +
+// empty-projection tests above.

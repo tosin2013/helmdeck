@@ -35,17 +35,22 @@ const (
 	blogRewriteDefaultMaxTokens = 4096
 	blogRewriteMinTokens        = 1024
 	blogRewriteMaxTokens        = 16384
+	blogRewriteDefaultPersona   = "general"
 
 	// blogRewriteSystemPrompt is templated with audience + angle + an
-	// optional title block. The body codifies the strategic advice
-	// agents commonly give about turning a transcription into a real
-	// post: lead with why-it-matters, de-jargon, connect to the
-	// audience's tools, add perspective, stay grounded in source.
+	// optional title block AND a persona-specific style directive. The
+	// body codifies the strategic advice agents commonly give about
+	// turning a transcription into a real post: lead with why-it-matters,
+	// de-jargon, connect to the audience's tools, add perspective, stay
+	// grounded in source. The persona block tunes tone/register/length —
+	// without it the model defaulted to formal-academic for every input.
 	blogRewriteSystemPrompt = `You are writing an ORIGINAL blog post, not a summary of the source.
 
 Audience: %s
 Angle: %s
 %s
+Style — %s
+
 Hard rules — do not violate these:
 - Lead with WHY THIS MATTERS to the audience above. Open with a concrete consequence or pain point they recognize, not with "this paper" or "this document".
 - DE-JARGON the source's technical terms. Every term of art gets a relatable analogy or a code parallel the audience would recognize.
@@ -53,11 +58,41 @@ Hard rules — do not violate these:
 - ADD PERSPECTIVE. Include an "Author's note" section near the end where you draw the connection the angle above calls for. Mark it explicitly.
 - STAY GROUNDED. Do not state any technical fact that isn't in the source. If the source doesn't support a claim, leave it out. Speculation about future products is fine if you tag it ("Looking ahead: …").
 - CITE the source up top with one line: "Source: <one-line attribution>". Keep the link out — a downstream step adds links.
-- Voice: confident, direct, second-person ("you"). Avoid filler ("It's important to note…", "In conclusion…"). Avoid bulleted lists for everything — mix prose paragraphs with bullets where they add scannability.
-- Length: aim for 600-1000 words.
+- Voice: follow the Style block above for tone and register. Avoid filler ("It's important to note…", "In conclusion…"). Avoid bulleted lists for everything — mix prose paragraphs with bullets where they add scannability.
+- Length: follow the Style block above; default 600-1000 words.
 
 Output the blog body as markdown ONLY. No preamble like "Here is the post:". No code fences around the whole thing.`
 )
+
+// blogRewritePersonas maps a closed-set persona key to the style directive
+// injected into the system prompt. The vocabulary matches slides.outline's
+// so the picker is consistent across packs (general / technical / marketing /
+// executive / educational + the blog-specific `academic`). An unknown
+// non-empty key is treated as a freeform audience hint.
+var blogRewritePersonas = map[string]string{
+	"general":     "conversational, accessible. Use second person (\"you\"). Mix prose paragraphs with the occasional bullet list. 700-900 words. Close with one practical takeaway.",
+	"technical":   "precise, hands-on. Assume the reader has the tool in front of them — use real field names, function signatures, config snippets, file paths from the source. Code blocks where they earn their keep. 800-1200 words. Close with concrete next steps (\"try this in your repo\" / \"check these env vars\").",
+	"marketing":   "benefits-led, scannable, outcome-focused. Lead with what the reader gets, not how it works. Short paragraphs (2-3 sentences). Bold key claims sparingly. 500-800 words. Close with a clear call-to-action (try, sign up, learn more).",
+	"executive":   "impact-led, brief, decision-oriented. Open with the bottom line in one sentence. Use numbers where the source supports them. Skip the implementation detail. 400-600 words. Close with the decision or ask.",
+	"educational": "step-by-step, beginner-friendly. Start with \"What you'll learn\" (3 bullets). Build concepts in order with simple examples. Headings act as a learning path. 900-1400 words. Close with \"Practice\" + \"Further reading\".",
+	"academic":    "formal register, hedged, citation-dense. Third person mostly. Acknowledge limitations and counter-examples from the source. Longer paragraphs are fine. 1000-1500 words. Close with a paragraph on open questions or future work.",
+}
+
+// resolveBlogRewritePersona returns the style directive to inject and the
+// canonical label echoed in persona_used. Empty → default persona; a known
+// key (case-insensitive) → its directive; an unknown non-empty string → a
+// freeform style hint, exactly the slides.outline pattern.
+func resolveBlogRewritePersona(p string) (directive, used string) {
+	key := strings.ToLower(strings.TrimSpace(p))
+	if key == "" {
+		key = blogRewriteDefaultPersona
+	}
+	if d, ok := blogRewritePersonas[key]; ok {
+		return d, key
+	}
+	trimmed := strings.TrimSpace(p)
+	return "tailor tone, register, and length for this audience: " + trimmed, trimmed
+}
 
 type blogRewriteInput struct {
 	SourceContent string `json:"source_content"`
@@ -66,6 +101,11 @@ type blogRewriteInput struct {
 	Title         string `json:"title"`
 	Model         string `json:"model"`
 	MaxTokens     int    `json:"max_tokens"`
+	// Persona tunes tone/register/length on top of audience+angle. Closed
+	// set: general / technical / marketing / executive / educational /
+	// academic; anything else is a freeform style hint. See
+	// blogRewritePersonas.
+	Persona string `json:"persona"`
 }
 
 // BlogRewriteForAudience constructs the pack. The dispatcher (vault-resolved
@@ -85,13 +125,15 @@ func BlogRewriteForAudience(d vision.Dispatcher) *packs.Pack {
 				"title":          "string",
 				"model":          "string",
 				"max_tokens":     "number",
+				"persona":        "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
 			Required: []string{"markdown", "model"},
 			Properties: map[string]string{
-				"markdown": "string",
-				"model":    "string",
+				"markdown":     "string",
+				"model":        "string",
+				"persona_used": "string",
 			},
 		},
 		Handler: blogRewriteHandler(d),
@@ -144,10 +186,11 @@ func blogRewriteHandler(d vision.Dispatcher) packs.HandlerFunc {
 		if t := strings.TrimSpace(in.Title); t != "" {
 			titleBlock = fmt.Sprintf("Title: %s\n", t)
 		}
-		system := fmt.Sprintf(blogRewriteSystemPrompt, in.Audience, angle, titleBlock)
+		personaDirective, personaUsed := resolveBlogRewritePersona(in.Persona)
+		system := fmt.Sprintf(blogRewriteSystemPrompt, in.Audience, angle, titleBlock, personaDirective)
 		user := "Source:\n\n" + in.SourceContent
 
-		ec.Report(10, fmt.Sprintf("rewriting for audience: %s", in.Audience))
+		ec.Report(10, fmt.Sprintf("rewriting for audience: %s (persona: %s)", in.Audience, personaUsed))
 		mt := maxTokens
 		chat, err := d.Dispatch(ctx, gateway.ChatRequest{
 			Model:     in.Model,
@@ -170,8 +213,9 @@ func blogRewriteHandler(d vision.Dispatcher) packs.HandlerFunc {
 
 		ec.Report(100, "rewrite complete")
 		return json.Marshal(map[string]any{
-			"markdown": body,
-			"model":    in.Model,
+			"markdown":     body,
+			"model":        in.Model,
+			"persona_used": personaUsed,
 		})
 	}
 }

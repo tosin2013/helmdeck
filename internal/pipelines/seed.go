@@ -28,8 +28,8 @@ func Builtins() []*Pipeline {
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.grounded-blog", "Grounded blog post",
-			"Cite markdown's factual claims against web sources and strengthen the cited sentences (content.ground), then save the result as a blog-post artifact. Note: this grounds and cites — it does NOT rewrite into a new voice/structure — and it saves a markdown file by default; clone it with a Ghost credential to publish to a blog.",
-			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":true}`),
+			"Cite markdown's factual claims against web sources and strengthen the cited sentences (content.ground), then save the result as a blog-post artifact. Optional persona input (general/technical/marketing/executive/educational/academic) tunes the rewrite register without changing the post's structure or voice. Note: this grounds and cites — it does NOT rewrite into a new voice/structure — and it saves a markdown file by default; clone it with a Ghost credential to publish to a blog.",
+			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":true,"persona":"${{ inputs.persona }}"}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
 		pipe("builtin.grounded-narrate", "Grounded narrated video",
@@ -64,9 +64,9 @@ func Builtins() []*Pipeline {
 			step("podcast", "podcast.generate", `{"source_text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
 		),
 		pipe("builtin.scrape-rewrite-blog", "Scrape → rewrite → blog",
-			"Scrape a URL to markdown, then translate it into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — de-jargons, leads with why-it-matters, connects to the audience's tools, adds perspective; stays grounded in the scraped source), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: url, audience, angle?, title. Replaces builtin.scrape-ground-blog, which produced a citation-strengthened transcription that read as republishing the scraped page.",
+			"Scrape a URL to markdown, then translate it into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — de-jargons, leads with why-it-matters, connects to the audience's tools, adds perspective; stays grounded in the scraped source), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: url, audience, angle?, persona? (general/technical/marketing/executive/educational/academic), title. Replaces builtin.scrape-ground-blog, which produced a citation-strengthened transcription that read as republishing the scraped page.",
 			step("scrape", "web.scrape", `{"url":"${{ inputs.url }}"}`),
-			step("rewrite", "blog.rewrite_for_audience", `{"source_content":"${{ steps.scrape.output.markdown }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","model":"openrouter/auto"}`),
+			step("rewrite", "blog.rewrite_for_audience", `{"source_content":"${{ steps.scrape.output.markdown }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","persona":"${{ inputs.persona }}","title":"${{ inputs.title }}","model":"openrouter/auto"}`),
 			step("ground", "content.ground", `{"text":"${{ steps.rewrite.output.markdown }}","model":"openrouter/auto","rewrite":false}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),
@@ -80,11 +80,11 @@ func Builtins() []*Pipeline {
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.doc-rewrite-blog", "Document → rewrite → blog",
-			"Parse a document (PDF/DOCX/…), then translate it into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — de-jargons, leads with why-it-matters, connects to the audience's tools, adds perspective; stays grounded in the source), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: source_url, audience, angle?, title. Replaces builtin.doc-ground-blog, which produced a citation-strengthened transcription that read as republishing rather than as an original post.",
+			"Parse a document (PDF/DOCX/…), then translate it into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — de-jargons, leads with why-it-matters, connects to the audience's tools, adds perspective; stays grounded in the source), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: source_url, audience, angle?, persona? (general/technical/marketing/executive/educational/academic), title. Replaces builtin.doc-ground-blog, which produced a citation-strengthened transcription that read as republishing rather than as an original post.",
 			step("parse", "doc.parse", `{"source_url":"${{ inputs.source_url }}"}`),
 			// rewrite is the new step — turns the source into an
 			// original post for the audience+angle the caller supplied.
-			step("rewrite", "blog.rewrite_for_audience", `{"source_content":"${{ steps.parse.output.markdown }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","model":"openrouter/auto"}`),
+			step("rewrite", "blog.rewrite_for_audience", `{"source_content":"${{ steps.parse.output.markdown }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","persona":"${{ inputs.persona }}","title":"${{ inputs.title }}","model":"openrouter/auto"}`),
 			// citation-only ground (rewrite:false) — the rewrite step
 			// already restructured the prose; this pass verifies it
 			// against web sources and inserts inline citations.
@@ -98,9 +98,9 @@ func Builtins() []*Pipeline {
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.research-rewrite-blog", "Research → rewrite → blog",
-			"Deep-research a topic (research.deep), then translate the synthesis into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: query, audience, angle?, title. Replaces builtin.research-blog, which saved the raw synthesis without tailoring it to an audience — useful as research notes but generic as a blog post.",
+			"Deep-research a topic (research.deep), then translate the synthesis into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: query, audience, angle?, persona? (general/technical/marketing/executive/educational/academic), title. Replaces builtin.research-blog, which saved the raw synthesis without tailoring it to an audience — useful as research notes but generic as a blog post.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
-			step("rewrite", "blog.rewrite_for_audience", `{"source_content":"${{ steps.research.output.synthesis }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","model":"openrouter/auto"}`),
+			step("rewrite", "blog.rewrite_for_audience", `{"source_content":"${{ steps.research.output.synthesis }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","persona":"${{ inputs.persona }}","title":"${{ inputs.title }}","model":"openrouter/auto"}`),
 			step("ground", "content.ground", `{"text":"${{ steps.rewrite.output.markdown }}","model":"openrouter/auto","rewrite":false}`),
 			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
 		),

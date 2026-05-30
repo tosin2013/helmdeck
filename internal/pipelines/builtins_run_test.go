@@ -127,7 +127,8 @@ const builtinRunInputs = `{
   "issue_number": 42,
   "task": "rename the constant Foo to Bar",
   "audience": "developers building AI agents",
-  "angle": "connect to practical tool-calling patterns"
+  "angle": "connect to practical tool-calling patterns",
+  "persona": "technical"
 }`
 
 // TestBuiltins_RunEndToEnd runs every built-in pipeline through the runner

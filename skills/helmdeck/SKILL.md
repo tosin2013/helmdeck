@@ -133,7 +133,15 @@ A **pipeline** is a saved, named, ordered sequence of pack steps that runs serve
 
 **When the user pastes a chunk of pre-researched markdown notes** and wants a fact-checked output, prefer the `builtin.grounded-*` family — every one takes a single `markdown` input, runs `content.ground` to cite claims against web sources (un-citable claims are marked `skipped`, not silently passed through), then produces the chosen format: `grounded-blog` (markdown blog post), `grounded-deck` (PDF slide deck), `grounded-narrate` (narrated MP4), `grounded-podcast` (multi-speaker MP3). Saves the user reasoning about which packs to chain.
 
-**When the user hands you a source document (PDF/DOCX/etc.) and wants a blog post about it** — use `builtin.doc-rewrite-blog`, not raw parse+publish. The pipeline parses the source, then translates it into an ORIGINAL post for a stated `audience` (e.g. "developers building AI agents") and `angle` (e.g. "connect to practical tool-calling patterns"), then runs a citation pass against web sources. The output is a perspective-driven post grounded in the source — not a transcription. Inputs: `source_url, audience, angle?, title`. Always ask the user for the audience + angle before running — defaults exist but they produce bland output.
+**When the user wants a blog post sourced from someone else's material** — pick the `*-rewrite-blog` pipeline by source type, never the raw parse/scrape/research → publish chain. They all run the source through `blog.rewrite_for_audience` (translates the source into an ORIGINAL post for the audience, leads with why-it-matters, de-jargons, connects to the audience's tools, adds an Author's note) and then citation-ground the new prose. The output is a perspective-driven post grounded in the source — not a transcription.
+
+| Source type            | Pipeline                          | Source-specific input |
+| ---------------------- | --------------------------------- | --------------------- |
+| PDF / DOCX / etc.      | `builtin.doc-rewrite-blog`        | `source_url`          |
+| Web page (URL)         | `builtin.scrape-rewrite-blog`     | `url`                 |
+| Deep-research a topic  | `builtin.research-rewrite-blog`   | `query`               |
+
+All three take `audience` (e.g. "developers building AI agents") and `angle` (e.g. "connect to practical tool-calling patterns") plus `title`. **Always ask the user for audience + angle before running** — defaults exist but produce bland output. For the user's OWN markdown (a draft, notes), use `builtin.grounded-blog` instead — it preserves the user's voice and only adds citations.
 
 **When the user asks for a code change against a repo** — `builtin.issue-to-pr` reads a GitHub issue by `{repo, issue_number}` and hands the title+body to `swe.solve` in pull_request mode, returning a `pr_url`. For tasks not yet tracked as an issue, use `builtin.repo-solve-pr` (open a PR), `builtin.repo-solve-branch` (push a branch only), or `builtin.repo-solve-patch` (preview as a diff, no remote write). All four are **beta** — a `github-token` vault credential is required for any path that pushes, and an LLM gateway key is required for the agent loop. See ADR 046 for the roadmap on other coding agents.
 

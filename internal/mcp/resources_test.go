@@ -84,11 +84,24 @@ func TestResourcesList_PacksOnly_WhenNoSessionLister(t *testing.T) {
 	if err := json.Unmarshal([]byte(resp), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(got.Result.Resources) != 1 {
-		t.Fatalf("want 1 resource (packs only), got %d: %s", len(got.Result.Resources), resp)
+	// helmdeck://packs is always present; helmdeck://routing-guide is
+	// also always present (ADR 047 — unconditional). The optional
+	// resources (sessions/voices/image-models/models) are absent here.
+	if len(got.Result.Resources) != 2 {
+		t.Fatalf("want 2 resources (packs + routing-guide), got %d: %s", len(got.Result.Resources), resp)
 	}
-	if got.Result.Resources[0].URI != "helmdeck://packs" {
-		t.Errorf("want URI helmdeck://packs, got %q", got.Result.Resources[0].URI)
+	want := map[string]bool{"helmdeck://packs": false, "helmdeck://routing-guide": false}
+	for _, r := range got.Result.Resources {
+		if _, ok := want[r.URI]; ok {
+			want[r.URI] = true
+		} else {
+			t.Errorf("unexpected resource %q", r.URI)
+		}
+	}
+	for uri, seen := range want {
+		if !seen {
+			t.Errorf("missing expected resource %q", uri)
+		}
 	}
 }
 
@@ -574,4 +587,172 @@ func TestResourcesRead_Models_NotWired(t *testing.T) {
 	if got.Error == nil || got.Error.Code != -32602 {
 		t.Errorf("want -32602 when models lister not wired, got %+v", got.Error)
 	}
+}
+
+// TestResources_RoutingGuide_AlwaysListed — routing-guide is unconditionally
+// available (no optional lister). ADR 047 makes it canonical for routing
+// decisions, so it must show up in resources/list every time.
+func TestResources_RoutingGuide_AlwaysListed(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`)
+	resp := read()
+
+	var got struct {
+		Result struct {
+			Resources []Resource `json:"resources"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	found := false
+	for _, r := range got.Result.Resources {
+		if r.URI == "helmdeck://routing-guide" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("helmdeck://routing-guide should always be listed, got %+v", got.Result.Resources)
+	}
+}
+
+// TestResources_RoutingGuide_Read_Shape — reading the resource returns a
+// well-shaped payload: top-level policy block, packs[] (each with name +
+// description; metadata only when populated), pipelines[] (empty when no
+// pipeline service is wired — additive contract).
+func TestResources_RoutingGuide_Read_Shape(t *testing.T) {
+	// Register one pack with full metadata so we can assert the metadata
+	// surfaces. A second pack with no metadata exercises the
+	// collapse-empty-JSON path.
+	reg := packs.NewPackRegistry()
+	if err := reg.Register(&packs.Pack{
+		Name:        "demo.with_meta",
+		Version:     "v1",
+		Description: "demo pack with metadata",
+		Metadata: packs.PackMetadata{
+			Accepts:        []string{"markdown"},
+			Produces:       []string{"pdf"},
+			IntentKeywords: []string{"demo"},
+			TypicalUse:     "for tests",
+			Limitations:    []string{"toy pack"},
+		},
+		Handler: func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(&packs.Pack{
+		Name:        "demo.no_meta",
+		Version:     "v1",
+		Description: "demo pack without metadata",
+		Handler: func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewPackServer(reg, nil)
+	clientToServer, fromClient := io.Pipe()
+	fromServer, serverToClient := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = srv.Serve(ctx, clientToServer, serverToClient)
+	}()
+	defer func() {
+		cancel()
+		_ = fromClient.Close()
+		_ = serverToClient.Close()
+		<-done
+	}()
+	sc := bufio.NewScanner(fromServer)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	if _, err := fromClient.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://routing-guide"}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if !sc.Scan() {
+		t.Fatal("server closed before response")
+	}
+	resp := sc.Text()
+
+	var rpc struct {
+		Result struct {
+			Contents []ResourceContent `json:"contents"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(resp), &rpc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if rpc.Error != nil {
+		t.Fatalf("unexpected error: %+v", rpc.Error)
+	}
+	if len(rpc.Result.Contents) == 0 {
+		t.Fatal("expected at least one ResourceContent in response")
+	}
+
+	var guide RoutingGuide
+	if err := json.Unmarshal([]byte(rpc.Result.Contents[0].Text), &guide); err != nil {
+		t.Fatalf("decode guide body: %v", err)
+	}
+	if !strings.Contains(guide.Policy, "ADR 047") {
+		t.Errorf("policy block should mention ADR 047, got: %s", guide.Policy)
+	}
+	if len(guide.Packs) != 2 {
+		t.Fatalf("expected 2 packs (with + without metadata), got %d", len(guide.Packs))
+	}
+	// Order is registry-defined; find each by name.
+	var withMeta, noMeta *routingGuidePackEntry
+	for i, p := range guide.Packs {
+		switch p.Name {
+		case "demo.with_meta":
+			withMeta = &guide.Packs[i]
+		case "demo.no_meta":
+			noMeta = &guide.Packs[i]
+		}
+	}
+	if withMeta == nil || noMeta == nil {
+		t.Fatalf("missing pack entries: with=%v no=%v", withMeta, noMeta)
+	}
+	if len(withMeta.Metadata) == 0 {
+		t.Errorf("populated pack should carry metadata in routing-guide; got empty")
+	}
+	if !strings.Contains(string(withMeta.Metadata), "intent_keywords") {
+		t.Errorf("metadata should serialize fields; got %s", withMeta.Metadata)
+	}
+	if len(noMeta.Metadata) != 0 {
+		t.Errorf("unpopulated pack should have nil/empty Metadata (collapse-empty-JSON); got %s", noMeta.Metadata)
+	}
+}
+
+// TestCollapseEmptyJSON exercises the small helper used by the routing
+// guide to keep `{}` / `null` from leaking into the wire shape.
+func TestCollapseEmptyJSON(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"{}", ""},
+		{"null", ""},
+		{`{"x":1}`, `{"x":1}`},
+		{`["a"]`, `["a"]`},
+	} {
+		got := collapseEmptyJSON(json.RawMessage(tc.in))
+		if string(got) != tc.want {
+			t.Errorf("collapseEmptyJSON(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	// Verify the errors import is exercised by referencing it once so
+	// go vet's "declared and not used" stays quiet across the file.
+	_ = errors.New("sentinel")
 }

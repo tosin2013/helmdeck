@@ -92,6 +92,13 @@ func WebScrape(eg *security.EgressGuard) *packs.Pack {
 		Name:        "web.scrape",
 		Version:     "v1",
 		Description: "Scrape a URL to clean markdown via Firecrawl. No selectors required.",
+		Metadata: packs.PackMetadata{
+			Accepts:        []string{"url"},
+			Produces:       []string{"markdown"},
+			IntentKeywords: []string{"scrape web page", "fetch article", "extract from URL", "read webpage"},
+			TypicalUse:     "Source pack for web-page content. Use for blog posts, articles, Medium-style content — anything Firecrawl can render.",
+			Limitations:    []string{"requires HELMDECK_FIRECRAWL_ENABLED + the Firecrawl overlay", "sites with anti-scrape defenses may return empty or 403", "does not parse PDFs or DOCX (use doc.parse)"},
+		},
 		InputSchema: packs.BasicSchema{
 			Required: []string{"url"},
 			Properties: map[string]string{

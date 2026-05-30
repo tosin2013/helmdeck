@@ -20,6 +20,8 @@ metadata:
 
 Helmdeck is a browser automation and AI capability platform. You have access to 44 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
 
+> **Routing tip (ADR 047):** for any multi-step request, query the `helmdeck://routing-guide` resource first. It returns the structured catalog (packs + pipelines + their `accepts` / `produces` / `intent_keywords` / `typical_use` / `limitations`) plus a top-level `policy` block telling you how to use it. Prefer a pipeline over chaining packs when the pipeline's `metadata.supersedes` lists those packs. The picker tables and decision trees below in THIS skill are the offline fallback — the resource is canonical.
+
 ## Pack catalog
 
 ### Browser

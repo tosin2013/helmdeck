@@ -309,6 +309,50 @@ type Pack struct {
 	// the memory layer landed. Set it (e.g. {Cache: true, TTL: ...})
 	// to enable the declarative read-through response cache.
 	Memory *MemoryConfig
+
+	// Metadata is the structured routing surface ADR 047 ships in PR #1
+	// of the routing roadmap. Zero value is valid — packs without
+	// metadata still work, they just don't show up in agent-side gap
+	// analysis or routing decisions. Surfaced via /api/v1/packs and the
+	// helmdeck://routing-guide MCP resource.
+	Metadata PackMetadata
+}
+
+// PackMetadata is structured routing intel a pack declares alongside its
+// schemas so the chat agent (and the helmdeck.route meta-pack, ADR 047
+// PR #3) can pick the right tool without needing a hand-written SKILL.md
+// rule per pack. Empty fields mean "unspecified" and are treated as a
+// no-op by the routing-guide consumer — none of this is required for a
+// pack to function, it's just what makes the catalog queryable.
+type PackMetadata struct {
+	// Accepts lists the kinds of input the pack consumes — short tags
+	// the agent matches against a user-supplied source. Examples:
+	// "markdown", "url", "pdf", "repo_url", "query", "brief",
+	// "source_content", "github_issue", "session_id", "audio_url".
+	Accepts []string `json:"accepts,omitempty"`
+
+	// Produces lists the kinds of output the pack emits. Examples:
+	// "blog_markdown", "pdf", "mp4", "mp3", "code_diff", "pr_url",
+	// "slide_deck", "outline_markdown", "image_url", "podcast_script".
+	Produces []string `json:"produces,omitempty"`
+
+	// IntentKeywords are short phrases an agent matches against user
+	// intent ("make blog post", "from pdf", "explain to executives").
+	// The routing pack (PR #3) tokenizes both the user's request and
+	// these keywords to score candidates.
+	IntentKeywords []string `json:"intent_keywords,omitempty"`
+
+	// TypicalUse is a one-sentence "use this when…" hint for the agent.
+	// Surfaced on the routing-guide resource near IntentKeywords.
+	TypicalUse string `json:"typical_use,omitempty"`
+
+	// Limitations are the explicit things this pack does NOT do — the
+	// gap-analysis seed (ADR 047 PR #3). When the routing pack can't
+	// find a match for a user intent, it inspects nearby packs'
+	// Limitations to propose what a new pack would need to look like.
+	// Examples: "does not handle audio sources", "requires source
+	// markdown — does not fetch URLs", "does not push branches".
+	Limitations []string `json:"limitations,omitempty"`
 }
 
 // HandlerFunc is the per-pack work function. It receives an

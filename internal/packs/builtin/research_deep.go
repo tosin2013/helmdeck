@@ -113,6 +113,13 @@ func ResearchDeep(d vision.Dispatcher) *packs.Pack {
 		Name:        "research.deep",
 		Version:     "v1",
 		Description: "Search a topic via Firecrawl, scrape each result to markdown, and return a synthesized answer.",
+		Metadata: packs.PackMetadata{
+			Accepts:        []string{"query"},
+			Produces:       []string{"synthesis_markdown"},
+			IntentKeywords: []string{"research topic", "deep research", "synthesize from web", "look up information"},
+			TypicalUse:     "Source pack for query-driven content. Chain into slides.outline (research-deck) or blog.rewrite_for_audience (research-rewrite-blog).",
+			Limitations:    []string{"requires HELMDECK_FIRECRAWL_ENABLED", "synthesizes from top-N search results — depth limited by search rank", "use keywords not full questions ('webassembly performance' not 'how fast is wasm')"},
+		},
 		InputSchema: packs.BasicSchema{
 			Required: []string{"query", "model"},
 			Properties: map[string]string{

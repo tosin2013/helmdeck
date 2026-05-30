@@ -130,6 +130,13 @@ func SweSolve(v *vault.Store, eg *security.EgressGuard) *packs.Pack {
 		Name:        "swe.solve",
 		Version:     "v1",
 		Description: "Run a mini-swe-agent loop inside a session sidecar to produce a reviewable code change (patch / branch / pull_request).",
+		Metadata: packs.PackMetadata{
+			Accepts:        []string{"repo_url", "task"},
+			Produces:       []string{"code_diff", "branch", "pr_url"},
+			IntentKeywords: []string{"fix issue", "make code change", "open PR", "implement task in repo", "coding agent"},
+			TypicalUse:     "Coding agent — clones a repo, runs mini-swe-agent against a free-form task, returns a diff/branch/PR depending on mode.",
+			Limitations:    []string{"single-task scope (no batch issue processing today)", "pull_request mode requires a vault github-token", "agent loop is bounded by max_steps; complex multi-file changes may time out"},
+		},
 		// Long-running agent loop: route through the async job registry
 		// so the initial tools/call returns a task envelope instead of
 		// blocking on the full 20-minute budget.

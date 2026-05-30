@@ -104,6 +104,13 @@ func HyperframesCompose(d vision.Dispatcher) *packs.Pack {
 		Name:        "hyperframes.compose",
 		Version:     "v1",
 		Description: "Generate a HyperFrames HTML/CSS/JS video composition from a plain-language description, ready for hyperframes.render. The pack guarantees the render contract (sized canvas, data-* scaffolding, a paused GSAP window.__timelines registration); the model only writes the creative visuals. Pass audio_url (e.g. a podcast.generate presigned URL) for a narrated video.",
+		Metadata: packs.PackMetadata{
+			Accepts:        []string{"description", "audio_url"},
+			Produces:       []string{"composition_html"},
+			IntentKeywords: []string{"compose video", "design animated visual", "describe a video", "make explainer animation"},
+			TypicalUse:     "Generator pack for video compositions. Chain hyperframes.render after for an MP4. Pair with podcast.generate's audio_url for a narrated video (the prompt-narrated-video pipeline).",
+			Limitations:    []string{"does not render — outputs HTML/CSS/JS only; chain hyperframes.render", "visual design is LLM-driven; no fine-grained timeline control via inputs", "audio sync depends on duration_seconds being correct"},
+		},
 		InputSchema: packs.BasicSchema{
 			Required: []string{"description", "model"},
 			Properties: map[string]string{

@@ -136,6 +136,13 @@ func ContentGround(d vision.Dispatcher) *packs.Pack {
 			"verify each source supports the claim, and optionally rewrite weak claims into stronger " +
 			"prose backed by what the sources actually say. Accepts text directly or a file in a session clone. " +
 			"Produces a grounded markdown artifact for download.",
+		Metadata: packs.PackMetadata{
+			Accepts:        []string{"markdown", "text", "clone_path+path"},
+			Produces:       []string{"grounded_markdown"},
+			IntentKeywords: []string{"add citations", "fact check", "cite sources", "ground claims", "strengthen claims"},
+			TypicalUse:     "Annotator pack — inserts [source](url) links for the claims it can find sources for. Use as the citation pass AFTER a generator pack (e.g. blog.rewrite_for_audience) for the rewrite-blog pipeline family.",
+			Limitations:    []string{"is an ANNOTATOR, not a GENERATOR — output is roughly the same length and shape as input", "requires HELMDECK_FIRECRAWL_ENABLED + the Firecrawl overlay", "does not generate prose from a brief — pasted briefs come back as the brief plus a few links"},
+		},
 		// NeedsSession is false because the text-mode path doesn't
 		// require a session. When clone_path + path are provided the
 		// handler checks ec.Exec at runtime and returns a clear error

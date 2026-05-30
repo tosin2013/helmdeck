@@ -321,6 +321,74 @@ func GitHubListIssues(v *vault.Store) *packs.Pack {
 	}
 }
 
+// ── github.get_issue ─────────────────────────────────────────────
+
+// GitHubGetIssue fetches a single GitHub issue by number. It is the
+// missing piece for "issue → PR" pipelines: github.list_issues filters
+// by state/labels/assignee but not by number, so a pipeline that reads
+// a specific issue body to hand to swe.solve previously had to template
+// http.fetch by hand. This pack does that cleanly using the same
+// vault-resolved PAT as the other github.* packs.
+//
+// Input shape:
+//
+//	{
+//	  "repo":         "owner/name", // required, "owner/repo"
+//	  "issue_number": 42,           // required, integer issue number
+//	  "credential":   "github-token" // optional vault name override
+//	}
+//
+// Output is the subset of the GitHub issue REST shape that pipelines
+// typically chain into a downstream coding-agent pack: title and body
+// feed swe.solve's task field; state/labels let conditional flows (when
+// ADR 044 ships) skip wontfix/closed issues; html_url is for the audit
+// trail and for posting back a "PR opened" comment.
+func GitHubGetIssue(v *vault.Store) *packs.Pack {
+	return &packs.Pack{
+		Name:        "github.get_issue",
+		Version:     "v1",
+		Description: "Fetch one GitHub issue by repo + number (title, body, state, labels, html_url). Read-through cached for 5 minutes; pairs with swe.solve for issue→PR pipelines.",
+		// Same read-through cache pattern as github.list_issues — a
+		// pipeline that retries (or batches by issue) won't re-hit the
+		// REST API for the same number.
+		Memory: &packs.MemoryConfig{Cache: true, TTL: 5 * time.Minute, Category: "cache"},
+		InputSchema: packs.BasicSchema{
+			Required: []string{"repo", "issue_number"},
+			Properties: map[string]string{
+				"repo":         "string",
+				"issue_number": "number",
+				"credential":   "string",
+			},
+		},
+		OutputSchema: packs.BasicSchema{
+			Required: []string{"number", "title", "state", "html_url"},
+			Properties: map[string]string{
+				"number":   "number",
+				"title":    "string",
+				"body":     "string",
+				"state":    "string",
+				"labels":   "array",
+				"html_url": "string",
+				"user":     "object",
+			},
+		},
+		Handler: githubHandler(v, func(token string, input json.RawMessage) (json.RawMessage, error) {
+			var in struct {
+				Repo        string `json:"repo"`
+				IssueNumber int    `json:"issue_number"`
+			}
+			if err := json.Unmarshal(input, &in); err != nil {
+				return nil, err
+			}
+			if in.Repo == "" || in.IssueNumber == 0 {
+				return nil, fmt.Errorf("repo and issue_number are required")
+			}
+			path := fmt.Sprintf("/repos/%s/issues/%d", in.Repo, in.IssueNumber)
+			return githubAPI(token, "GET", path, nil)
+		}),
+	}
+}
+
 // ── github.create_pr ─────────────────────────────────────────────
 
 // GitHubCreatePR (swe.solve Phase 3, epic #233) opens a pull request

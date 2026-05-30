@@ -47,13 +47,13 @@ interface Step {
 // blog.publish → blog post). Done UI-side rather than as a backend field
 // so adding a category doesn't require an SQL migration or wire-shape
 // change; an unknown terminal pack falls through to "Other".
-type PipelineCategory = 'Video' | 'Slides' | 'Blog' | 'Podcast' | 'Other';
+type PipelineCategory = 'Video' | 'Slides' | 'Blog' | 'Podcast' | 'Coding' | 'Other';
 
-const CATEGORY_ORDER: PipelineCategory[] = ['Video', 'Slides', 'Blog', 'Podcast', 'Other'];
+const CATEGORY_ORDER: PipelineCategory[] = ['Video', 'Slides', 'Blog', 'Podcast', 'Coding', 'Other'];
 
 interface CategoryInfo {
   category: PipelineCategory;
-  outputLabel: string; // short badge text ("PDF", "MP4", "MP3", "Blog")
+  outputLabel: string; // short badge text ("PDF", "MP4", "MP3", "Blog", "Code")
 }
 
 function categorize(p: Pipeline): CategoryInfo {
@@ -72,10 +72,25 @@ function categorize(p: Pipeline): CategoryInfo {
       return { category: 'Podcast', outputLabel: 'MP3' };
     case 'blog.publish':
       return { category: 'Blog', outputLabel: 'Blog' };
+    case 'swe.solve':
+    case 'repo.push':
+    case 'github.create_pr':
+      // Coding pipelines (ADR 046). swe.solve's concrete output depends on
+      // mode (patch / branch / pull_request) but the badge stays "Code" —
+      // the per-pipeline name + description carry the mode-specific detail.
+      return { category: 'Coding', outputLabel: 'Code' };
     default:
       return { category: 'Other', outputLabel: terminal || '—' };
   }
 }
+
+// Beta marker is encoded as a " (beta)" suffix on Pipeline.name (see
+// internal/pipelines/seed.go). Surfaced UI-side as a Badge; the suffix
+// itself is stripped from the rendered name so it isn't shown twice.
+const BETA_SUFFIX = ' (beta)';
+const isBeta = (p: Pipeline) => p.name.endsWith(BETA_SUFFIX);
+const displayName = (p: Pipeline) =>
+  isBeta(p) ? p.name.slice(0, -BETA_SUFFIX.length) : p.name;
 
 interface Pipeline {
   id: string;
@@ -248,7 +263,12 @@ export function PipelinesPage() {
                           >
                             <TableCell>
                               <div className="flex items-center gap-2 font-medium">
-                                {p.name}
+                                {displayName(p)}
+                                {isBeta(p) && (
+                                  <Badge variant="warning" title="Beta — see the ADR for the integration roadmap.">
+                                    beta
+                                  </Badge>
+                                )}
                                 {activeIds.has(p.id) && (
                                   <Badge variant="warning" className="gap-1">
                                     <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" />

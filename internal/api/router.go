@@ -34,32 +34,32 @@ type KeyTester func(ctx context.Context, client *http.Client, provider, apiKey s
 // a struct (rather than positional args) keeps the router constructor
 // stable as new subsystems land in later phases.
 type Deps struct {
-	Logger     *slog.Logger
-	Version    string
-	Runtime    session.Runtime  // optional; nil disables /api/v1/sessions
-	Issuer     *auth.Issuer     // optional; nil disables /api/v1/* JWT enforcement (dev mode)
-	Audit      audit.Writer     // optional; nil uses audit.Discard
-	CDPFactory CDPClientFactory  // optional; nil disables /api/v1/browser/*
-	Executor   session.Executor // optional; nil disables /api/v1/desktop/*
-	Gateway          *gateway.Registry // optional; nil disables /v1/* AI facade
-	DB               *sql.DB           // optional; nil disables /api/v1/providers/stats and any other endpoint that needs raw SQL
-	GatewayChain     *gateway.Chain    // optional; when set, /v1/* dispatches via the chain
+	Logger       *slog.Logger
+	Version      string
+	Runtime      session.Runtime   // optional; nil disables /api/v1/sessions
+	Issuer       *auth.Issuer      // optional; nil disables /api/v1/* JWT enforcement (dev mode)
+	Audit        audit.Writer      // optional; nil uses audit.Discard
+	CDPFactory   CDPClientFactory  // optional; nil disables /api/v1/browser/*
+	Executor     session.Executor  // optional; nil disables /api/v1/desktop/*
+	Gateway      *gateway.Registry // optional; nil disables /v1/* AI facade
+	DB           *sql.DB           // optional; nil disables /api/v1/providers/stats and any other endpoint that needs raw SQL
+	GatewayChain *gateway.Chain    // optional; when set, /v1/* dispatches via the chain
 	// RehydrateGateway re-runs gateway.HydrateFromKeystore so a key
 	// added/rotated/deleted via /api/v1/providers/keys takes effect
 	// without a control-plane restart (T202a hot reload). nil = no-op.
-	RehydrateGateway func() error
-	Keys         *keystore.Store  // optional; nil disables /api/v1/providers/keys
-	KeyTester    KeyTester        // optional; defaults to keystore.TestProviderKey
-	PackRegistry *packs.Registry // optional; nil disables /api/v1/packs
-	PackEngine   *packs.Engine       // optional; nil disables /api/v1/packs dispatch
-	ArtifactStore packs.ArtifactStore // optional; nil disables MCP inline image content (T302b)
-	MCPRegistry  *mcp.Registry   // optional; nil disables /api/v1/mcp/servers
-	Vault        *vault.Store    // optional; nil disables /api/v1/vault/*
-	Injector     *inject.Injector // optional; nil disables vault injection on /api/v1/browser/navigate
+	RehydrateGateway     func() error
+	Keys                 *keystore.Store        // optional; nil disables /api/v1/providers/keys
+	KeyTester            KeyTester              // optional; defaults to keystore.TestProviderKey
+	PackRegistry         *packs.Registry        // optional; nil disables /api/v1/packs
+	PackEngine           *packs.Engine          // optional; nil disables /api/v1/packs dispatch
+	ArtifactStore        packs.ArtifactStore    // optional; nil disables MCP inline image content (T302b)
+	MCPRegistry          *mcp.Registry          // optional; nil disables /api/v1/mcp/servers
+	Vault                *vault.Store           // optional; nil disables /api/v1/vault/*
+	Injector             *inject.Injector       // optional; nil disables vault injection on /api/v1/browser/navigate
 	Marketplace          *marketplace.Service   // optional; nil disables /api/v1/marketplace/* (T810)
 	MarketplaceInstaller *marketplace.Installer // optional; nil disables install/uninstall/installed (T812)
-	PipelineStore  *pipelines.Store  // optional; nil disables /api/v1/pipelines (ADR 041)
-	PipelineRunner *pipelines.Runner // optional; nil disables pipeline run + MCP pipeline tools
+	PipelineStore        *pipelines.Store       // optional; nil disables /api/v1/pipelines (ADR 041)
+	PipelineRunner       *pipelines.Runner      // optional; nil disables pipeline run + MCP pipeline tools
 }
 
 // IsProtectedPath returns true for paths the auth middleware must guard.
@@ -128,6 +128,7 @@ func NewRouter(deps Deps) http.Handler {
 	registerBridgeVersionRoute(mux, deps)
 	registerConnectRoutes(mux, deps)
 	registerAuditRoutes(mux, deps)
+	registerMemoryRoutes(mux, deps)
 	registerSecurityRoutes(mux, deps)
 	registerProviderStatsRoutes(mux, deps)
 	registerArtifactRoutes(mux, deps)

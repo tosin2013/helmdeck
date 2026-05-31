@@ -13,6 +13,7 @@ import { McpPage } from '@/pages/mcp';
 import { ProvidersPage } from '@/pages/providers';
 import { SecurityPage } from '@/pages/security';
 import { AuditPage } from '@/pages/audit';
+import { MemoryPage } from '@/pages/memory';
 import { ConnectPage } from '@/pages/connect';
 import { ArtifactsPage } from '@/pages/artifacts';
 
@@ -42,6 +43,7 @@ export function App() {
         <Route path="security" element={<SecurityPage />} />
         <Route path="artifacts" element={<ArtifactsPage />} />
         <Route path="audit" element={<AuditPage />} />
+        <Route path="memory" element={<MemoryPage />} />
         <Route path="connect" element={<ConnectPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

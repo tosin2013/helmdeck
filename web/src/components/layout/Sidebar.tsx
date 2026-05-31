@@ -3,6 +3,7 @@ import {
   Activity,
   Archive,
   Boxes,
+  Brain,
   FileText,
   KeyRound,
   LayoutDashboard,
@@ -33,6 +34,7 @@ const navItems = [
   { to: '/security', label: 'Security Policies', icon: Shield },
   { to: '/artifacts', label: 'Artifacts', icon: Archive },
   { to: '/audit', label: 'Audit Log', icon: FileText },
+  { to: '/memory', label: 'Routing Memory', icon: Brain },
   { to: '/connect', label: 'Connect Clients', icon: LinkIcon },
 ];
 

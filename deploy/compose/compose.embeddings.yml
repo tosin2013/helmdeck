@@ -1,0 +1,87 @@
+# Helmdeck — Embedding sidecar overlay (ADR 048 PR #1)
+#
+# Brings up an Ollama-backed embedding service alongside helmdeck so
+# OpenClaw's `memory_search` runs against a local OpenAI-compatible
+# embeddings endpoint instead of degrading to FTS-only recall when no
+# OpenAI cloud key is configured. Joins helmdeck's baas-net so OpenClaw
+# resolves it as `http://helmdeck-embeddings:11434/v1` over the private
+# bridge — no host-port exposure, no external network egress.
+#
+# Apply on top of the main stack:
+#
+#   docker compose -f deploy/compose/compose.yaml \
+#                  -f deploy/compose/compose.embeddings.yml \
+#                  -f deploy/compose/compose.openclaw-sidecar.yml \
+#                  --env-file deploy/compose/.env.local up -d
+#
+# scripts/install.sh adds this overlay by default; pass --no-embeddings
+# to skip and configure an external embedding endpoint (e.g. OpenAI
+# cloud) per docs/howto/openclaw-memory.md.
+#
+# Why a separate overlay:
+#   1. Resource isolation — Ollama needs ~600 MB RAM at idle for the
+#      embedding model; operators without semantic memory skip the
+#      footprint entirely by omitting this overlay.
+#   2. Model pre-fetch — embeddings-init pulls nomic-embed-text once
+#      on first start, after which the named volume keeps the cache
+#      so container re-creates don't re-download (~270 MB).
+#   3. Opt-out path — operators who prefer OpenAI cloud (or a remote
+#      Ollama) point OpenClaw at their own endpoint via the workspace
+#      config and run without this overlay.
+#
+# Embedding model:
+#   nomic-embed-text — 768-dimension, ~270 MB on disk, OpenAI-compatible
+#   /v1/embeddings endpoint. Apache 2.0 license, free, runs CPU-only.
+#   To use a different model, edit EMBEDDING_MODEL in .env.local and
+#   the init script will pull whatever you point it at.
+
+networks:
+  baas-net:
+    external: true
+
+volumes:
+  # Named volume persists the embedding model between container
+  # recreates so the multi-hundred-MB download only happens once.
+  helmdeck-embeddings-models:
+
+services:
+  helmdeck-embeddings:
+    image: ollama/ollama:latest
+    container_name: helmdeck-embeddings
+    restart: unless-stopped
+    networks:
+      - baas-net
+    volumes:
+      - helmdeck-embeddings-models:/root/.ollama
+    healthcheck:
+      # Ollama exposes /api/tags as an inexpensive ready probe; returns
+      # the list of pulled models. Healthy once Ollama is listening.
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  helmdeck-embeddings-init:
+    # One-shot pull-the-model container. Runs after the Ollama service
+    # is healthy, pulls the configured embedding model, then exits 0.
+    # restart: "no" prevents a continuous re-pull loop after success.
+    image: ollama/ollama:latest
+    container_name: helmdeck-embeddings-init
+    restart: "no"
+    networks:
+      - baas-net
+    environment:
+      OLLAMA_HOST: http://helmdeck-embeddings:11434
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-nomic-embed-text}"
+    depends_on:
+      helmdeck-embeddings:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      # Idempotent: ollama pull is a no-op when the model is already
+      # cached, so the init container is safe to re-run on every
+      # `compose up`. Final echo proves the pull succeeded.
+      - >-
+        ollama pull "$$EMBEDDING_MODEL" &&
+        echo "helmdeck-embeddings: model $$EMBEDDING_MODEL ready"

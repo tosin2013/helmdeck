@@ -172,6 +172,39 @@ func TestBlogRewrite_PersonaDirectiveInPrompt(t *testing.T) {
 	}
 }
 
+// TestBlogRewrite_PersonaVisualAffordances — each persona that calls
+// for code blocks, mermaid diagrams, or tables surfaces that hint in
+// the system prompt so the model has an explicit invitation to use
+// the affordance when the source supports it. Mirrors the slides
+// persona enrichment so the two surfaces stay in lockstep.
+func TestBlogRewrite_PersonaVisualAffordances(t *testing.T) {
+	for _, tc := range []struct {
+		persona  string
+		mustHave string
+	}{
+		{"technical", "mermaid"}, // flowchart/sequenceDiagram invitation
+		{"technical", "Code blocks"},
+		{"executive", "markdown table"},
+		{"educational", "mermaid diagram"},
+		{"educational", "minimal code block"},
+		{"academic", "numbered figure"},
+	} {
+		t.Run(tc.persona+"/"+tc.mustHave, func(t *testing.T) {
+			disp := &scriptedDispatcherWT{replies: []string{"# Post\n\nbody"}}
+			_, err := runBlogRewrite(t, disp, fmt.Sprintf(`{
+				"source_content":"x","audience":"devs","model":"openrouter/auto","persona":%q
+			}`, tc.persona))
+			if err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+			sys := disp.captured[0].Messages[0].Content.Text()
+			if !strings.Contains(sys, tc.mustHave) {
+				t.Errorf("system prompt for persona %q should mention %q; got:\n%s", tc.persona, tc.mustHave, sys)
+			}
+		})
+	}
+}
+
 // TestBlogRewrite_FreeformPersonaPassThrough — an unknown persona key is
 // passed through as a freeform style hint (callers aren't limited to the
 // closed set), and persona_used echoes the original string.

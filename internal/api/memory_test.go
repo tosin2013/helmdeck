@@ -196,3 +196,155 @@ func TestMemoryForget_KeyScope(t *testing.T) {
 		t.Errorf("want 1 row left; got %d", len(left))
 	}
 }
+
+// ── ADR 048 PR #2: POST /api/v1/memory/store ──────────────────────────
+
+// TestMemoryStore_HappyPath round-trips a fact through the REST endpoint
+// and confirms the row lands in the store under the bare caller
+// namespace with the default category + applied TTL.
+func TestMemoryStore_HappyPath(t *testing.T) {
+	h, store := newMemoryRouter(t)
+	body := bytes.NewBufferString(`{"key":"preferences/frontend","value":"React over Vue"}`)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/store", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var got memoryStoreResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Key != "preferences/frontend" {
+		t.Errorf("want key preferences/frontend, got %q", got.Key)
+	}
+	if got.Category != packs.DefaultFactCategory {
+		t.Errorf("want default category %q, got %q", packs.DefaultFactCategory, got.Category)
+	}
+	if got.ExpiresAt == "" {
+		t.Errorf("expires_at should be populated")
+	}
+	// The row landed under the bare caller (auth disabled → "unknown").
+	entries, _ := store.List(context.Background(), "unknown", "preferences/")
+	if len(entries) != 1 {
+		t.Fatalf("want 1 stored row, got %d", len(entries))
+	}
+	if entries[0].Category != packs.DefaultFactCategory {
+		t.Errorf("want category %q, got %q", packs.DefaultFactCategory, entries[0].Category)
+	}
+	if string(entries[0].Value) != "React over Vue" {
+		t.Errorf("value not persisted: %q", entries[0].Value)
+	}
+}
+
+// TestMemoryStore_ReservedCategoryRejected proves the guard against
+// agents writing into engine audit categories.
+func TestMemoryStore_ReservedCategoryRejected(t *testing.T) {
+	h, _ := newMemoryRouter(t)
+	for _, cat := range []string{packs.AuditCategoryPack, packs.AuditCategoryPipeline} {
+		body := bytes.NewBufferString(`{"key":"x","value":"y","category":"` + cat + `"}`)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/store", body))
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("category %q should be rejected with 400; got %d body=%s", cat, rr.Code, rr.Body.String())
+		}
+	}
+}
+
+// TestMemoryStore_TTLGuards covers both the too-short and too-long
+// bounds so a typo can't pin a fact for nanoseconds or eternity.
+func TestMemoryStore_TTLGuards(t *testing.T) {
+	h, _ := newMemoryRouter(t)
+	cases := []struct {
+		name string
+		ttl  int64
+	}{
+		{"too-short", 30},                // 30 s < 1 h
+		{"too-long", 400 * 24 * 60 * 60}, // 400 d > 365 d
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := bytes.NewBufferString(`{"key":"x","value":"y","ttl_seconds":` + intToStr(tc.ttl) + `}`)
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/store", body))
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("%s ttl should be rejected with 400; got %d body=%s", tc.name, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+// TestMemoryStore_MissingFields proves both required fields are checked.
+func TestMemoryStore_MissingFields(t *testing.T) {
+	h, _ := newMemoryRouter(t)
+	cases := []string{
+		`{}`,                        // both missing
+		`{"key":"x"}`,               // no value
+		`{"value":"y"}`,             // no key
+		`{"key":"  ","value":"y"}`,  // whitespace-only key
+		`{"key":"x","value":"   "}`, // whitespace-only value
+	}
+	for _, body := range cases {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/store", bytes.NewBufferString(body)))
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("body %s should 400; got %d", body, rr.Code)
+		}
+	}
+}
+
+// TestMemoryStore_CustomCategoryAndTags proves the caller can override
+// category and pass tags, and both land on the stored entry.
+func TestMemoryStore_CustomCategoryAndTags(t *testing.T) {
+	h, store := newMemoryRouter(t)
+	body := bytes.NewBufferString(`{"key":"konflux/deploy","value":"only via Konflux","category":"project_conventions","tags":["deploy","konflux"]}`)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/store", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	entries, _ := store.List(context.Background(), "unknown", "konflux/")
+	if len(entries) != 1 {
+		t.Fatalf("want 1 row, got %d", len(entries))
+	}
+	if entries[0].Category != "project_conventions" {
+		t.Errorf("want project_conventions, got %q", entries[0].Category)
+	}
+	if len(entries[0].Tags) != 2 {
+		t.Errorf("want 2 tags, got %d", len(entries[0].Tags))
+	}
+}
+
+// TestMemoryStore_EmptyStoreNoOp proves the endpoint soft-succeeds
+// when no memory store is wired (memory-disabled deploy).
+func TestMemoryStore_EmptyStoreNoOp(t *testing.T) {
+	h := NewRouter(Deps{
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Version: "test",
+	})
+	body := bytes.NewBufferString(`{"key":"x","value":"y"}`)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/store", body))
+	if rr.Code != http.StatusOK {
+		t.Errorf("nil-store should soft-succeed (synthetic entry); got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func intToStr(n int64) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := false
+	if n < 0 {
+		neg = true
+		n = -n
+	}
+	buf := []byte{}
+	for n > 0 {
+		buf = append([]byte{byte('0' + n%10)}, buf...)
+		n /= 10
+	}
+	if neg {
+		buf = append([]byte{'-'}, buf...)
+	}
+	return string(buf)
+}

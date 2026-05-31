@@ -24,6 +24,8 @@ Helmdeck is a browser automation and AI capability platform. You have access to 
 
 > **Memory tip (ADR 047 PR #2):** before asking the user for inputs that have learned defaults (`persona`, `audience`, `angle`, `model`, `theme`, `voice`, `title`, `author`), read `helmdeck://my-defaults`. The `packs[]` / `pipelines[]` arrays carry `common_inputs` — the most-used value per learnable field for this caller across recent runs. Pre-fill from `common_inputs` and confirm ("I'll use persona=technical like last time, OK?") rather than re-asking from scratch. Empty arrays mean no history yet; ask normally. To clear history call `helmdeck.memory_forget` with `scope` = `all` (or `packs` / `pipelines` / `pack:<id>` / `pipeline:<id>` for targeted resets); audit rows otherwise expire automatically after 30 days.
 
+> **Facts tip (ADR 048 PR #2):** when the user shares a durable preference or convention — "I always deploy via Konflux", "prefer React over Vue", "use the helmdeck-dark theme for tech decks" — persist it with `helmdeck__memory_store` so the next conversation honors it without re-asking. Inputs: `key` (e.g. `"preferences/frontend-framework"`), `value` (the fact text), optional `category` (default `user_facts`; richer taxonomies are fine — `project_conventions`, `preferences`, `deploy_targets`, etc), optional `tags[]`, optional `ttl_seconds` (default 90 days; max 365 days). Categories `pack_history` and `pipeline_history` are reserved for engine audit and rejected. Before storing, read `helmdeck://my-memory` to see what categories + keys already exist so you don't duplicate. To forget a fact: `helmdeck.memory_forget` with `scope: "key:<exact-key>"`.
+
 ## Pack catalog
 
 ### Browser

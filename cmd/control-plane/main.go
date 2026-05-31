@@ -612,6 +612,12 @@ func main() {
 	if err := packReg.Register(builtin.MemoryForget()); err != nil {
 		logger.Warn("register helmdeck.memory_forget pack failed", "err", err)
 	}
+	// helmdeck.memory_store — agent-facing write surface for durable
+	// user facts (ADR 048 PR #2). NoAudit so storing a fact doesn't
+	// pollute the pack_history projection.
+	if err := packReg.Register(builtin.MemoryStore()); err != nil {
+		logger.Warn("register helmdeck.memory_store pack failed", "err", err)
+	}
 	// podcast.generate body/script mode (mode A) works without a gateway, so
 	// register the nil-dispatcher version here — BEFORE the gated block — so it
 	// exists in gateway-less deployments. When a gateway IS present, the

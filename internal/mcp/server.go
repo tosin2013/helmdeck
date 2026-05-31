@@ -409,6 +409,17 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			Description: "Per-caller projection over recent pack/pipeline runs (ADR 047 PR #2). Returns `packs[]` and `pipelines[]` ranked by frequency, each with `common_inputs` — the most-used value for each learnable input field (persona, audience, angle, model, theme, ...). Empty when the caller has no history. Use before asking the user for inputs that already have a learned default; pre-fill from `common_inputs` and confirm rather than re-asking from scratch.",
 			MimeType:    "application/json",
 		})
+		// helmdeck://my-memory mirrors my-defaults for agent-written
+		// user facts (ADR 048 PR #2). Counts + recent keys per category
+		// so the agent knows what's already stored before re-asking the
+		// user. Audit categories are intentionally excluded — the agent
+		// sees those via my-defaults already.
+		resources = append(resources, Resource{
+			URI:         "helmdeck://my-memory",
+			Name:        "Caller's user-written facts",
+			Description: "Per-caller index of user-supplied facts stored via helmdeck.memory_store (ADR 048 PR #2). Returns `categories[]` with name + count + recent_keys[] so the agent can discover existing facts before re-asking the user or duplicating an entry. Audit categories (`pack_history` / `pipeline_history`) are excluded — those surface via helmdeck://my-defaults. Empty when the caller has no stored facts.",
+			MimeType:    "application/json",
+		})
 		return mk(map[string]any{"resources": resources}, nil)
 
 	case "resources/read":
@@ -550,6 +561,20 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			body, err := json.Marshal(payload)
 			if err != nil {
 				return mk(nil, &rpcError{Code: -32603, Message: "encode my-defaults: " + err.Error()})
+			}
+			return mk(map[string]any{
+				"contents": []ResourceContent{
+					{URI: params.URI, MimeType: "application/json", Text: string(body)},
+				},
+			}, nil)
+		case "helmdeck://my-memory":
+			payload, perr := s.buildMyMemory(ctx, packs.CallerFromContext(ctx))
+			if perr != nil {
+				return mk(nil, perr)
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				return mk(nil, &rpcError{Code: -32603, Message: "encode my-memory: " + err.Error()})
 			}
 			return mk(map[string]any{
 				"contents": []ResourceContent{

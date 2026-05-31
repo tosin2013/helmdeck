@@ -47,6 +47,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${REPO_ROOT}/deploy/compose/compose.yaml"
 COMPOSE_BUILD_FILE="${REPO_ROOT}/deploy/compose/compose.build.yaml"
+COMPOSE_EMBEDDINGS_FILE="${REPO_ROOT}/deploy/compose/compose.embeddings.yml"
 ENV_FILE="${REPO_ROOT}/deploy/compose/.env.local"
 URL="http://localhost:3000"
 
@@ -85,7 +86,7 @@ info()  { printf "    %s%s%s\n" "${C_DIM}" "$*" "${C_RESET}"; }
 
 usage() {
   cat <<EOF
-Usage: scripts/install.sh [--reset] [--no-build] [--image-mode] [--smoke] [--help]
+Usage: scripts/install.sh [--reset] [--no-build] [--image-mode] [--smoke] [--no-embeddings] [--help]
 
 Bootstraps a fresh helmdeck install on the current host.
 
@@ -104,6 +105,12 @@ Options:
                non-destructive OpenClaw agent round-trip against the
                freshly-installed stack. Off by default so CI / piped
                installs aren't forced into it. Requires OpenClaw running.
+  --no-embeddings
+               Skip the embedding sidecar (ADR 048). Default is to
+               layer compose.embeddings.yml so OpenClaw's memory_search
+               runs against a local Ollama (nomic-embed-text). Skip
+               when you'd rather point OpenClaw at OpenAI cloud or a
+               remote Ollama — see docs/howto/openclaw-memory.md.
   --help       Print this help and exit.
 
 Examples:
@@ -121,6 +128,7 @@ DO_RESET=0
 DO_BUILD=1
 IMAGE_MODE=0
 DO_SMOKE=0
+WITH_EMBEDDINGS=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -128,6 +136,7 @@ while [[ $# -gt 0 ]]; do
     --no-build) DO_BUILD=0 ;;
     --image-mode) IMAGE_MODE=1; DO_BUILD=0 ;;
     --smoke) DO_SMOKE=1 ;;
+    --no-embeddings) WITH_EMBEDDINGS=0 ;;
     --help|-h) usage; exit 0 ;;
     *) fail "unknown flag: $1"; usage; exit 1 ;;
   esac
@@ -141,6 +150,13 @@ done
 COMPOSE_FILES_ARGS=( -f "${COMPOSE_FILE}" )
 if [[ "${IMAGE_MODE}" -eq 0 ]]; then
   COMPOSE_FILES_ARGS+=( -f "${COMPOSE_BUILD_FILE}" )
+fi
+# Embedding sidecar (ADR 048 PR #1) layered by default so OpenClaw's
+# memory_search runs against a local Ollama out of the box. Skip via
+# --no-embeddings; operators then point OpenClaw at OpenAI cloud (or a
+# remote Ollama) per docs/howto/openclaw-memory.md.
+if [[ "${WITH_EMBEDDINGS}" -eq 1 ]]; then
+  COMPOSE_FILES_ARGS+=( -f "${COMPOSE_EMBEDDINGS_FILE}" )
 fi
 
 # ────────────────────────────────────────────────────────────────────────

@@ -315,6 +315,16 @@ func slidesOutlineHandler(d vision.Dispatcher) packs.HandlerFunc {
 			hasTitleSlide = true
 		}
 
+		// Overflow auto-split (ADR/PR — see slides_split.go). Walks
+		// the deck and splits any slide whose code block exceeds 22
+		// lines or whose image-plus-bullets combination would overflow.
+		// Runs BEFORE the splitSlides call below so slide_count and
+		// extractImagePrompts both see the final post-split deck.
+		// Idempotent on already-fitting decks. max_slides becomes a
+		// soft cap by design — overflow wins over the user's count
+		// because clipped content is worse than an extra slide.
+		deck = splitOverflowSlides(deck)
+
 		// Validate it's a real multi-slide deck using the SAME splitter
 		// slides.render / slides.narrate use — so the count we guarantee here
 		// is exactly what they'll see downstream.

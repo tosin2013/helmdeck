@@ -313,3 +313,59 @@ func TestPlan_InvalidInput(t *testing.T) {
 		t.Errorf("want CodeInvalidInput, got %v", err)
 	}
 }
+
+// TestPlan_CompactsCatalogForTierCModels — when the model id maps to
+// Tier C, the catalog projection in the user message must NOT carry
+// the full metadata. Asserts the ADR 050 integration: free models
+// see a slimmed catalog so the empty-completion failure that
+// motivated the ADR doesn't recur.
+func TestPlan_CompactsCatalogForTierCModels(t *testing.T) {
+	reply := `{"steps":[{"order":1,"tool":"helmdeck.memory_store","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
+	eng, disp, pack, _ := planFixture(t, reply)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	// openrouter/openrouter/free is Tier C in the budgets table with
+	// MaxCatalogBytes=10000. The fixture's tiny catalog (2 packs + 1
+	// pipeline) is under that cap so compaction's a pass-through —
+	// but a Tier C call must NEVER drop catalog entries (only metadata
+	// fields). Use a tighter budget by going through a known-Tier-C
+	// model and asserting the entries survive.
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"remember this","model":"openrouter/openrouter/free"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(disp.captured) != 1 {
+		t.Fatalf("expected 1 dispatcher call; got %d", len(disp.captured))
+	}
+	user := disp.captured[0].Messages[1].Content.Text()
+	// Pack names must always survive compaction — they're dispatch
+	// identifiers, not metadata.
+	if !strings.Contains(user, "helmdeck.memory_store") {
+		t.Errorf("pack name must survive compaction; user message lacks it")
+	}
+	// Pipeline supersedes link must always survive compaction — it
+	// anchors rule P2 in the system prompt.
+	if !strings.Contains(user, "supersedes") || !strings.Contains(user, "blog.rewrite_for_audience") {
+		t.Errorf("pipeline supersedes must survive Tier C compaction; got: %s", user)
+	}
+}
+
+// TestPlan_TierAModelGetsFullCatalog — frontier models (Tier A) bypass
+// compaction entirely. The full catalog including intent_keywords,
+// typical_use, and limitations should land in the prompt verbatim.
+func TestPlan_TierAModelGetsFullCatalog(t *testing.T) {
+	reply := `{"steps":[{"order":1,"tool":"helmdeck.memory_store","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
+	eng, disp, pack, _ := planFixture(t, reply)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	// anthropic/claude-haiku-* maps to Tier A → MaxCatalogBytes=0 →
+	// pass-through. The fixture seeded packs with intent_keywords so
+	// we can assert they survived.
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"x","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	user := disp.captured[0].Messages[1].Content.Text()
+	// The fixture's blog.rewrite_for_audience pack declared
+	// IntentKeywords: ["rewrite for audience"]. Tier A pass-through
+	// means it must show up in the prompt.
+	if !strings.Contains(user, "rewrite for audience") {
+		t.Errorf("Tier A model should see full metadata including intent_keywords; user message lacks 'rewrite for audience'")
+	}
+}

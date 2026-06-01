@@ -588,6 +588,37 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 ---
 
+## v0.22.0 — Agents that work on free models, with memory — ✅ Shipped 2026-06-01 {#v0220}
+
+**Theme:** Close the loop from "helmdeck has 50+ packs" to "an agent on a free model can pick the right ones." Closes four ADRs end-to-end and validates the result against the live free-model failure that motivated the work — the MiniMax M3 launch paste + 3-action ask that empty-completed at 29.5s before any of this work now returns a valid 3-step plan on `openrouter/openrouter/free`.
+
+**Ships:**
+
+- **ADR 047 — Catalog metadata + memory-driven routing (complete).** Self-describing pack/pipeline `metadata` (accepts / produces / intent_keywords / typical_use / limitations + supersedes on pipelines); `helmdeck://routing-guide` projection; per-caller audit memory writing one row per pack/pipeline run; `helmdeck://my-defaults` projection of the caller's most-used tools with `common_inputs` priors; `helmdeck.memory_forget` pack; `helmdeck.route` LLM-backed meta-pack with structured `gap_warning` for tools the catalog can't serve; **Routing Memory** management UI page that surfaces and clears the audit history without needing an MCP-aware client.
+- **ADR 048 — Memory write surface + OpenClaw memory-corpus bridge (complete).** Embedding sidecar overlay (`compose.embeddings.yml`) that runs an Ollama container for OpenClaw's `memory_search` semantic recall; `helmdeck.memory_store` pack + `POST /api/v1/memory/store` REST surface so agents can persist durable user facts; `helmdeck://my-memory` projection; QMD-compatible MCP endpoint at `/api/v1/mcp/qmd/sse` that bridges helmdeck's per-caller audit + facts corpus into OpenClaw's `memory_search` tool via MCPorter.
+- **ADR 049 PR #1 — `helmdeck.plan` intent decomposer pack.** Multi-intent prompts decompose into ordered `steps[]` (each `{order, tool, args, rationale}`) + a derived `rewritten_prompt` + a `complexity` classifier (`single-action` / `pipeline-direct` / `pack-chain`). Pipeline-aware: prefers a curated pipeline over re-decomposing its constituent packs. Self-learning seam: every successful plan writes a compact `PlanAudit` row to `plan_history`.
+- **ADR 050 — Retrieval-augmented tool selection (complete, 4 PRs).** PR #1 shipped `internal/llmcontext` with per-model token budgets (`Tier A` / `B` / `C` calibrated by empirical structured-output reliability, not vendor specs) + deterministic `CompactCatalog` metadata trim. PR #2 wired `helmdeck.route` to the same cascade, added the `helmdeck://context-budgets` MCP resource, surfaced the Trim record on plan output as an optional `compaction` field. PR #3 added the cascading `Select()` entry point with lexical retrieval + top-N truncation as the third stage when compaction alone can't reach budget, plus `helmdeck://my-plans` projection over the `plan_history` audit category. PR #4 added an optional two-pass LLM filter cascade for the worst Tier C cases plus a JSON-decoder tolerance fix (read first complete JSON object, ignore trailing garbage — that was the critical change that unblocked the original motivating prompt).
+- **Pack + pipeline additions.** `hyperframes.compose` (description → composition); `github.get_issue` (single-issue fetch with read-through cache); `blog.rewrite_for_audience` pack + four rewrite-blog pipelines (`builtin.brief-rewrite-blog`, `doc-rewrite-blog`, `scrape-rewrite-blog`, `research-rewrite-blog`); `persona` input on blog/slide packs; `image_prompts` + `export_outline` on all seven slide pipelines; `builtin.grounded-narrate` + `builtin.grounded-podcast`; coding pipelines beta (`builtin.issue-to-pr`, `repo-solve-pr`, `repo-solve-branch`, `repo-solve-patch`); pipelines page grouped by output format; live per-step progress + pipeline cancel in the UI + via MCP; CPU profiles (`ProfileIO` / `ProfileCompute`) for session packs.
+- **Catalog fixes.** `doc.parse` rejects non-document URLs upfront with a routing hint; `doc.parse` against current Docling's discriminated `sources` shape; auto-split slide overflow for code blocks longer than 22 lines and image+bullets slides.
+- **Pipeline removals.** Replaced `builtin.grounded-blog`, `builtin.scrape-ground-blog`, `builtin.research-blog`, `builtin.doc-ground-blog` with the rewrite-blog matrix; startup reaper deletes orphaned `builtin=1` rows on upgrade so operators land on a clean catalog without running SQL.
+
+**Pack count:** 41 → 52 (added the four meta-packs plus `hyperframes.compose` + `github.get_issue` + the rewrite-blog scaffolding).
+
+**MCP resources count:** 4 → 6 (added `helmdeck://context-budgets`, `helmdeck://my-plans` plus the existing `routing-guide` / `my-defaults` / `my-memory` / `packs`).
+
+**Tests:** 1446 passing across all internal packages.
+
+**Audience:** operators running helmdeck on a mix of paid and free models who want multi-action prompts to work consistently regardless of model tier; agents (OpenClaw, Claude Desktop, Claude Code, Gemini CLI, Hermes) that want to plan and route through helmdeck's catalog without re-implementing tool selection.
+
+**Out (deferred to a future release):**
+- ADR 049 PR #2 (`helmdeck://my-plans` projection) — consolidated into ADR 050 PR #3 and shipped here, but the broader self-learning loop (priors from history feeding the lexical ranker's score) remains a follow-up.
+- ADR 049 PR #3 (frontier-model gap detection via `expert_baseline`) — speculative; not on the v1.0 critical path.
+- Auto-invocation hardening for free models (the agent recognizing it should call `helmdeck.plan` first without explicit user direction) — SKILL.md tips help on frontier models, but free-model tool-selection is a separate problem.
+
+**Upgrade:** no migrations, no breaking changes (all new packs, resources, and Budget fields are additive). Clean in-place Compose upgrade from v0.21.0. **Re-run `scripts/configure-openclaw.sh`** after upgrading to install the v0.22.0-stamped SKILL.md so your OpenClaw agent sees the four new meta-packs and the two new resources.
+
+---
+
 ## v1.0.0-rc1 — Kubernetes preview (planned) {#v100rc1}
 
 **Theme:** "Helm install works; production hardening pending."

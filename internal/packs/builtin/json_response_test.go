@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -198,5 +199,166 @@ func TestDecodeStructuredResponse_ThinkBlockPlusCodeFence(t *testing.T) {
 	}
 	if out.Complexity != "pack-chain" {
 		t.Errorf("complexity not preserved; got %q", out.Complexity)
+	}
+}
+
+// --- ADR 051 PR #2: cause-typed error tests -----------------------
+
+// TestDecodeStructuredResponseWithCause_SafetyFiltered — empty body
+// + finish_reason="content_filter" classifies as ErrSafetyFiltered.
+// The Message includes an actionable hint about the prompt.
+func TestDecodeStructuredResponseWithCause_SafetyFiltered(t *testing.T) {
+	var out testTarget
+	err := DecodeStructuredResponseWithCause("", "content_filter", "plan", &out)
+	if err == nil {
+		t.Fatal("empty body with content_filter should error")
+	}
+	if !errors.Is(err.Cause, ErrSafetyFiltered) {
+		t.Errorf("Cause should be ErrSafetyFiltered; got %v", err.Cause)
+	}
+	if !strings.Contains(err.Message, "safety filter") {
+		t.Errorf("Message should mention safety filter; got %q", err.Message)
+	}
+}
+
+// TestDecodeStructuredResponseWithCause_LengthTruncated — empty body
+// + finish_reason="length" classifies as ErrLengthTruncated. Rare
+// shape but the rule is consistent.
+func TestDecodeStructuredResponseWithCause_LengthTruncated(t *testing.T) {
+	var out testTarget
+	err := DecodeStructuredResponseWithCause("", "length", "plan", &out)
+	if err == nil {
+		t.Fatal("empty body with length should error")
+	}
+	if !errors.Is(err.Cause, ErrLengthTruncated) {
+		t.Errorf("Cause should be ErrLengthTruncated; got %v", err.Cause)
+	}
+	if !strings.Contains(err.Message, "max_tokens") {
+		t.Errorf("Message should mention max_tokens; got %q", err.Message)
+	}
+}
+
+// TestDecodeStructuredResponseWithCause_LikelyTimeout_EmptyFinishReason
+// — empty body + no finish_reason classifies as ErrLikelyTimeout
+// (streaming disconnect pattern).
+func TestDecodeStructuredResponseWithCause_LikelyTimeout_EmptyFinishReason(t *testing.T) {
+	var out testTarget
+	err := DecodeStructuredResponseWithCause("", "", "plan", &out)
+	if err == nil {
+		t.Fatal("empty body should error")
+	}
+	if !errors.Is(err.Cause, ErrLikelyTimeout) {
+		t.Errorf("Cause should be ErrLikelyTimeout; got %v", err.Cause)
+	}
+	if !strings.Contains(err.Message, "timeout") {
+		t.Errorf("Message should mention timeout; got %q", err.Message)
+	}
+}
+
+// TestDecodeStructuredResponseWithCause_LikelyTimeout_UnknownFinishReason
+// — an unrecognized finish_reason (e.g. an aggregator's custom marker)
+// on an empty body conservatively classifies as ErrLikelyTimeout
+// rather than guessing.
+func TestDecodeStructuredResponseWithCause_LikelyTimeout_UnknownFinishReason(t *testing.T) {
+	var out testTarget
+	err := DecodeStructuredResponseWithCause("", "weird_aggregator_marker", "plan", &out)
+	if err == nil {
+		t.Fatal("empty body should error")
+	}
+	if !errors.Is(err.Cause, ErrLikelyTimeout) {
+		t.Errorf("unknown finish_reason on empty body should default to ErrLikelyTimeout; got %v", err.Cause)
+	}
+}
+
+// TestDecodeStructuredResponseWithCause_LengthTruncatedOnParseFail —
+// non-empty but unparseable body + finish_reason="length" classifies
+// as ErrLengthTruncated (model emitted partial JSON that got cut off
+// mid-emission).
+func TestDecodeStructuredResponseWithCause_LengthTruncatedOnParseFail(t *testing.T) {
+	body := `{"steps":[{"order":1,"tool":"x","args":{`
+	var out testTarget
+	err := DecodeStructuredResponseWithCause(body, "length", "plan", &out)
+	if err == nil {
+		t.Fatal("partial JSON should error")
+	}
+	if !errors.Is(err.Cause, ErrLengthTruncated) {
+		t.Errorf("Cause should be ErrLengthTruncated; got %v (msg=%q)", err.Cause, err.Message)
+	}
+	// Original parse error stays in the Message for diagnostics.
+	if !strings.Contains(err.Message, "model output is not valid JSON") {
+		t.Errorf("Message should preserve parse-error prefix; got %q", err.Message)
+	}
+}
+
+// TestDecodeStructuredResponseWithCause_ConstrainedDeadlock — non-
+// empty but unparseable body + no specific finish_reason classifies
+// as ErrConstrainedDeadlock. This is the constrained-decoding fail
+// mode the research synthesis describes for quantized open-weights
+// models.
+func TestDecodeStructuredResponseWithCause_ConstrainedDeadlock(t *testing.T) {
+	body := `{"this is not valid json at all` // intentional garbage
+	var out testTarget
+	err := DecodeStructuredResponseWithCause(body, "stop", "plan", &out)
+	if err == nil {
+		t.Fatal("garbage should error")
+	}
+	if !errors.Is(err.Cause, ErrConstrainedDeadlock) {
+		t.Errorf("Cause should be ErrConstrainedDeadlock; got %v", err.Cause)
+	}
+}
+
+// TestDecodeStructuredResponseWithCause_SafetyFilteredOnParseFail —
+// content present + finish_reason="content_filter" classifies as
+// ErrSafetyFiltered (the visible body may be the lead-in before the
+// safety system cut it off).
+func TestDecodeStructuredResponseWithCause_SafetyFilteredOnParseFail(t *testing.T) {
+	body := `Sorry, I can't help with that.`
+	var out testTarget
+	err := DecodeStructuredResponseWithCause(body, "content_filter", "plan", &out)
+	if err == nil {
+		t.Fatal("non-JSON body should error")
+	}
+	if !errors.Is(err.Cause, ErrSafetyFiltered) {
+		t.Errorf("Cause should be ErrSafetyFiltered; got %v", err.Cause)
+	}
+}
+
+// TestDecodeStructuredResponseWithCause_BackwardCompatNilCause — when
+// finish_reason is empty AND the body fails to parse, the Cause stays
+// the original json.Decoder error (NOT a typed sentinel). This
+// preserves the pre-PR-#2 contract — callers that asserted on a
+// specific Cause type keep working.
+func TestDecodeStructuredResponseWithCause_BackwardCompatNilCause(t *testing.T) {
+	body := `garbage`
+	var out testTarget
+	err := DecodeStructuredResponseWithCause(body, "", "plan", &out)
+	if err == nil {
+		t.Fatal("garbage should error")
+	}
+	// When finishReason is empty AND we have a parse failure, we
+	// classify as ErrConstrainedDeadlock since that's the most
+	// likely cause for "non-empty body that won't parse".
+	if !errors.Is(err.Cause, ErrConstrainedDeadlock) {
+		t.Errorf("empty finish_reason + parse fail should still classify; got %v", err.Cause)
+	}
+}
+
+// TestDecodeStructuredResponse_BackwardCompatWrapper — the existing
+// no-finish_reason entry point still returns the same Message shape
+// it always has. The wrapper just calls the cause-typed variant with
+// an empty finish_reason, which classifies empty bodies as
+// ErrLikelyTimeout.
+func TestDecodeStructuredResponse_BackwardCompatWrapper(t *testing.T) {
+	var out testTarget
+	err := DecodeStructuredResponse("", "plan", &out)
+	if err == nil {
+		t.Fatal("empty body should error")
+	}
+	if !errors.Is(err.Cause, ErrLikelyTimeout) {
+		t.Errorf("Cause should be ErrLikelyTimeout via backward-compat wrapper; got %v", err.Cause)
+	}
+	// Message still starts with the historical text.
+	if !strings.HasPrefix(err.Message, "gateway returned an empty plan response") {
+		t.Errorf("Message should preserve historical prefix; got %q", err.Message)
 	}
 }

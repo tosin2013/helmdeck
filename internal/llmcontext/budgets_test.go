@@ -110,3 +110,120 @@ func TestBudgetFor_LongestPrefixWins(t *testing.T) {
 		t.Errorf("longest prefix should win; got %q (model=%s)", got.Tier, got.Model)
 	}
 }
+
+// --- ADR 051 PR #2: capability-flag tests --------------------------
+
+// TestBudgetFor_HybridReasoningFlag — models that emit <think>
+// blocks have IsHybridReasoning=true. The flag tells downstream
+// telemetry to bucket "model timed out reasoning" failures
+// correctly.
+func TestBudgetFor_HybridReasoningFlag(t *testing.T) {
+	hybrid := []string{
+		"anthropic/claude-3.7-sonnet",
+		"openai/o3-mini",
+		"openrouter/openai/o3-mini",
+		"openrouter/deepseek/deepseek-v4-pro",
+		"openrouter/moonshotai/kimi-k2.6",
+		"openrouter/moonshotai/kimi-latest",
+	}
+	for _, m := range hybrid {
+		if got := BudgetFor(m); !got.IsHybridReasoning {
+			t.Errorf("%q should have IsHybridReasoning=true; got %+v", m, got)
+		}
+	}
+	directOnly := []string{
+		"openai/gpt-4o",
+		"anthropic/claude-sonnet-4.6",
+		"google/gemini-2.5-flash",
+		"openrouter/openrouter/free",
+	}
+	for _, m := range directOnly {
+		if got := BudgetFor(m); got.IsHybridReasoning {
+			t.Errorf("%q should have IsHybridReasoning=false; got %+v", m, got)
+		}
+	}
+}
+
+// TestBudgetFor_StrictJSONFlag — models from providers with native
+// strict-JSON / response_format support have WantsStrictJSON=true.
+// Tier A native APIs + Mistral + Grok set this; weak open-weights
+// routes do NOT (report describes constrained-decoding deadlock as
+// the strict-mode failure mode on quantized inference).
+func TestBudgetFor_StrictJSONFlag(t *testing.T) {
+	strictCapable := []string{
+		"anthropic/claude-haiku-4-5",
+		"openai/gpt-4o",
+		"openai/o3-mini",
+		"google/gemini-2.5-pro",
+		"openrouter/mistralai/mistral-large",
+		"openrouter/x-ai/grok-4",
+	}
+	for _, m := range strictCapable {
+		if got := BudgetFor(m); !got.WantsStrictJSON {
+			t.Errorf("%q should have WantsStrictJSON=true; got %+v", m, got)
+		}
+	}
+	openWeightsNoStrict := []string{
+		"openrouter/openrouter/free",
+		"openrouter/qwen/qwen-2.5-coder",
+		"openrouter/moonshotai/kimi-k2.6",
+		"openrouter/meta-llama/llama-3.1-70b-instruct",
+	}
+	for _, m := range openWeightsNoStrict {
+		if got := BudgetFor(m); got.WantsStrictJSON {
+			t.Errorf("%q should have WantsStrictJSON=false (constrained-decoding deadlock risk); got %+v", m, got)
+		}
+	}
+}
+
+// TestBudgetFor_PrefixCacheFlag — Anthropic / OpenAI / Google /
+// DeepSeek native routes have prefix caching. PR #4 will exploit
+// the flag to restructure the two-pass filter for cache reuse.
+func TestBudgetFor_PrefixCacheFlag(t *testing.T) {
+	cachedProviders := []string{
+		"anthropic/claude-opus-4-7",
+		"openai/gpt-5",
+		"google/gemini-2.5-flash",
+		"openrouter/deepseek/deepseek-v4-pro",
+		"openrouter/deepseek/deepseek-v3.2",
+	}
+	for _, m := range cachedProviders {
+		got := BudgetFor(m)
+		if !got.SupportsPrefixCache {
+			t.Errorf("%q should have SupportsPrefixCache=true; got %+v", m, got)
+		}
+		if got.CachedInputCostUSDPerMTok <= 0 {
+			t.Errorf("%q should have CachedInputCostUSDPerMTok > 0 when SupportsPrefixCache; got %v", m, got.CachedInputCostUSDPerMTok)
+		}
+	}
+	uncachedProviders := []string{
+		"openrouter/openrouter/free",
+		"openrouter/qwen/qwen-2.5-coder",
+		"openrouter/meta-llama/llama-3.3-70b-instruct",
+	}
+	for _, m := range uncachedProviders {
+		if got := BudgetFor(m); got.SupportsPrefixCache {
+			t.Errorf("%q should have SupportsPrefixCache=false; got %+v", m, got)
+		}
+	}
+}
+
+// TestBudgetFor_FallbackCapabilityFlagsConservative — the tierC
+// fallback profile (used for unmapped models) has all capability
+// flags off. Conservative — we don't make affirmative claims about
+// a model we haven't classified.
+func TestBudgetFor_FallbackCapabilityFlagsConservative(t *testing.T) {
+	got := BudgetFor("brand-new-vendor/never-seen:v0")
+	if got.IsHybridReasoning {
+		t.Errorf("unmapped model should have IsHybridReasoning=false (conservative); got %+v", got)
+	}
+	if got.WantsStrictJSON {
+		t.Errorf("unmapped model should have WantsStrictJSON=false (conservative); got %+v", got)
+	}
+	if got.SupportsPrefixCache {
+		t.Errorf("unmapped model should have SupportsPrefixCache=false (conservative); got %+v", got)
+	}
+	if got.CachedInputCostUSDPerMTok != 0 {
+		t.Errorf("unmapped model should have CachedInputCostUSDPerMTok=0; got %v", got.CachedInputCostUSDPerMTok)
+	}
+}

@@ -55,6 +55,8 @@ type ContextBudgetEntry struct {
 	OutputTokens    int    `json:"output_tokens"`
 	MaxCatalogBytes int    `json:"max_catalog_bytes"`
 	Tier            string `json:"tier"`
+	AllowsLLMFilter bool   `json:"allows_llm_filter,omitempty"`
+	FilterModel     string `json:"filter_model,omitempty"`
 }
 
 // buildContextBudgets projects the llmcontext budgets table into the
@@ -84,5 +86,7 @@ func toBudgetEntry(b llmcontext.Budget) ContextBudgetEntry {
 		OutputTokens:    b.OutputTokens,
 		MaxCatalogBytes: b.MaxCatalogBytes,
 		Tier:            string(b.Tier),
+		AllowsLLMFilter: b.AllowsLLMFilter,
+		FilterModel:     b.FilterModel,
 	}
 }

@@ -86,6 +86,16 @@ func Select(rg RoutingGuide, intent string, budget Budget) (RoutingGuide, Trim) 
 	selected := topNRoutingGuide(ranked, maxEntries)
 	trim.Dropped = append(trim.Dropped, "lexical.top_n")
 
+	// Append a confidence marker so downstream callers (the PR #4
+	// LLM-filter escalation in plan.go and route.go) can decide
+	// whether to spend the extra round-trip. When lexical produced a
+	// confident top pick, the planning call has a strong signal and
+	// the filter pass would only add latency; when ambiguous, the
+	// filter pass earns its cost.
+	if ShouldEscalateToFilter(ranked, 3) {
+		trim.Dropped = append(trim.Dropped, "lexical.low_confidence")
+	}
+
 	// Remeasure: the after-bytes in Trim was set by CompactCatalog
 	// to the post-compaction size. We update it to reflect the final
 	// post-truncation size so operators see the real shipping number.

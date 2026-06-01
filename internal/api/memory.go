@@ -66,6 +66,23 @@ type memoryForgetResponse struct {
 	Deleted int    `json:"deleted"`
 }
 
+// memoryStoreRequest is the body shape POST /api/v1/memory/store accepts.
+// All fields except Key + Value are optional. See storeMemoryFact for the
+// guard rules (reserved categories, TTL clamping, namespace scoping).
+type memoryStoreRequest struct {
+	Key        string   `json:"key"`
+	Value      string   `json:"value"`
+	Category   string   `json:"category,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	TTLSeconds int64    `json:"ttl_seconds,omitempty"`
+}
+
+type memoryStoreResponse struct {
+	Key       string `json:"key"`
+	Category  string `json:"category"`
+	ExpiresAt string `json:"expires_at"`
+}
+
 func registerMemoryRoutes(mux *http.ServeMux, deps Deps) {
 	mux.HandleFunc("GET /api/v1/memory/defaults", func(w http.ResponseWriter, r *http.Request) {
 		caller := callerSubject(r)
@@ -142,6 +159,34 @@ func registerMemoryRoutes(mux *http.ServeMux, deps Deps) {
 			}
 		}
 		writeJSON(w, http.StatusOK, memoryForgetResponse{Scope: scope, Deleted: deleted})
+	})
+
+	mux.HandleFunc("POST /api/v1/memory/store", func(w http.ResponseWriter, r *http.Request) {
+		var req memoryStoreRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_input", "body must be JSON: "+err.Error())
+			return
+		}
+		entry, ferr := packs.StoreFact(r.Context(), memoryStoreFromDeps(deps), callerSubject(r), packs.StoreFactRequest{
+			Key:      req.Key,
+			Value:    req.Value,
+			Category: req.Category,
+			Tags:     req.Tags,
+			TTL:      time.Duration(req.TTLSeconds) * time.Second,
+		})
+		if ferr != nil {
+			status := http.StatusBadRequest
+			if ferr.Code == packs.FactErrBackend {
+				status = http.StatusInternalServerError
+			}
+			writeError(w, status, "invalid_input", ferr.Message)
+			return
+		}
+		writeJSON(w, http.StatusOK, memoryStoreResponse{
+			Key:       entry.Key,
+			Category:  entry.Category,
+			ExpiresAt: entry.ExpiresAt.UTC().Format(time.RFC3339),
+		})
 	})
 }
 

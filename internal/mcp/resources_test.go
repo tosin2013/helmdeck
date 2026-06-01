@@ -84,13 +84,18 @@ func TestResourcesList_PacksOnly_WhenNoSessionLister(t *testing.T) {
 	if err := json.Unmarshal([]byte(resp), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	// helmdeck://packs / helmdeck://routing-guide / helmdeck://my-defaults
-	// are always present (ADR 047 — unconditional). The optional resources
-	// (sessions/voices/image-models/models) are absent here.
-	if len(got.Result.Resources) != 3 {
-		t.Fatalf("want 3 resources (packs + routing-guide + my-defaults), got %d: %s", len(got.Result.Resources), resp)
+	// helmdeck://packs / routing-guide / my-defaults / my-memory are
+	// always present (ADR 047 + ADR 048 — unconditional). The optional
+	// resources (sessions/voices/image-models/models) are absent here.
+	if len(got.Result.Resources) != 4 {
+		t.Fatalf("want 4 resources (packs + routing-guide + my-defaults + my-memory), got %d: %s", len(got.Result.Resources), resp)
 	}
-	want := map[string]bool{"helmdeck://packs": false, "helmdeck://routing-guide": false, "helmdeck://my-defaults": false}
+	want := map[string]bool{
+		"helmdeck://packs":         false,
+		"helmdeck://routing-guide": false,
+		"helmdeck://my-defaults":   false,
+		"helmdeck://my-memory":     false,
+	}
 	for _, r := range got.Result.Resources {
 		if _, ok := want[r.URI]; ok {
 			want[r.URI] = true
@@ -824,3 +829,63 @@ func TestResources_MyDefaults_Read_EmptyWithoutMemory(t *testing.T) {
 // the aggregation logic moved there in PR #3 so helmdeck.route can
 // reuse it. The MCP wrapper is exercised by the always-listed +
 // empty-projection tests above.
+
+// ── ADR 048 PR #2: helmdeck://my-memory ───────────────────────────────
+
+// TestResources_MyMemory_AlwaysListed — like my-defaults, my-memory
+// is unconditional. Agents query it at the top of a session to learn
+// what facts already exist; an absent resource would force the agent
+// to assume nothing.
+func TestResources_MyMemory_AlwaysListed(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`)
+	resp := read()
+	var got struct {
+		Result struct {
+			Resources []Resource `json:"resources"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, r := range got.Result.Resources {
+		if r.URI == "helmdeck://my-memory" {
+			return
+		}
+	}
+	t.Errorf("helmdeck://my-memory should always be listed, got %+v", got.Result.Resources)
+}
+
+// TestResources_MyMemory_Read_EmptyWithoutMemory — nil store ⇒
+// well-shaped empty payload + explanatory note.
+func TestResources_MyMemory_Read_EmptyWithoutMemory(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://my-memory"}}`)
+	resp := read()
+	var rpc struct {
+		Result struct {
+			Contents []ResourceContent `json:"contents"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(resp), &rpc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if rpc.Error != nil {
+		t.Fatalf("expected success, got error: %+v", rpc.Error)
+	}
+	var mm MyMemory
+	if err := json.Unmarshal([]byte(rpc.Result.Contents[0].Text), &mm); err != nil {
+		t.Fatalf("decode my-memory body: %v", err)
+	}
+	if len(mm.Categories) != 0 {
+		t.Errorf("want empty categories without memory; got %+v", mm.Categories)
+	}
+	if mm.Note == "" {
+		t.Errorf("expected explanatory note in nil-store projection")
+	}
+}

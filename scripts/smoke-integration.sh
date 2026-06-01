@@ -287,6 +287,77 @@ probe "browser.screenshot_url example.com" "browser.screenshot_url" \
 probe "repo.fetch → fs.list (session chaining)" "repo.fetch" \
   "Use helmdeck__repo_fetch to clone https://github.com/octocat/Hello-World.git with depth 1. Then use helmdeck__fs_list with the clone_path and _session_id from the result. Report both results." || true
 
+# ── memory bridge probes (ADR 048 PR #2 + PR #3) ──────────────────
+# Two probes, ordered narrowest → widest:
+#
+#   M1. DETERMINISTIC bridge probe — POST /api/v1/memory/store
+#       directly, then call mcporter helmdeck.query from inside
+#       openclaw-gateway, assert the fact surfaces. Tests PR #2's
+#       write surface AND PR #3's QMD bridge END-TO-END without
+#       depending on an LLM correctly picking the right tool.
+#       If this fails, the bridge is broken regardless of which
+#       free model is configured today.
+#
+#   M2. AGENT memory-write probe — prompt the agent to store a
+#       fact and verify helmdeck.memory_store landed in the audit
+#       log. Same shape as the existing probes (truth-source the
+#       audit log). Flaky free models may fail this even when the
+#       bridge works — that's the point of running M1 first.
+probe_memory_bridge() {
+  local marker="smoke-$(date -u +%Y%m%dT%H%M%S)-$RANDOM"
+  local key="smoke/$marker"
+  local value="deploy via Konflux $marker — smoke test fact"
+  blue "── probe: memory bridge (deterministic, marker=$marker)"
+
+  # Write the fact via the REST endpoint we ship in PR #2.
+  local write_status
+  write_status=$(curl -s -o /tmp/smoke-memstore.json -w "%{http_code}" \
+    -H "Authorization: Bearer $JWT" \
+    -H "Content-Type: application/json" \
+    "$HELMDECK_URL/api/v1/memory/store" \
+    -d "{\"key\":\"$key\",\"value\":\"$value\",\"category\":\"smoke_test\",\"ttl_seconds\":3600}")
+  if [[ "$write_status" != "200" ]]; then
+    red "  ✗ POST /api/v1/memory/store returned $write_status"
+    cat /tmp/smoke-memstore.json | sed 's/^/    /'
+    FAIL=$((FAIL + 1)); FAILED+=("memory.store-rest"); return 1
+  fi
+  green "  ✓ fact stored via REST (key=$key)"
+
+  # Pull the bridge response through mcporter inside openclaw-gateway.
+  # If this returns the marker in any result snippet, the QMD bridge
+  # is working end-to-end (mcporter → SSE → QMDServer → projection).
+  local mcp_out
+  if ! mcp_out=$(docker exec "$OPENCLAW_GATEWAY_CONTAINER" \
+       /usr/local/bin/npx mcporter call helmdeck.query \
+       "searches=[{\"type\":\"lex\",\"query\":\"$marker\"}]" \
+       limit=5 2>&1); then
+    red "  ✗ mcporter call helmdeck.query failed"
+    echo "$mcp_out" | tail -5 | sed 's/^/    /'
+    FAIL=$((FAIL + 1)); FAILED+=("memory.query-mcporter"); return 1
+  fi
+  if echo "$mcp_out" | grep -q "$marker"; then
+    green "  ✓ marker $marker surfaced via mcporter helmdeck.query"
+    echo "$mcp_out" | head -8 | sed 's/^/    /'
+    PASS=$((PASS + 1))
+  else
+    red "  ✗ marker $marker NOT in mcporter helmdeck.query response"
+    red "    (write succeeded, but bridge didn't surface it — broken projection or auth)"
+    echo "$mcp_out" | head -10 | sed 's/^/    /'
+    FAIL=$((FAIL + 1)); FAILED+=("memory.bridge"); return 1
+  fi
+
+  # Cleanup: forget the smoke marker so reruns don't accumulate.
+  curl -s -o /dev/null \
+    -H "Authorization: Bearer $JWT" \
+    -H "Content-Type: application/json" \
+    "$HELMDECK_URL/api/v1/memory/forget" \
+    -d "{\"scope\":\"key:$key\"}" || true
+}
+probe_memory_bridge || true
+
+probe "helmdeck.memory_store via agent" "helmdeck.memory_store" \
+  "Use the helmdeck__helmdeck_memory_store tool to remember this fact: key='smoke/agent-test', value='smoke test agent persisted this', category='smoke_test', ttl_seconds=3600. Call the tool exactly once." || true
+
 # ── integration-aware probes (one representative pack each) ───────
 if integration_enabled HELMDECK_FIRECRAWL_ENABLED; then
   probe "web.scrape example.com (Firecrawl)" "web.scrape" \

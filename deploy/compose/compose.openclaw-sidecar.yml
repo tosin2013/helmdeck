@@ -40,9 +40,23 @@ services:
     # for ephemeral test runs. Set OPENROUTER_API_KEY in the shell
     # before `docker compose ... up -d`.
     environment:
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Helmdeck owns the OpenRouter key under HELMDECK_OPENROUTER_API_KEY
+      # in deploy/compose/.env.local (one canonical var per provider so
+      # operators don't maintain duplicates). Fall back to a bare
+      # OPENROUTER_API_KEY in the shell so people who already set it
+      # the OpenClaw-conventional way keep working.
+      OPENROUTER_API_KEY: ${HELMDECK_OPENROUTER_API_KEY:-${OPENROUTER_API_KEY:-}}
       # OpenClaw reads provider API keys from process env only when
       # this flag is set — see /app/dist/shell-env-*.js
       # `shouldEnableShellEnvFallback`. Without it, OPENROUTER_API_KEY
       # is ignored and `models status` reports "Shell env: off".
       OPENCLAW_LOAD_SHELL_ENV: "true"
+      # ADR 048 PR #3: enable the QMD memory-corpus bridge so
+      # OpenClaw's memory_search surfaces helmdeck's audit history +
+      # user_facts alongside the user's conversational chunks.
+      # OpenClaw's MCPorter daemon dials helmdeck-control-plane's
+      # /api/v1/mcp/qmd/sse and calls the `query` tool. Set
+      # OPENCLAW_QMD_ENABLED=false in your shell to opt out.
+      OPENCLAW_MEMORY_QMD_MCPORTER_ENABLED: "${OPENCLAW_QMD_ENABLED:-true}"
+      OPENCLAW_MEMORY_QMD_MCPORTER_SERVERNAME: "helmdeck"
+      OPENCLAW_MEMORY_QMD_MCPORTER_STARTDAEMON: "true"

@@ -37,6 +37,13 @@ Helmdeck ships its agent instructions as a native **OpenClaw Skill** at `skills/
    If the workflow fails or you need to re-publish without cutting a new tag, two fallback paths:
    - **`workflow_dispatch`** — go to the Actions tab → "Publish to MCP Registry" → "Run workflow" with an optional `version_override` input
    - **Local script** — [`scripts/publish-to-mcp-registry.sh`](../scripts/publish-to-mcp-registry.sh) builds the publisher locally, runs interactive GitHub OAuth, and publishes from a maintainer shell. Useful if the GitHub Actions OIDC path breaks for any reason.
+9. **Refresh the model tier table** (ADR 051 PR #5) — have any new models shipped to OpenRouter or any of the configured providers since the last release? If yes:
+   - Scan `https://openrouter.ai/api/v1/models` for additions in the provider families helmdeck already supports (`anthropic/`, `openai/`, `google/`, `deepseek/`, `moonshotai/`, `tencent/`, `meta-llama/`, `mistralai/`, etc.).
+   - Calibrate the most relevant ones via [`scripts/calibrate-model.sh`](../scripts/calibrate-model.sh) — run each twice and treat single-run results as suggestive only (free-route reliability is noisy).
+   - Methodology and tier-selection rules are documented in [`docs/howto/calibrate-model-tiers.md`](howto/calibrate-model-tiers.md).
+   - Open a docs PR adding the new tier entries to `internal/llmcontext/budgets.go` with the source-of-classification trailing comment. The PR should be a 10-minute review.
+
+   This step is intentionally manual — there's no helmdeck cron job watching provider catalogs. The tradeoff is: the maintainer who runs the release also notices when their fallback chain has new options worth investigating.
 
 **Related:**
 - [OpenClaw upgrade runbook](integrations/openclaw-upgrade-runbook.md) — the operator-facing sync procedure

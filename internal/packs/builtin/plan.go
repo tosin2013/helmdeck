@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/tosin2013/helmdeck/internal/gateway"
+	"github.com/tosin2013/helmdeck/internal/llmcontext"
 	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/vision"
@@ -203,6 +204,25 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 			} else {
 				ec.Logger.Warn("helmdeck.plan: my-defaults projection failed; planning without learned defaults", "err", derr)
 			}
+		}
+
+		// ADR 050: compact the catalog projection to fit the model's
+		// budget before assembling the prompt. Tier A frontier models
+		// pass through unchanged (MaxCatalogBytes=0). Tier B/C trim
+		// metadata in a deterministic priority order until the
+		// marshaled catalog fits — supersedes is preserved so rule
+		// P2 stays anchored even on aggressive compaction.
+		budget := llmcontext.BudgetFor(in.Model)
+		compactedRG, trim := llmcontext.CompactCatalog(routingGuideFromCatalog(catalog), budget)
+		catalog = catalogFromRoutingGuide(compactedRG)
+		if len(trim.Dropped) > 0 {
+			ec.Logger.Info("helmdeck.plan: catalog compacted to fit model budget",
+				"model", in.Model,
+				"tier", string(budget.Tier),
+				"before_bytes", trim.BeforeBytes,
+				"after_bytes", trim.AfterBytes,
+				"dropped", trim.Dropped,
+			)
 		}
 
 		ec.Report(20, "calling model for plan decomposition")
@@ -487,4 +507,43 @@ func intentSHA(intent string) string {
 	norm := strings.ToLower(strings.TrimSpace(intent))
 	sum := sha256.Sum256([]byte(norm))
 	return hex.EncodeToString(sum[:8])
+}
+
+// routingGuideFromCatalog converts route.go's catalogProjection into
+// the shared llmcontext.RoutingGuide type so CompactCatalog can
+// operate on it. The JSON wire shapes are identical — we only need
+// the conversion because Go disallows direct cross-package struct
+// type conversion on slice element types even when the underlying
+// shapes match. Cheap O(N+M); we pay it once per plan call.
+func routingGuideFromCatalog(c catalogProjection) llmcontext.RoutingGuide {
+	rg := llmcontext.RoutingGuide{
+		Packs:     make([]llmcontext.Pack, len(c.Packs)),
+		Pipelines: make([]llmcontext.Pipeline, len(c.Pipelines)),
+	}
+	for i, p := range c.Packs {
+		rg.Packs[i] = llmcontext.Pack{Name: p.Name, Description: p.Description, Metadata: p.Metadata}
+	}
+	for i, p := range c.Pipelines {
+		rg.Pipelines[i] = llmcontext.Pipeline{ID: p.ID, Name: p.Name, Description: p.Description, Metadata: p.Metadata}
+	}
+	return rg
+}
+
+// catalogFromRoutingGuide is the inverse converter used after
+// CompactCatalog returns the trimmed projection. The Metadata fields
+// on each side are value types (PackMetadata is a struct; pipeline
+// Metadata is json.RawMessage) so the shallow copy here is enough —
+// CompactCatalog has already deep-copied internally.
+func catalogFromRoutingGuide(rg llmcontext.RoutingGuide) catalogProjection {
+	c := catalogProjection{
+		Packs:     make([]routeCatalogPack, len(rg.Packs)),
+		Pipelines: make([]routeCatalogPipe, len(rg.Pipelines)),
+	}
+	for i, p := range rg.Packs {
+		c.Packs[i] = routeCatalogPack{Name: p.Name, Description: p.Description, Metadata: p.Metadata}
+	}
+	for i, p := range rg.Pipelines {
+		c.Pipelines[i] = routeCatalogPipe{ID: p.ID, Name: p.Name, Description: p.Description, Metadata: p.Metadata}
+	}
+	return c
 }

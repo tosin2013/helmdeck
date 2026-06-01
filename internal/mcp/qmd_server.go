@@ -34,6 +34,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/tosin2013/helmdeck/internal/auth"
 	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
 )
@@ -182,7 +183,18 @@ func (s *QMDServer) dispatch(ctx context.Context, req rpcRequest) rpcResponse {
 		if params.Name != "query" {
 			return mk(nil, &rpcError{Code: -32601, Message: "unknown tool: " + params.Name + " (only 'query' is supported on the QMD endpoint)"})
 		}
-		results, qerr := s.queryHandler(ctx, params.Arguments)
+		// Propagate the JWT caller into the engine context so
+		// queryHandler reads the right namespace. Same pattern
+		// PackServer.dispatch uses (server.go:660-664) — without it,
+		// CallerFromContext falls back to "unknown" and the bridge
+		// returns empty for any real-caller request. Only override
+		// when auth claims are present so tests that pre-set the
+		// caller via packs.WithCaller continue to work.
+		callCtx := ctx
+		if c := auth.FromContext(ctx); c != nil && c.Subject != "" {
+			callCtx = packs.WithCaller(ctx, c.Subject)
+		}
+		results, qerr := s.queryHandler(callCtx, params.Arguments)
 		if qerr != nil {
 			return mk(nil, qerr)
 		}

@@ -433,6 +433,19 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			Description: "Per-model prompt budgets that llmcontext (ADR 050) applies when compacting the catalog projection for LLM-backed packs. Returns `budgets[]` (each `{model, input_tokens, output_tokens, max_catalog_bytes, tier}`) plus a `fallback` entry for unmapped models and a `policy` string explaining the lookup rules. Tier A = no compaction; Tier B/C = aggressive metadata trim. Read this when investigating why a free-model plan saw a slim catalog or when adding a new model id to helmdeck's deployment.",
 			MimeType:    "application/json",
 		})
+		// helmdeck://my-plans projects the caller's plan_history audit
+		// category (ADR 049) into per-intent_sha cohorts so operators
+		// and agents can audit the planner's behavior over time. Always
+		// listed; when memory is disabled or the caller has no history
+		// the payload returns an empty groups[] array + a "note"
+		// string. ADR 050 PR #3 consolidated this projection here
+		// (deferred from ADR 049 PR #2's roadmap).
+		resources = append(resources, Resource{
+			URI:         "helmdeck://my-plans",
+			Name:        "Caller's plan-history projection",
+			Description: "Per-caller projection over plan_history audit rows (written by helmdeck.plan; ADR 049 + ADR 050 PR #3). Returns `groups[]` of intent-sha cohorts with count + most-frequent complexity + top tools picked + last-seen timestamp + models used. Use to audit the planner's behavior over time, to detect stable learned plans (an intent_sha with count>1 and a stable top_tools list), and (future PR #4) to feed history priors into lexical retrieval ranking. Empty arrays when the caller has no history yet.",
+			MimeType:    "application/json",
+		})
 		return mk(map[string]any{"resources": resources}, nil)
 
 	case "resources/read":
@@ -602,6 +615,20 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			body, err := json.Marshal(payload)
 			if err != nil {
 				return mk(nil, &rpcError{Code: -32603, Message: "encode context-budgets: " + err.Error()})
+			}
+			return mk(map[string]any{
+				"contents": []ResourceContent{
+					{URI: params.URI, MimeType: "application/json", Text: string(body)},
+				},
+			}, nil)
+		case "helmdeck://my-plans":
+			payload, perr := s.buildMyPlans(ctx, packs.CallerFromContext(ctx))
+			if perr != nil {
+				return mk(nil, perr)
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				return mk(nil, &rpcError{Code: -32603, Message: "encode my-plans: " + err.Error()})
 			}
 			return mk(map[string]any{
 				"contents": []ResourceContent{

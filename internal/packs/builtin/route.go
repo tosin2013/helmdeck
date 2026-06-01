@@ -251,18 +251,17 @@ func routeHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesListe
 			}
 		}
 
-		// ADR 050 PR #2: compact the catalog to fit the model's
-		// budget before assembling the prompt. Tier A models pass
-		// through unchanged; Tier B/C trim metadata in deterministic
-		// priority order. Same converter helpers and INFO logging as
-		// helmdeck.plan — keeping the two prompts visually parallel
-		// also keeps the two compaction paths observationally
-		// parallel for operators reading traces.
+		// ADR 050 PR #3: Select cascades through Tier-A pass-through
+		// → metadata compaction (PR #1) → lexical retrieval + top-N
+		// (PR #3) until the projection fits the model's budget. Same
+		// cascade helmdeck.plan calls; keeping route + plan
+		// observationally parallel makes operator traces easier to
+		// read across both packs.
 		budget := llmcontext.BudgetFor(in.Model)
-		compactedRG, trim := llmcontext.CompactCatalog(routingGuideFromCatalog(catalog), budget)
-		catalog = catalogFromRoutingGuide(compactedRG)
+		selectedRG, trim := llmcontext.Select(routingGuideFromCatalog(catalog), in.UserIntent, budget)
+		catalog = catalogFromRoutingGuide(selectedRG)
 		if len(trim.Dropped) > 0 {
-			ec.Logger.Info("helmdeck.route: catalog compacted to fit model budget",
+			ec.Logger.Info("helmdeck.route: catalog selection ran",
 				"model", in.Model,
 				"tier", string(budget.Tier),
 				"before_bytes", trim.BeforeBytes,

@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
+	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
 )
 
@@ -85,11 +88,12 @@ func TestResourcesList_PacksOnly_WhenNoSessionLister(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	// helmdeck://packs / routing-guide / my-defaults / my-memory /
-	// context-budgets are always present (ADR 047 + ADR 048 + ADR 050 PR #2 —
-	// all unconditional). The optional resources
-	// (sessions/voices/image-models/models) are absent here.
-	if len(got.Result.Resources) != 5 {
-		t.Fatalf("want 5 resources (packs + routing-guide + my-defaults + my-memory + context-budgets), got %d: %s", len(got.Result.Resources), resp)
+	// context-budgets / my-plans are always present (ADR 047 + ADR 048
+	// + ADR 050 PR #2 + ADR 050 PR #3 — all unconditional). The
+	// optional resources (sessions/voices/image-models/models) are
+	// absent here.
+	if len(got.Result.Resources) != 6 {
+		t.Fatalf("want 6 resources (packs + routing-guide + my-defaults + my-memory + context-budgets + my-plans), got %d: %s", len(got.Result.Resources), resp)
 	}
 	want := map[string]bool{
 		"helmdeck://packs":           false,
@@ -97,6 +101,7 @@ func TestResourcesList_PacksOnly_WhenNoSessionLister(t *testing.T) {
 		"helmdeck://my-defaults":     false,
 		"helmdeck://my-memory":       false,
 		"helmdeck://context-budgets": false,
+		"helmdeck://my-plans":        false,
 	}
 	for _, r := range got.Result.Resources {
 		if _, ok := want[r.URI]; ok {
@@ -889,6 +894,162 @@ func TestResources_MyMemory_Read_EmptyWithoutMemory(t *testing.T) {
 	}
 	if mm.Note == "" {
 		t.Errorf("expected explanatory note in nil-store projection")
+	}
+}
+
+// TestResources_MyPlans_AlwaysListed — my-plans is unconditionally
+// available like the other my-* resources. Empty caller history just
+// produces an empty groups[] array + an explanatory note string.
+func TestResources_MyPlans_AlwaysListed(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`)
+	resp := read()
+
+	var got struct {
+		Result struct {
+			Resources []Resource `json:"resources"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	found := false
+	for _, r := range got.Result.Resources {
+		if r.URI == "helmdeck://my-plans" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("helmdeck://my-plans should always be listed, got %+v", got.Result.Resources)
+	}
+}
+
+// TestResources_MyPlans_AggregatesPlanHistory — when plan_history
+// audit rows exist for the caller, the projection groups them by
+// intent_sha with counts, top tools, and most-frequent complexity.
+// This tests the aggregatePlanGroups path that the live PR #3
+// validation exercised.
+func TestResources_MyPlans_AggregatesPlanHistory(t *testing.T) {
+	store := memory.NewInMemoryStore()
+	caller := "alice"
+	// Three rows: two share intent_sha "abc", one has "xyz". The
+	// abc group should win count=2; xyz appears second.
+	rows := []packs.PlanAudit{
+		{IntentSHA: "abc", Complexity: "pack-chain", AtUnix: 100, Model: "openrouter/openrouter/free",
+			Steps: []packs.PlanAuditStep{
+				{Order: 1, Tool: "helmdeck.memory_store"},
+				{Order: 2, Tool: "blog.rewrite_for_audience"},
+			}},
+		{IntentSHA: "abc", Complexity: "pack-chain", AtUnix: 200, Model: "openrouter/openrouter/free",
+			Steps: []packs.PlanAuditStep{
+				{Order: 1, Tool: "helmdeck.memory_store"},
+				{Order: 2, Tool: "image.generate"},
+			}},
+		{IntentSHA: "xyz", Complexity: "single-action", AtUnix: 50, Model: "openrouter/auto",
+			Steps: []packs.PlanAuditStep{
+				{Order: 1, Tool: "browser.screenshot_url"},
+			}},
+	}
+	for i, r := range rows {
+		body, _ := json.Marshal(r)
+		key := packs.AuditKeyPrefixPlan + r.IntentSHA + "/" + fmt.Sprintf("%020d", 1000+i)
+		if _, err := store.Put(context.Background(), caller, key, body,
+			memory.WithCategory(packs.AuditCategoryPlan)); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	eng := packs.New(packs.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))), packs.WithMemoryStore(store))
+	srv := NewPackServer(packs.NewPackRegistry(), eng)
+	clientToServer, fromClient := io.Pipe()
+	fromServer, serverToClient := io.Pipe()
+	ctx, cancel := context.WithCancel(packs.WithCaller(context.Background(), caller))
+	done := make(chan struct{})
+	go func() { defer close(done); _ = srv.Serve(ctx, clientToServer, serverToClient) }()
+	defer func() { cancel(); _ = fromClient.Close(); _ = serverToClient.Close(); <-done }()
+	sc := bufio.NewScanner(fromServer)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	if _, err := fromClient.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://my-plans"}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if !sc.Scan() {
+		t.Fatal("server closed")
+	}
+	resp := sc.Text()
+	var rpc struct {
+		Result struct {
+			Contents []ResourceContent `json:"contents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &rpc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(rpc.Result.Contents) != 1 {
+		t.Fatalf("want 1 content block; got %d", len(rpc.Result.Contents))
+	}
+	var mp MyPlans
+	if err := json.Unmarshal([]byte(rpc.Result.Contents[0].Text), &mp); err != nil {
+		t.Fatalf("decode my-plans: %v", err)
+	}
+	if len(mp.Groups) != 2 {
+		t.Fatalf("want 2 groups (abc + xyz); got %+v", mp.Groups)
+	}
+	// abc should be first (count=2 > xyz's count=1).
+	if mp.Groups[0].IntentSHA != "abc" || mp.Groups[0].Count != 2 {
+		t.Errorf("first group should be abc count=2; got %+v", mp.Groups[0])
+	}
+	if mp.Groups[0].Complexity != "pack-chain" {
+		t.Errorf("abc complexity should be pack-chain; got %q", mp.Groups[0].Complexity)
+	}
+	// Top tools: memory_store appears in both abc rows so it should
+	// rank first.
+	if len(mp.Groups[0].TopTools) == 0 || mp.Groups[0].TopTools[0] != "helmdeck.memory_store" {
+		t.Errorf("abc top_tools[0] should be memory_store; got %v", mp.Groups[0].TopTools)
+	}
+	if mp.Groups[0].LastUnix != 200 {
+		t.Errorf("abc last_unix should be 200; got %d", mp.Groups[0].LastUnix)
+	}
+}
+
+// TestResources_MyPlans_EmptyHistory — caller with no plan rows
+// gets an empty groups[] + an explanatory note string.
+func TestResources_MyPlans_EmptyHistory(t *testing.T) {
+	store := memory.NewInMemoryStore()
+	eng := packs.New(packs.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))), packs.WithMemoryStore(store))
+	srv := NewPackServer(packs.NewPackRegistry(), eng)
+	clientToServer, fromClient := io.Pipe()
+	fromServer, serverToClient := io.Pipe()
+	ctx, cancel := context.WithCancel(packs.WithCaller(context.Background(), "alice"))
+	done := make(chan struct{})
+	go func() { defer close(done); _ = srv.Serve(ctx, clientToServer, serverToClient) }()
+	defer func() { cancel(); _ = fromClient.Close(); _ = serverToClient.Close(); <-done }()
+	sc := bufio.NewScanner(fromServer)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	if _, err := fromClient.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://my-plans"}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if !sc.Scan() {
+		t.Fatal("server closed")
+	}
+	var rpc struct {
+		Result struct {
+			Contents []ResourceContent `json:"contents"`
+		} `json:"result"`
+	}
+	_ = json.Unmarshal([]byte(sc.Text()), &rpc)
+	var mp MyPlans
+	if err := json.Unmarshal([]byte(rpc.Result.Contents[0].Text), &mp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(mp.Groups) != 0 {
+		t.Errorf("empty history should produce empty groups; got %+v", mp.Groups)
+	}
+	if mp.Note == "" {
+		t.Errorf("empty history should populate `note`")
 	}
 }
 

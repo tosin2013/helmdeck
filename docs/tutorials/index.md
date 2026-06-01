@@ -14,6 +14,8 @@ Learning-oriented walkthroughs. Read these first if you're new to helmdeck — e
 - **[Configure helmdeck via the Management UI](./install-ui-walkthrough.md)** — panel-by-panel tour of the post-install steps every operator needs.
 - **[Pack demo playbook](../integrations/pack-demo-playbook.md)** — 20 copy-pasteable prompts that exercise every shipped capability pack against a live install. Use it after the install steps to verify your environment.
 
+Once you're set up, the [how-to guides](../howto/) cover routing, memory, and running orchestration packs on free models (the v0.22.0 subsystems).
+
 ## What goes here
 
 Tutorials are *learning-oriented*. They are the most prescriptive of the four documentation modes:

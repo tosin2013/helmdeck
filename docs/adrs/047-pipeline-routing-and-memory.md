@@ -1,6 +1,6 @@
 # 47. Catalog Metadata, Memory-Driven Routing, and Gap Analysis
 
-**Status**: Accepted (slice 1 shipped: catalog metadata + `helmdeck://routing-guide` MCP resource; memory hooks + routing pack + UI are PR #2, #3, and #4 of this roadmap)
+**Status**: Accepted — fully shipped in v0.22.0 (all four PRs: catalog metadata + `helmdeck://routing-guide`, memory audit hooks + `helmdeck://my-defaults` + `helmdeck.memory_forget`, the `helmdeck.route` meta-pack with gap analysis, and the Routing Memory management UI)
 **Date**: 2026-05-31
 **Domain**: pack-engine, pipelines, mcp, memory, agent-integrations
 
@@ -11,7 +11,7 @@ The chat agent's routing logic — *"if the user pastes a brief use `builtin.bri
 1. **Routing-as-static-prose doesn't scale.** Every catalog addition requires hand-editing SKILL.md, agents waste tokens reading the whole file on every turn, the picker logic is informal English that the agent must re-derive each conversation, and there's no programmatic way to ask "which pipeline accepts this input shape?" SKILL.md is the *only* surface that knows, and it isn't queryable.
 2. **Memory is read-through cache only.** [ADR 039](039-universal-memory-delivery-layer.md) shipped a per-caller memory layer. A handful of packs opt into it (e.g. `content.ground` caches Firecrawl results, `github.list_issues` caches REST responses), but the system never writes audit entries for pack/pipeline runs, never reads them for personalization, and has no surface to expose them to the chat agent. There's no way for the agent to know "this caller's typical persona for blog posts about AI agents is `technical`" — every conversation starts from zero.
 
-These compose into the real product gap: the agent can't get smarter over time, can't notice when a request doesn't match anything in the catalog, and can't query the catalog programmatically. As helmdeck grows past ~50 packs and ~25 pipelines (today: 48 packs, 21 pipelines), the routing surface has to become first-class — declarative, queryable, memory-backed — rather than a static blob.
+These compose into the real product gap: the agent can't get smarter over time, can't notice when a request doesn't match anything in the catalog, and can't query the catalog programmatically. As helmdeck grows past ~50 packs and ~25 pipelines (today: 52 packs, 21 pipelines), the routing surface has to become first-class — declarative, queryable, memory-backed — rather than a static blob.
 
 ## Decision
 

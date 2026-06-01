@@ -588,6 +588,70 @@ The auto-publish workflow republishes the listing on `v*` tag push. After taggin
 
 ---
 
+## v0.18.0 — Pipelines you can see and trust — ✅ Shipped 2026-05-28 {#v0180}
+
+**Theme:** The deck/narrate pipelines turn prose into a *real* multi-slide deck (no more a whole README collapsing onto one slide and rendering a degenerate 7-second video), and the Management UI shows which pipelines are running plus a copy-paste agent prompt for each.
+
+**Ships:**
+
+- **`slides.outline` pack** — restates prose/markdown (a README, a `research.deep` synthesis, `content.ground` output) as a *structured* Marp deck (`---`-separated slides with titles, bullets, and `<!-- speaker notes -->`). Bounded by `max_slides` + a clamped token budget; **guarantees a multi-slide deck or fails `invalid_input` ("content too thin")** rather than emitting a degenerate one-slide deck.
+- **Pipelines UI: live "running" indicators + per-pipeline "Copy prompt" button** — `/pipelines` polls `GET /api/v1/pipeline-runs`, shows a pulsing running badge + an "N running" count, and copies a ready-to-paste `helmdeck__pipeline-run …` prompt with a fill-in line per declared input.
+
+**Changed:** the deck & narrate pipelines (`grounded-deck`, `research-deck`, `research-narrate`, `research-ground-deck`, `scrape-deck`, `repo-readme-narrate`) now insert a `slides.outline` step before rendering, so prose with no `---` becomes a genuine multi-slide deck (or fails legibly) instead of a ~7-second silent video reported as `succeeded`.
+
+**Upgrade:** non-breaking, additive. Clean in-place Compose upgrade from v0.17.x.
+
+---
+
+## v0.19.0 — Repo presentations worth watching — ✅ Shipped 2026-05-28 {#v0190}
+
+**Theme:** `builtin.repo-presentation` (replacing `repo-readme-narrate`) builds a narrated deck from a repo's README **plus its docs and code structure** — not a paraphrase of the front page.
+
+**Ships:**
+
+- **`repo.fetch` `docs` output** — concatenated markdown/adoc/rst from the repo's doc dirs (`docs/`, `doc/`, `content/`, …) plus top-level design docs (`ARCHITECTURE.md`, `DESIGN.md`, …), bounded to 16 KB with a per-file path header (empty when the repo has none). Lets presentation/grounding pipelines ground on a project's real docs.
+- **`builtin.repo-presentation`** — chains `repo.fetch → repo.map → slides.outline → slides.narrate`. Same `repo_url` input; the `builtin.repo-readme-narrate` id is gone.
+
+**Upgrade:** non-breaking. The `repo-readme-narrate` pipeline id was removed — switch to `repo-presentation`.
+
+### v0.19.1 — ✅ Shipped 2026-05-28 {#v0191}
+
+**Fixed:** the Pipelines page "Copy prompt" button now works over plain HTTP — `navigator.clipboard` only exists in a secure context, so on a LAN host served over plain HTTP the button silently did nothing. It now falls back to a hidden-`<textarea>` + `execCommand('copy')` and reflects the real result.
+
+---
+
+## v0.20.0 — A more trustworthy agent surface — ✅ Shipped 2026-05-28 {#v0200}
+
+**Theme:** Pipelines reject unfilled `{{PLACEHOLDER}}` inputs instead of running with them; built-in pipeline descriptions say what the packs actually do; `slides.outline` guarantees a title slide and gains audience personas; and a new installable `helmdeck-debug` skill sweeps every pipeline + pack and drafts GitHub issues for what it finds.
+
+**Ships:**
+
+- **Pipeline runs reject unfilled `{{PLACEHOLDER}}` inputs** with a `caller_fixable` error that names the input — instead of silently producing a post titled `{{TITLE}}`.
+- **`helmdeck-debug` integration-debugger skill** (`skills/helmdeck-debug/SKILL.md`) — sweeps every pipeline + pack (static checks + a live end-to-end run sweep classified by `failure_class`) and drafts a ready-to-file GitHub issue per real bug, confirming before filing. Installed by `scripts/configure-openclaw.sh` and the new `scripts/configure-claude.sh`.
+- **`slides.outline` guarantees a title slide + supports personas + an author byline** — deterministic title slide when `title` is provided (never duplicated), a `persona` input (`general`/`technical`/`marketing`/`executive`/`educational` or freeform), and new outputs `has_title_slide` + `persona_used`.
+
+**Changed:** honest descriptions for the ground/blog built-in pipelines — `content.ground` *cites* claims (it does not rewrite into a new voice/structure) and `blog.publish` *saves a markdown artifact by default*. Descriptions + prompt-template docs now say so.
+
+**Upgrade:** non-breaking, additive.
+
+---
+
+## v0.21.0 — Pipelines you can see into, stop, and resize — ✅ Shipped 2026-05-30 {#v0210}
+
+**Theme:** Running runs surface each step's live progress; a `Cancel` button (+ `helmdeck__pipeline-cancel` MCP tool + REST) genuinely stops a wedged run by tearing down its session container; the runner auto-cleans runs orphaned by a restart; and CPU-bound packs declare a host-aware compute profile. Plus a new `hyperframes.compose` pack turns a plain-language description into a HyperFrames composition.
+
+**Ships:**
+
+- **CPU profiles for session packs** ([ADR 045](adrs/045-pack-resource-sizing.md)) — a pack declares `session.ProfileIO` (default, 1 core) or `session.ProfileCompute` (host-aware `clamp(host_cores-1, 1, 6)`), tunable via `HELMDECK_IO_CPU_LIMIT` / `HELMDECK_COMPUTE_CPU_LIMIT`. `hyperframes.render` + `slides.narrate` migrate to `ProfileCompute`. See [`reference/hardware-sizing.md`](reference/hardware-sizing.md).
+- **Live per-step progress + Cancel** — the `/pipelines` UI renders each running step's latest progress inline; `POST …/runs/{runId}/cancel` + `helmdeck__pipeline-cancel` hard-stop a run and force-remove every session container tagged with the run id (new `helmdeck.run_id` Docker label). Already-terminal runs return `409 not_cancellable`.
+- **`hyperframes.compose` pack + describe-a-video pipelines** — turns a plain-language description into a HyperFrames composition (guaranteeing the render contract); `builtin.prompt-video` (compose → render, silent) and `builtin.prompt-narrated-video` (podcast → compose → render) chain it. `podcast.generate` now always emits `audio_url` (empty without a presigned store) so the narrated pipeline degrades to silent instead of failing.
+
+**Fixed:** `docker pull` now retries transient failures (3× linear backoff); in-flight pipeline runs orphaned by a control-plane restart are reaped to `failed`/`transient` on boot; pipeline MCP tools are advertised bare so namespacing clients resolve them to `helmdeck__pipeline-*` (was double-prefixed); built-in podcast pipelines default `model` to `openrouter/auto`; the `podcast.generate` double-registration that clobbered the gateway dispatcher is fixed; the runner no longer threads a non-preserved session into later steps.
+
+**Upgrade:** non-breaking, additive. Clean in-place Compose upgrade from v0.20.0.
+
+---
+
 ## v0.22.0 — Agents that work on free models, with memory — ✅ Shipped 2026-06-01 {#v0220}
 
 **Theme:** Close the loop from "helmdeck has 50+ packs" to "an agent on a free model can pick the right ones." Closes four ADRs end-to-end and validates the result against the live free-model failure that motivated the work — the MiniMax M3 launch paste + 3-action ask that empty-completed at 29.5s before any of this work now returns a valid 3-step plan on `openrouter/openrouter/free`.

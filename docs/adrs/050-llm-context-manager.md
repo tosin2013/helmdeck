@@ -1,6 +1,6 @@
 # 50. LLM Context Manager for Catalog-Heavy Packs
 
-**Status**: Proposed (3-PR roadmap; PR #1 unblocks `helmdeck.plan` on free models, PR #2 generalizes to `helmdeck.route` + adds operator visibility, PR #3 adds relevance ranking from `plan_history`)
+**Status**: Accepted — fully shipped in v0.22.0 (all PRs: per-model budgets + catalog compaction unblocking `helmdeck.plan` on free models, generalization to `helmdeck.route` + `helmdeck://context-budgets` operator visibility, cascading select + lexical rank + `helmdeck://my-plans`, and the two-pass LLM filter with JSON-decoder tolerance)
 **Date**: 2026-06-01
 **Domain**: gateway, packs, mcp, agent-integrations
 

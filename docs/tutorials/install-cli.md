@@ -9,7 +9,7 @@ changefreq: monthly
 
 # Install helmdeck (CLI walkthrough)
 
-This tutorial takes you from a clean machine to a running helmdeck stack in about 10 minutes. You'll log in to the Management UI, see the catalog of 36 capability packs, and run a smoke test that creates a session and takes a screenshot end-to-end.
+This tutorial takes you from a clean machine to a running helmdeck stack in about 10 minutes. You'll log in to the Management UI, see the catalog of 52 capability packs, and run a smoke test that creates a session and takes a screenshot end-to-end.
 
 If you'd rather skim the README and figure it out yourself, [scripts/install.sh](https://github.com/tosin2013/helmdeck/blob/main/scripts/install.sh) is the canonical bootstrap. This page walks through what it does and why.
 
@@ -53,7 +53,7 @@ The install script's preflight stage checks all of these and prints platform-awa
 git clone https://github.com/tosin2013/helmdeck
 cd helmdeck
 # Optional: pin the version (omit to track latest)
-echo "HELMDECK_VERSION=0.12.0" >> deploy/compose/.env.local 2>/dev/null || true
+echo "HELMDECK_VERSION=0.22.0" >> deploy/compose/.env.local 2>/dev/null || true
 ./scripts/install.sh --image-mode
 ```
 

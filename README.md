@@ -37,29 +37,22 @@ Three audiences specifically:
 
 ## Status
 
-**v0.12.1 shipped** — patch release fixing v0.12.0's release-image regression (#180 — fresh
-`docker pull` users saw a blank Management UI because the release workflow skipped `npm run build`)
-plus three reliability bugs: firecrawl-rabbitmq cold-boot race (#181 — `start_period: 15s` → `60s`),
-`content.ground` truncated-JSON failure mode (#179 — token cap 1024 → 2048, now configurable),
-and `content.ground` silent degradation when Firecrawl is unreachable (#182 — fails loud with
-`handler_failed` instead of returning empty-success).
+**v0.22.0 shipped** — *agents that work on free models, with memory.* The release closes ADRs 047–050:
 
-v0.12.0's headline features remain: 41 capability packs with **end-to-end content chaining**
-(image.generate auto-feeds podcast/slides/blog covers and hero images), the **`helmdeck://image-models`
-MCP resource** for agent discoverability, **image-mode install** (`./scripts/install.sh --image-mode`
-pulls from ghcr.io with no Go toolchain — the v1.0 Helm chart unblocker), the **Pack Test Runner UI**
-(click any pack in `/packs` to run it with a JSON body), and the **subprocess pack type** (drop an
-executable into `$HELMDECK_COMMAND_PACKS_DIR` to register a `cmd.<name>` pack — Python/Node/Bash/Rust
-authors welcome). Helmdeck is also published to the [official
+- **Pipeline routing + routing memory (ADR 047)** — the `helmdeck.route` meta-pack recommends the best pack/pipeline for an intent (with structured gap warnings when nothing fits), backed by per-caller learned defaults surfaced through the `helmdeck://routing-guide` and `helmdeck://my-defaults` MCP resources and a Routing Memory management UI.
+- **Memory write surface + OpenClaw bridge (ADR 048)** — `helmdeck.memory_store` persists durable user facts (read back via `helmdeck://my-memory`), an optional embedding sidecar powers OpenClaw's `memory_search`, and a QMD corpus bridge exposes helmdeck memory to OpenClaw.
+- **Intent decomposition (ADR 049)** — `helmdeck.plan` turns a multi-action prompt into an ordered, pipeline-aware step plan plus a `rewritten_prompt`.
+- **LLM context manager (ADR 050)** — `internal/llmcontext` compacts catalog-heavy prompts to fit small-model context budgets (tiered per-model budgets, cascading select + lexical rank, optional two-pass filter), surfaced through `helmdeck://context-budgets` and `helmdeck://my-plans`.
+
+**52 capability packs** ship in the control-plane binary (42 without an AI gateway configured), alongside **21 built-in pipelines**, a community pack **marketplace** (`helmdeck pack install <name>`), and operator-supplied `cmd.*` subprocess packs. Earlier headline features remain: end-to-end content chaining (image.generate auto-feeds podcast/slides/blog covers), the `helmdeck://image-models` MCP resource, image-mode install (`./scripts/install.sh --image-mode`), and the Pack Test Runner UI. Helmdeck is published to the [official
 MCP Registry](https://registry.modelcontextprotocol.io/) as
 `io.github.tosin2013/helmdeck` for one-line install in registry-aware
-clients. Phase 6.5 (MCP Server Hosting & Pack Evolution) is complete;
-next milestone is **v1.0 — Kubernetes & GA** (Phase 7), with backlog
+clients. Phases 1–6.5 are complete; the current milestone is **v1.0 — Kubernetes & GA** (Phase 7), with backlog
 materialised as GitHub issues tagged
 [`good first issue`](https://github.com/tosin2013/helmdeck/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 and [`help wanted`](https://github.com/tosin2013/helmdeck/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
 
-- **36 ADRs** in [`docs/adrs/`](docs/adrs/) — every architectural decision with PRD back-references
+- **49 ADRs** in [`docs/adrs/`](docs/adrs/) — every architectural decision with PRD back-references
 - **Task breakdown** in [`docs/TASKS.md`](docs/TASKS.md) — ~85 tasks across 8 phases with critical path
 - **GitHub milestones** in [`docs/MILESTONES.md`](docs/MILESTONES.md) — drop-in issue checklists with current ship state
 - **Pack reference** in [`docs/PACKS.md`](docs/PACKS.md) — every shipped pack's input/output contract
@@ -186,7 +179,7 @@ roadmap.
 
 ## Built-in Capability Packs
 
-43 packs ship in the box. Each one hides a multi-step workflow
+52 packs ship in the box (42 without an AI gateway configured). Each one hides a multi-step workflow
 behind a single typed JSON-Schema call so weak open-weight models
 can drive it as reliably as frontier models. The full input/output
 contract for every pack lives in [`docs/PACKS.md`](docs/PACKS.md).

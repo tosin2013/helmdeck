@@ -8,23 +8,30 @@ slug: /reference/packs/
 
 One page per shipped pack. Each page covers what the pack does, the input/output schema, vault credentials it depends on, how to invoke it from the CLI today and from the Management UI when that lands, the closed set of typed error codes it can return, and how it composes with other packs via session chaining.
 
-For a quick-lookup summary across all 38 packs (just the input/output contract), see **[`PACKS.md`](/PACKS)**. For agent-facing prompt guidance, see **[`SKILLS.md`](/integrations/SKILLS)**. This per-pack reference is the deep view.
+For a quick-lookup summary across all 52 packs (just the input/output contract), see **[`PACKS.md`](/PACKS)**. For agent-facing prompt guidance, see **[`SKILLS.md`](/integrations/SKILLS)**. This per-pack reference is the deep view.
 
 ## By family
 
 | Family | Packs | Status |
 |---|---|---|
+| **orchestration** (meta-packs) | [helmdeck.route](helmdeck/route.md) · [helmdeck.plan](helmdeck/plan.md) · [helmdeck.memory_store](helmdeck/memory-store.md) · [helmdeck.memory_forget](helmdeck/memory-forget.md) | ✅ Documented |
 | **browser** | [browser.screenshot_url](browser/screenshot-url.md) · [browser.interact](browser/interact.md) | ✅ Documented |
 | **web** | `web.scrape` · `web.scrape_spa` · `web.test` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fweb) |
 | **repo** | `repo.fetch` · `repo.map` · `repo.push` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Frepo) |
-| **github** | `github.create_issue` · `github.list_issues` · `github.list_prs` · `github.post_comment` · `github.create_release` · `github.search` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fgithub) |
-| **slides** | `slides.render` · `slides.narrate` · `slides.notes` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fslides) |
+| **swe** | [swe.solve](repo/solve.md) | ✅ Documented |
+| **github** | `github.create_issue` · `github.list_issues` · [github.get_issue](github/get-issue.md) · `github.list_prs` · [github.create_pr](github/create-pr.md) · `github.post_comment` · `github.create_release` · `github.search` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fgithub) |
+| **slides** | `slides.outline` · `slides.render` · `slides.narrate` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fslides) |
+| **blog** | `blog.publish` · [blog.rewrite_for_audience](blog/rewrite-for-audience.md) | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fblog) |
+| **podcast** | `podcast.generate` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fpodcast) |
+| **image / stock** | `image.generate` · `stock.search` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fimage) |
+| **video** (hyperframes) | `hyperframes.compose` · `hyperframes.render` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fvideo) |
 | **doc** | `doc.ocr` · `doc.parse` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fdoc) |
 | **desktop** | `desktop.run_app_and_screenshot` + 16 REST primitives | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fdesktop) |
 | **vision** | `vision.click_anywhere` · `vision.extract_visible_text` · `vision.fill_form_by_label` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fvision) |
 | **fs** | `fs.read` · `fs.write` · `fs.list` · `fs.patch` · `fs.delete` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Ffs) |
 | **shell** | `cmd.run` · `git.commit` · `git.diff` · `git.log` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fshell) |
 | **http** | `http.fetch` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fhttp) |
+| **communication** | `email.send` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fcommunication) |
 | **research / content** | `research.deep` · `content.ground` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Fresearch) |
 | **language** | `python.run` · `node.run` | 🟡 [Tracking issue](https://github.com/tosin2013/helmdeck/labels/pack-family%2Flanguage) |
 

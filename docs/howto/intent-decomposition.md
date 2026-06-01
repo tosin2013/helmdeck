@@ -108,7 +108,7 @@ Every successful plan writes one compact audit row to the caller's bare namespac
 
 Audit rows persist the tool sequence + a hash of each step's args, **not** the full rewritten prompt or the rationales. This keeps rows small and keeps user data out of the audit surface. The default 30-day TTL applies; `helmdeck.memory_forget` with `scope: all` clears them on demand.
 
-ADR 049 PR #2 will project these rows into `helmdeck://my-plans` so future plan calls can mine past decompositions as priors — same self-learning loop `helmdeck://my-defaults` provides for routing.
+These rows are projected into the `helmdeck://my-plans` MCP resource (shipped in v0.22.0 via ADR 050 PR #3), so you can audit past decompositions and detect stable learned plans — the same self-learning loop `helmdeck://my-defaults` provides for routing. On small models, the planner also compacts the catalog to fit the model's context budget and reports what it dropped in the `compaction` output field; see [Free models & context management](./free-models-and-context.md) and `helmdeck://context-budgets`.
 
 ## When the agent should fall back to `rewritten_prompt`
 
@@ -118,7 +118,9 @@ Both surfaces encode the same plan; they can't drift because the handler derives
 
 ## Related
 
-- `helmdeck.route` — pick ONE tool for a single-intent prompt (ADR 047 PR #3).
+- [`helmdeck.route`](../reference/packs/helmdeck/route.md) — pick ONE tool for a single-intent prompt (ADR 047).
 - `helmdeck://my-defaults` — learned per-caller defaults for `suggested_inputs` pre-fills.
+- `helmdeck://my-plans` — the per-caller plan-history projection (ADR 050 PR #3).
 - `helmdeck://routing-guide` — the catalog projection both `route` and `plan` build on.
-- ADR 049 — the three-PR roadmap (PR #1 ships the pack; PR #2 surfaces `my-plans`; PR #3 adds frontier-gap detection).
+- [`helmdeck://context-budgets`](../reference/mcp-resources.md) — the per-model budgets that drive catalog compaction.
+- ADR 049 — intent decomposition (`helmdeck.plan` shipped; frontier-gap detection deferred). ADR 050 — the LLM context manager that keeps the planner working on free models.

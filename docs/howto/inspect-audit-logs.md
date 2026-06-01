@@ -268,4 +268,4 @@ Run this from a cron job or systemd timer. No code change required. Automated re
 - [Manage credentials in the vault](./manage-vault-credentials.md) — for the vault REST surface that produces these `credential_usage_log` rows
 - [Configure LLM providers](./configure-llm-providers.md) — for the gateway that produces `provider_calls`
 - [Architecture overview §2 Request flows](../reference/architecture.md#2-request-flows) — where audit writes happen in the request flow (always after the side effect, always unconditional)
-- [ADR 013 — OpenTelemetry with GenAI conventions](../adrs/013-opentelemetry-with-genai-conventions.md) — the longer-term observability story
+- [ADR 013 — OpenTelemetry with GenAI conventions](../adrs/013-opentelemetry-genai-observability.md) — the longer-term observability story

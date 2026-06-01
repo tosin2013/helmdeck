@@ -54,7 +54,7 @@ Lists every MCP server helmdeck knows about — both auto-discovered (the built-
 
 ### 5. Capability Packs (`/admin/packs`)
 
-The **read-only catalog** of all 38 packs grouped by namespace (browser, web, repo, github, slides, doc, desktop, vision, fs, shell, http, research, language, blog, podcast, content). Click any pack to see its schema. There is no in-UI execution today (Test Runner is [tracked as T606a](/TASKS#phase-6--management-ui-weeks-1720)) — for now, drive packs from your MCP client or a `curl`.
+The **read-only catalog** of all 52 packs grouped by namespace (orchestration meta-packs, browser, web, research, slides, github, blog, podcast, image, stock, video, repo, fs, shell, http, doc, desktop, vision, language, content). Click any pack to see its schema. There is no in-UI execution today (Test Runner is [tracked as T606a](/TASKS#phase-6--management-ui-weeks-1720)) — for now, drive packs from your MCP client or a `curl`.
 
 ### 6. Credential Vault (`/admin/vault`)
 
@@ -176,6 +176,16 @@ This is your reach-for-it page when something goes wrong: the audit log records 
 ### 10. Artifact Explorer (`/artifacts`)
 
 Lists pack output artifacts (screenshots, PDFs, videos, scrape results). Inline image preview, download button, and a **delete (trash) button** to remove a single artifact on demand — handy for clearing large or one-off outputs without waiting for the TTL janitor to age them out. Filter by pack and date range. Useful when an MCP client returns just an artifact key — paste the key here to see the contents.
+
+### 11. Routing Memory (`/memory`)
+
+New in v0.22.0 (ADR 047/048). This panel surfaces what helmdeck has *learned* about the current caller and what facts it has stored:
+
+- **Learned defaults** — the per-caller projection behind `helmdeck://my-defaults`: which packs and pipelines this caller runs most, and the most-used value for each learnable input (`persona`, `audience`, `model`, `theme`, …). This is what `helmdeck.route`/`helmdeck.plan` use to pre-fill `suggested_inputs`.
+- **Stored facts** — the categories and counts behind `helmdeck://my-memory`, written via `helmdeck.memory_store`.
+- **Forget** — clear all history, or scope the clear to one pack/pipeline (the UI calls the same surface as [`helmdeck.memory_forget`](/reference/packs/helmdeck/memory-forget)). This never touches pack output caches or vault credentials.
+
+Use it to audit personalization before a tenant handoff, or to reset a caller's learned defaults when starting a new project context. For the agent-facing side, see [Route a request and read gap warnings](/howto/routing-and-gap-analysis) and [Store agent facts](/howto/agent-facts).
 
 ## Mint a JWT for your MCP client (the most-asked operation)
 

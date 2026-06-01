@@ -15,6 +15,62 @@ same conversation.
 
 ---
 
+## Orchestration meta-packs
+
+These four packs help the agent **pick and sequence** the right tool. The agent normally invokes `helmdeck.route` and `helmdeck.plan` automatically from a natural-language prompt — use the templates below only to *force* an explicit routing/decomposition step. `helmdeck.memory_store` and `helmdeck.memory_forget` are genuinely user-driven.
+
+#### `helmdeck.route` — recommend the best pack/pipeline (explicit override)
+
+**Template**
+```
+Use helmdeck__helmdeck-route to recommend the best tool for: {{INTENT}}. Use model {{MODEL}}.
+```
+
+**Variables**
+- `{{INTENT}}` — the single natural-language intent (input `user_intent`, required).
+- `{{MODEL}}` — a routable `provider/model` id, e.g. `openrouter/auto` (input `model`, required).
+
+**Notes** — returns a recommendation + alternatives + a `gap_warning` when nothing fits; the agent normally calls this implicitly. Needs an AI gateway.
+
+#### `helmdeck.plan` — decompose a multi-step request (explicit override)
+
+**Template**
+```
+Use helmdeck__helmdeck-plan to break this into steps: {{INTENT}}. Use model {{MODEL}}.
+```
+
+**Variables**
+- `{{INTENT}}` — the multi-action request (input `user_intent`, required).
+- `{{MODEL}}` — a routable `provider/model` id (input `model`, required).
+
+**Notes** — returns `steps[]` + `rewritten_prompt` + `complexity`; pipeline-aware. The agent normally calls this implicitly for multi-action prompts. Needs an AI gateway.
+
+#### `helmdeck.memory_store` — remember a durable fact
+
+**Template**
+```
+Use helmdeck to remember that {{FACT}} (key "{{KEY}}", category {{CATEGORY}}).
+```
+
+**Variables**
+- `{{KEY}}` — short identifier (input `key`, required).
+- `{{FACT}}` — the fact text (input `value`, required).
+- `{{CATEGORY}}` — optional bucket, default `user_facts` (input `category`; `pack_history`/`pipeline_history` are reserved).
+
+#### `helmdeck.memory_forget` — clear learned defaults
+
+**Template**
+```
+Use helmdeck to forget {{SCOPE}}.
+```
+
+**Variables**
+- `{{SCOPE}}` — `all` / `packs` / `pipelines` / `pack:<id>` / `pipeline:<id>` / `key:<exact-key>` (input `scope`, optional, default `all`).
+
+**Notes** — clears routing/audit history only; never touches pack caches or vault credentials.
+
+---
+
 ## Browser
 
 #### `browser.screenshot_url` — screenshot a URL
@@ -116,6 +172,22 @@ Use helmdeck__content-ground to fact-check and rewrite this markdown, citing sou
 
 ## Slides
 
+#### `slides.outline` — prose → structured Marp deck
+
+**Template**
+```
+Use helmdeck__slides-outline to turn this into a structured Marp deck (title "{{TITLE}}", persona {{PERSONA}}) using model {{MODEL}}:
+{{CONTENT}}
+```
+
+**Variables**
+- `{{CONTENT}}` — the prose/markdown to restate as slides (input `content`, required).
+- `{{TITLE}}` — deck title; guarantees a title slide (input `title`, optional).
+- `{{PERSONA}}` — `general` | `technical` | `marketing` | `executive` | `educational` or freeform (input `persona`, optional).
+- `{{MODEL}}` — a routable `provider/model` id (input `model`, required).
+
+**Notes** — feed prose through this FIRST; `slides.render`/`narrate` split only on `---`. Needs an AI gateway.
+
 #### `slides.render` — Marp deck → PDF/PPTX/HTML
 
 **Template**
@@ -186,6 +258,19 @@ Use helmdeck__github-create-release on {{REPO}} for tag {{TAG}} named "{{NAME}}"
 
 **Notes** — needs a vault GitHub PAT.
 
+#### `github.get_issue` — read one issue by number
+
+**Template**
+```
+Use helmdeck__github-get-issue to fetch issue #{{NUMBER}} from {{REPO}}.
+```
+
+**Variables**
+- `{{REPO}}` — `owner/name` (input `repo`, required).
+- `{{NUMBER}}` — the issue number (input `issue_number`, required).
+
+**Notes** — read-through cached 5 min; pairs with `swe.solve` for issue→PR pipelines. Needs vault `github-token` for private repos.
+
 #### `github.list_issues` — list issues
 
 **Template**
@@ -251,6 +336,22 @@ Use helmdeck__email-send to email {{TO}} with subject "{{SUBJECT}}" and body:
 ---
 
 ## Blog
+
+#### `blog.rewrite_for_audience` — source doc → original blog post
+
+**Template**
+```
+Use helmdeck__blog-rewrite-for-audience to rewrite this for {{AUDIENCE}} ({{ANGLE}}) using model {{MODEL}}:
+{{SOURCE_CONTENT}}
+```
+
+**Variables**
+- `{{SOURCE_CONTENT}}` — the source markdown (input `source_content`, required).
+- `{{AUDIENCE}}` — who the post is for (input `audience`, required).
+- `{{ANGLE}}` — the editorial angle/thesis (input `angle`, optional).
+- `{{MODEL}}` — a routable `provider/model` id (input `model`, required).
+
+**Notes** — not a summarizer; stays grounded in the source. Chain `content.ground` (rewrite:false) for citations, then `blog.publish`. Needs an AI gateway.
 
 #### `blog.publish` — render/publish a post
 
@@ -319,6 +420,20 @@ Use helmdeck__stock-search to find {{COUNT}} {{ORIENTATION}} photos of {{QUERY}}
 ---
 
 ## Video
+
+#### `hyperframes.compose` — description → HyperFrames composition
+
+**Template**
+```
+Use helmdeck__hyperframes-compose to generate a {{ASPECT_RATIO}} composition for: {{DESCRIPTION}}. Use model {{MODEL}}.
+```
+
+**Variables**
+- `{{DESCRIPTION}}` — plain-language description of the video (input `description`, required).
+- `{{ASPECT_RATIO}}` — `16:9` | `9:16` | `1:1` (input `aspect_ratio`, optional).
+- `{{MODEL}}` — a routable `provider/model` id (input `model`, required).
+
+**Notes** — returns `composition_html`; feed it to `hyperframes.render`. Pass `audio_url` (e.g. a `podcast.generate` URL) for narration. Needs an AI gateway.
 
 #### `hyperframes.render` — HTML/CSS/JS composition → MP4
 

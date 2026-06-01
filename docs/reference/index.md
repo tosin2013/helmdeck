@@ -15,12 +15,16 @@ Information-oriented lookup. These pages are precise, complete, and dry — opti
 ## Pack catalog
 
 - **[PACKS](../PACKS.md)** — input/output contract for every shipped capability pack.
-- **[SKILLS](../integrations/SKILLS.md)** — agent-facing reference. Load this into your MCP client's system prompt so the LLM knows how to use all 38 packs, retry transient errors, and chain sessions.
+- **[Per-pack reference](./packs/)** — one deep page per pack family (CLI invocation, error codes, session chaining).
+- **[Prompt templates](./prompt-templates/index.md)** — copy-and-fill prompts for every pack and pipeline.
+- **[MCP resources](./mcp-resources.md)** — read-only resources for catalog discovery, routing, learned defaults, memory, and context budgets.
+- **[Agent memory](./agent-memory.md)** — the per-caller memory delivery layer (ADR 039) packs opt into.
+- **[SKILLS](../integrations/SKILLS.md)** — agent-facing reference. Load this into your MCP client's system prompt so the LLM knows how to use all 52 packs, retry transient errors, and chain sessions.
 - **[Integrations index](../integrations/README.md)** — sidecar topology and per-client guide map.
 
 ## Architecture Decisions
 
-The 36 numbered ADRs in **[Architecture Decisions](/adrs)** are the source of truth for every architectural choice helmdeck has made — from the sidecar pattern (ADR 001) through the latest pack designs.
+The 49 numbered ADRs (001-050, no 042) in **[Architecture Decisions](/adrs)** are the source of truth for every architectural choice helmdeck has made — from the sidecar pattern (ADR 001) through the latest pipeline routing, memory, and LLM-context-manager designs (ADRs 047-050).
 
 ## Project tracking
 

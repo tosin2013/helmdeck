@@ -20,6 +20,21 @@ Problem-solving recipes. Each guide assumes you already have helmdeck installed 
 - **[Build a subprocess pack](./build-subprocess-pack.md)** — drop an executable + YAML manifest into `$HELMDECK_COMMAND_PACKS_DIR` to expose a typed pack in any language. Covers the subprocess protocol, manifest field reference, and security notes.
 - **[Use the helmdeck CLI](./use-the-helmdeck-cli.md)** — `helmdeck pack list/install/uninstall/marketplace/installed`. Wraps the marketplace REST endpoints with `HELMDECK_URL` + `HELMDECK_TOKEN` env-var auth, mirrors the Management UI's `/marketplace` panel for terminal use.
 
+## Routing, memory & orchestration (v0.22.0)
+
+The orchestration meta-packs and the memory/context subsystems shipped in v0.22.0 (ADRs 047-050):
+
+- **[Route a request and read gap warnings](./routing-and-gap-analysis.md)** — use `helmdeck.route` + `helmdeck://routing-guide` to pick the right pack/pipeline, read `suggested_inputs` pre-fills, and act on the `gap_warning` when nothing fits.
+- **[Decompose a multi-step request](./intent-decomposition.md)** — `helmdeck.plan` turns a multi-action prompt into ordered `steps[]` + a `rewritten_prompt`; when to iterate steps vs. feed the rewritten prompt back.
+- **[Run orchestration packs on free models](./free-models-and-context.md)** — the LLM context manager (ADR 050): per-model budgets, catalog compaction, the `compaction` output field, and diagnosing empty plans.
+- **[Store agent facts](./agent-facts.md)** — `helmdeck.memory_store` / `helmdeck.memory_forget` and the `helmdeck://my-memory` read surface: write, read, forget durable user facts across sessions.
+- **[Expose helmdeck memory to OpenClaw](./openclaw-memory.md)** — wire the OpenClaw memory bridge so an agent's `memory_search` hits helmdeck's stored facts.
+- **[OpenClaw memory corpus bridge](./openclaw-memory-corpus.md)** — the QMD corpus endpoint that backs OpenClaw `memory_search` (ADR 048 PR #3).
+
+## Pipelines
+
+- **[When a pipeline fails](./when-a-pipeline-fails.md)** — read `failure_class` (`caller_fixable` / `pack_bug` / `transient` / `state_changed`) + `failure_reason`, and recover with `helmdeck__pipeline-rerun`.
+
 ## Client integrations
 
 Wire helmdeck into your MCP-capable client of choice:

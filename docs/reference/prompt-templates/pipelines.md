@@ -96,22 +96,50 @@ markdown = {{MARKDOWN}}
 **Variables**
 - `{{MARKDOWN}}` — the markdown to fact-check + rewrite, then slide (input `markdown`, required).
 
-**Notes** — runs `content.ground` (rewrite) → `slides.render` (PDF). Needs the Firecrawl overlay for grounding.
+**Notes** — `content.ground` (citation-only) → `slides.outline` → `slides.render` (PDF). Needs the Firecrawl overlay for grounding. Optional inputs: `persona`, `audience`, `angle`, `title`, `author`, `export_outline`, `include_image_prompts`.
 
-#### `builtin.grounded-blog` — cite markdown's claims, then save it as a blog-post artifact
+#### `builtin.brief-rewrite-blog` — expand a brief into an original blog post
 
 **Template**
 ```
-Use helmdeck__pipeline-run to run the builtin.grounded-blog pipeline with inputs:
-markdown = {{MARKDOWN}}
+Use helmdeck__pipeline-run to run the builtin.brief-rewrite-blog pipeline with inputs:
+brief = {{BRIEF}}
+audience = {{AUDIENCE}}
 title = {{TITLE}}
 ```
 
 **Variables**
-- `{{MARKDOWN}}` — the markdown to ground (input `markdown`, required).
-- `{{TITLE}}` — blog post title (input `title`, required).
+- `{{BRIEF}}` — a pasted brief/pitch/outline (Title Idea / Hook / What to Cover / Target Audience) (input `brief`, required).
+- `{{AUDIENCE}}` — who the post is for (input `audience`, required).
+- `{{TITLE}}` — blog post title (input `title`, required). Optional: `angle`, `persona`.
 
-**Notes** — `content.ground` (rewrite) → `blog.publish` (markdown artifact by default). `content.ground` adds `[source](url)` citations to the claims it can verify and tightens those sentences — it does **not** rewrite the post into a new voice or structure, and unverified claims are reported (in `skipped`) and left as-is. `blog.publish` saves a markdown file by default; to publish to a Ghost blog, clone the pipeline and add a `credential` + `host` (see [Customizing a built-in](#customizing-a-built-in-private-repos-models-voices)).
+**Notes** — `blog.rewrite_for_audience` (expands the brief into an original post) → `content.ground` (citation-only) → `blog.publish` (markdown artifact). **Replaces the old `builtin.grounded-blog`**, which only annotated whatever it received. For a finished draft that just needs citations, call `content.ground` directly. Clone with a `credential` + `host` to publish to Ghost.
+
+#### `builtin.grounded-narrate` — fact-check markdown, render a narrated video
+
+**Template**
+```
+Use helmdeck__pipeline-run to run the builtin.grounded-narrate pipeline with inputs:
+markdown = {{MARKDOWN}}
+```
+
+**Variables**
+- `{{MARKDOWN}}` — the markdown to ground, outline, and narrate (input `markdown`, required). Optional: `persona`, `audience`, `angle`, `title`, `author`, `export_outline`, `include_image_prompts`.
+
+**Notes** — `content.ground` (citation-only) → `slides.outline` → `slides.narrate`. Falls back to silent video without an `elevenlabs-key`. Needs Firecrawl for grounding.
+
+#### `builtin.grounded-podcast` — fact-check markdown, generate a podcast
+
+**Template**
+```
+Use helmdeck__pipeline-run to run the builtin.grounded-podcast pipeline with inputs:
+markdown = {{MARKDOWN}}
+```
+
+**Variables**
+- `{{MARKDOWN}}` — the markdown to ground, then voice as a podcast (input `markdown`, required).
+
+**Notes** — `content.ground` (citation-only) → `podcast.generate` (default 2-speaker voices). Silent MP3 without an `elevenlabs-key`. Needs Firecrawl.
 
 #### `builtin.research-deck` — research a topic, render it as a deck
 
@@ -124,7 +152,7 @@ query = {{QUERY}}
 **Variables**
 - `{{QUERY}}` — the topic to deep-research (input `query`, required).
 
-**Notes** — `research.deep` → `slides.render` (PDF). Needs the Firecrawl overlay.
+**Notes** — `research.deep` → `slides.outline` → `slides.render` (PDF). Needs the Firecrawl overlay.
 
 #### `builtin.research-narrate` — research a topic, render a narrated video
 
@@ -137,7 +165,7 @@ query = {{QUERY}}
 **Variables**
 - `{{QUERY}}` — the topic to research (input `query`, required).
 
-**Notes** — `research.deep` → `slides.narrate`. Narrates silently without an `elevenlabs-key`.
+**Notes** — `research.deep` → `slides.outline` → `slides.narrate`. Narrates silently without an `elevenlabs-key`.
 
 #### `builtin.research-podcast` — research a topic, generate a podcast
 
@@ -163,22 +191,24 @@ query = {{QUERY}}
 **Variables**
 - `{{QUERY}}` — the topic to research, ground, and slide (input `query`, required).
 
-**Notes** — `research.deep` → `content.ground` (rewrite) → `slides.render`.
+**Notes** — `research.deep` → `content.ground` (citation-only) → `slides.outline` → `slides.render`.
 
-#### `builtin.research-blog` — research a topic, save the synthesis as a blog-post artifact
+#### `builtin.research-rewrite-blog` — research a topic, write an original blog post
 
 **Template**
 ```
-Use helmdeck__pipeline-run to run the builtin.research-blog pipeline with inputs:
+Use helmdeck__pipeline-run to run the builtin.research-rewrite-blog pipeline with inputs:
 query = {{QUERY}}
+audience = {{AUDIENCE}}
 title = {{TITLE}}
 ```
 
 **Variables**
 - `{{QUERY}}` — the topic to research (input `query`, required).
-- `{{TITLE}}` — blog post title (input `title`, required).
+- `{{AUDIENCE}}` — who the post is for (input `audience`, required).
+- `{{TITLE}}` — blog post title (input `title`, required). Optional: `angle`, `persona`.
 
-**Notes** — `research.deep` → `blog.publish`. Saves a markdown artifact by default; clone with a `credential` + `host` to publish to Ghost.
+**Notes** — `research.deep` → `blog.rewrite_for_audience` → `content.ground` (citation-only) → `blog.publish`. **Replaces `builtin.research-blog`**, which saved the raw synthesis untailored to an audience. Clone with a `credential` + `host` to publish to Ghost.
 
 ---
 
@@ -195,37 +225,41 @@ url = {{URL}}
 **Variables**
 - `{{URL}}` — the page to scrape to markdown, then slide (input `url`, required).
 
-**Notes** — `web.scrape` → `slides.render`. Needs the Firecrawl overlay.
+**Notes** — `web.scrape` → `slides.outline` → `slides.render`. Needs the Firecrawl overlay.
 
-#### `builtin.scrape-ground-blog` — scrape a URL, cite its claims, save a blog-post artifact
+#### `builtin.scrape-rewrite-blog` — scrape a URL, write an original blog post
 
 **Template**
 ```
-Use helmdeck__pipeline-run to run the builtin.scrape-ground-blog pipeline with inputs:
+Use helmdeck__pipeline-run to run the builtin.scrape-rewrite-blog pipeline with inputs:
 url = {{URL}}
+audience = {{AUDIENCE}}
 title = {{TITLE}}
 ```
 
 **Variables**
 - `{{URL}}` — the page to scrape (input `url`, required).
-- `{{TITLE}}` — blog post title (input `title`, required).
+- `{{AUDIENCE}}` — who the post is for (input `audience`, required).
+- `{{TITLE}}` — blog post title (input `title`, required). Optional: `angle`, `persona`.
 
-**Notes** — `web.scrape` → `content.ground` (rewrite) → `blog.publish`. Needs Firecrawl. `content.ground` cites + tightens verified claims (not a voice/structure rewrite); `blog.publish` saves a markdown artifact by default — clone with a `credential` + `host` to publish to Ghost.
+**Notes** — `web.scrape` → `blog.rewrite_for_audience` → `content.ground` (citation-only) → `blog.publish`. Needs Firecrawl. **Replaces `builtin.scrape-ground-blog`**, which produced a citation-strengthened transcription that read as republishing the page. Clone with a `credential` + `host` to publish to Ghost.
 
-#### `builtin.doc-ground-blog` — parse a document, cite its claims, save a blog-post artifact
+#### `builtin.doc-rewrite-blog` — parse a document, write an original blog post
 
 **Template**
 ```
-Use helmdeck__pipeline-run to run the builtin.doc-ground-blog pipeline with inputs:
+Use helmdeck__pipeline-run to run the builtin.doc-rewrite-blog pipeline with inputs:
 source_url = {{SOURCE_URL}}
+audience = {{AUDIENCE}}
 title = {{TITLE}}
 ```
 
 **Variables**
 - `{{SOURCE_URL}}` — URL of the document (PDF/DOCX/PPTX/…) to parse (input `source_url`, required).
-- `{{TITLE}}` — blog post title (input `title`, required).
+- `{{AUDIENCE}}` — who the post is for (input `audience`, required).
+- `{{TITLE}}` — blog post title (input `title`, required). Optional: `angle`, `persona`.
 
-**Notes** — `doc.parse` → `content.ground` (rewrite) → `blog.publish`. Needs the Docling overlay (parse) + Firecrawl (ground). `content.ground` cites + tightens verified claims (not a voice/structure rewrite); `blog.publish` saves a markdown artifact by default — clone with a `credential` + `host` to publish to Ghost.
+**Notes** — `doc.parse` → `blog.rewrite_for_audience` → `content.ground` (citation-only) → `blog.publish`. Needs the Docling overlay (parse) + Firecrawl (ground). **Replaces `builtin.doc-ground-blog`**, which produced a transcription rather than an original post. `source_url` must have a document extension (web pages → `scrape-rewrite-blog`). Clone with a `credential` + `host` to publish to Ghost.
 
 ---
 
@@ -295,3 +329,69 @@ composition_html = {{COMPOSITION_HTML}}
 - `{{COMPOSITION_HTML}}` — the HTML/CSS/JS composition to render (input `composition_html`, required). **Your agent authors this** (it's not hand-typed) following the HyperFrames contract; or use `builtin.prompt-video` to generate it from a description. Embed an `<audio src>` (e.g. a `podcast.generate` `audio_url`) for narrated video.
 
 **Notes** — single step `hyperframes.render` (1080p, 16:9). Short-form only (≤12 min, 512 MiB).
+
+---
+
+## Coding pipelines (beta — ADR 046)
+
+These wrap `swe.solve` (and `github.*`) for autonomous code changes. Each requires an LLM gateway key; the GitHub-touching ones also need a `github-token` vault credential.
+
+#### `builtin.issue-to-pr` — read a GitHub issue, open a PR that addresses it
+
+**Template**
+```
+Use helmdeck__pipeline-run to run the builtin.issue-to-pr pipeline with inputs:
+repo = {{REPO}}
+issue_number = {{ISSUE_NUMBER}}
+```
+
+**Variables**
+- `{{REPO}}` — `owner/name` (input `repo`, required).
+- `{{ISSUE_NUMBER}}` — the issue number to address (input `issue_number`, required).
+
+**Notes** — `github.get_issue` → `swe.solve` (`pull_request` mode) → opens a PR, returns `pr_url`. Single-issue scope; the batch loop is ADR 044 slice 2. Needs `github-token` + an LLM gateway.
+
+#### `builtin.repo-solve-pr` — repo + task → pull request
+
+**Template**
+```
+Use helmdeck__pipeline-run to run the builtin.repo-solve-pr pipeline with inputs:
+repo_url = {{REPO_URL}}
+task = {{TASK}}
+```
+
+**Variables**
+- `{{REPO_URL}}` — the git repo to work in (input `repo_url`, required).
+- `{{TASK}}` — free-form task description (input `task`, required).
+
+**Notes** — single step `swe.solve` (`pull_request` mode): clones, runs the agent loop, pushes a branch, opens a PR. For work not yet tracked as an issue.
+
+#### `builtin.repo-solve-patch` — repo + task → diff (safe preview)
+
+**Template**
+```
+Use helmdeck__pipeline-run to run the builtin.repo-solve-patch pipeline with inputs:
+repo_url = {{REPO_URL}}
+task = {{TASK}}
+```
+
+**Variables**
+- `{{REPO_URL}}` — the git repo (input `repo_url`, required).
+- `{{TASK}}` — task description (input `task`, required).
+
+**Notes** — `swe.solve` (`patch` mode): returns the unified diff WITHOUT pushing or opening a PR. Use for human review before anything reaches the remote.
+
+#### `builtin.repo-solve-branch` — repo + task → pushed branch (no PR)
+
+**Template**
+```
+Use helmdeck__pipeline-run to run the builtin.repo-solve-branch pipeline with inputs:
+repo_url = {{REPO_URL}}
+task = {{TASK}}
+```
+
+**Variables**
+- `{{REPO_URL}}` — the git repo (input `repo_url`, required).
+- `{{TASK}}` — task description (input `task`, required).
+
+**Notes** — `swe.solve` (`branch` mode): pushes a branch with the agent's commits but does NOT open a PR. Use when PR creation lives in another system (GitLab MR, a custom bot).

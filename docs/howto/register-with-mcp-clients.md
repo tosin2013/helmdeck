@@ -73,7 +73,7 @@ After registering, verify end-to-end. Pick the simplest pack — a screenshot of
 
 Expected: a JSON response with `artifact_key: "browser.screenshot_url/<hash>-screenshot.png"` and `size_bytes` in the 5–20 KB range. If your client surfaces tool calls, you should see exactly one call to `browser.screenshot_url` with `url=https://example.com`.
 
-If that works, helmdeck is wired correctly and all 38 packs are available.
+If that works, helmdeck is wired correctly and all 52 packs are available.
 
 ## Troubleshooting
 
@@ -133,4 +133,4 @@ If you fork or repackage helmdeck, you'll need your own namespace (`io.github.<y
 - [Install helmdeck via the CLI](../tutorials/install-cli.md) — operator-side install (run this first)
 - [Upgrade helmdeck](./upgrade-helmdeck.md) — version-bump procedure for an existing operator
 - [Troubleshoot the install](./troubleshoot-install.md) — symptom-first table for known sharp edges
-- [Pack reference](../reference/packs/) — all 38 packs with input/output schemas
+- [Pack reference](../reference/packs/) — all 52 packs with input/output schemas

@@ -12,7 +12,7 @@ For the architectural shape (request flow, fallback semantics), see [Architectur
 
 ## Prerequisites
 
-- A running helmdeck stack with `HELMDECK_KEYSTORE_KEY` set (32 hex bytes; **distinct from `HELMDECK_VAULT_KEY`** — separate encryption keys for separate purposes per [ADR 007](../adrs/007-credential-vault-with-placeholder-token-injection.md))
+- A running helmdeck stack with `HELMDECK_KEYSTORE_KEY` set (32 hex bytes; **distinct from `HELMDECK_VAULT_KEY`** — separate encryption keys for separate purposes per [ADR 007](../adrs/007-credential-vault-with-placeholder-tokens.md))
 - A JWT with `providers:*` scope
 - An API key from at least one upstream provider
 

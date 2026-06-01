@@ -55,7 +55,7 @@ Agents should peek before storing to avoid duplicates and to discover existing f
 }
 ```
 
-Only counts + recent keys are surfaced — the actual fact *values* aren't echoed here to keep the resource compact. To recall an individual fact value, an agent calls `helmdeck://my-memory` to discover the key, then fetches the value via the corresponding pack (helmdeck.memory_recall — coming in ADR 048 PR #3 alongside the OpenClaw corpus bridge).
+Only counts + recent keys are surfaced — the actual fact *values* aren't echoed here to keep the resource compact. To recall an individual fact value today, an agent connected through the OpenClaw corpus bridge (ADR 048 PR #3) uses OpenClaw's `memory_search` against the QMD endpoint; there is no dedicated `helmdeck.memory_recall` pack (that surface was folded into the corpus bridge — see [`openclaw-memory-corpus.md`](./openclaw-memory-corpus.md)).
 
 ## Forget — the cleanup surface
 

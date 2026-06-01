@@ -1,6 +1,6 @@
 # 49. Intent Decomposition and the Self-Learning Plan Pack
 
-**Status**: Accepted (slice 1 shipped: `helmdeck.plan` pack with pipeline-aware decomposition; self-learning projection and frontier-gap detection are PR #2 and #3 of this roadmap)
+**Status**: Accepted — shipped in v0.22.0: `helmdeck.plan` pack with pipeline-aware decomposition (PR #1), and the `helmdeck://my-plans` self-learning projection (delivered via ADR 050 PR #3). Frontier-gap detection (`expert_baseline` / `gap_signal`, PR #3) remains deferred.
 **Date**: 2026-06-01
 **Domain**: pack-engine, pipelines, mcp, agent-integrations, memory
 

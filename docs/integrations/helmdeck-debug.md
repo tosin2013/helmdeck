@@ -60,7 +60,7 @@ everything under `skills/*/SKILL.md`:
 - **Claude Code:** `./scripts/configure-claude.sh --project <dir>` installs every
   skill as an invocable skill under `<dir>/.claude/skills/`. Use
   `--skill helmdeck-debug` to install just this one. (See
-  [claude-code.md](./claude-code) §3.)
+  [claude-code.md](./claude-code.md) §3.)
 
 After any helmdeck release, re-run the installer so the `helmdeckVersion` stamp
 and the pipeline/pack coverage refresh.

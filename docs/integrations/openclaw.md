@@ -6,7 +6,7 @@ keywords: [helmdeck, OpenClaw, MCP integration, SSE, JWT, Phase 5.5 code edit lo
 
 # OpenClaw
 
-> **Status (chat UI path):** ✅ Verified on OpenClaw `2026.4.18` with helmdeck `1b91f6c`. Gateway chat UI at `http://localhost:18789` sees the full 36-pack catalog (prefixed `helmdeck__`) and SSE handshake succeeds.
+> **Status (chat UI path):** ✅ Verified on OpenClaw `2026.4.18` with helmdeck `1b91f6c`. Gateway chat UI at `http://localhost:18789` sees the full 52-pack catalog (prefixed `helmdeck__`) and SSE handshake succeeds.
 > **Status (CLI path):** ⚠️ Regressed on OpenClaw `≥ 2026.4.18`. `openclaw agent --agent main …` does not load bundled MCP tools — only 24 built-in tools appear, no `helmdeck__*`. Suspect upstream commit: `0e7a992d` (`fix(agents): filter bundled tools through final policy`). Use the chat UI for end-to-end agent runs until upstream fixes the CLI path.
 > **Last full end-to-end green:** 2026-04-10 with OpenClaw `2026.4.10` + helmdeck `v0.6.0`.
 >
@@ -191,7 +191,7 @@ docker compose -f /root/openclaw/docker-compose.yml run --rm -T openclaw-cli age
   --message "List every MCP tool whose name starts with helmdeck__. Just the names, one per line."
 ```
 
-You should see the assistant reply listing **39 `helmdeck__*` tools** — the 36 capability packs plus 3 async wrappers (`helmdeck__pack-start`, `helmdeck__pack-status`, `helmdeck__pack-result`).
+You should see the assistant reply listing the full `helmdeck__*` catalog — the 52 capability packs (42 without a gateway) plus the 3 async wrappers (`helmdeck__pack-start`, `helmdeck__pack-status`, `helmdeck__pack-result`) and the pipeline MCP tools.
 
 > 🧩 **Naming convention**: MCP tool names can't contain dots, so helmdeck's `browser.screenshot_url` becomes `helmdeck__browser-screenshot_url` over MCP. The mapping is mechanical — `<family>.<action>` → `helmdeck__<family>-<action>`. Pack reference pages list both forms.
 
@@ -203,6 +203,8 @@ If the response says "I don't have access to MCP tools" or returns 0 helmdeck to
 ## 5c. Load the agent skills
 
 The helmdeck pack catalog, schemas, error-handling rules, session-chaining contract, and freshness contract live in [`SKILLS.md`](./SKILLS). The `configure-openclaw.sh` script you ran in §4 already stamped this file into `~/.openclaw/skills/helmdeck/SKILL.md` inside the OpenClaw gateway container, where the agent loads it automatically every turn.
+
+> **v0.22.0 — routing & memory:** the agent can now route, plan, and remember through helmdeck. See [Route a request and read gap warnings](/howto/routing-and-gap-analysis), [Decompose a multi-step request](/howto/intent-decomposition), [Store agent facts](/howto/agent-facts), and [Expose helmdeck memory to OpenClaw](/howto/openclaw-memory) for the `memory_search` bridge. To run these orchestration packs on free models, read [Run orchestration packs on free models](/howto/free-models-and-context).
 
 **You don't have to do anything here on a first install.** This section is for the refresh case — after pulling a new helmdeck release that grew the catalog or updated the contracts, re-stamp the skill so OpenClaw sees the new content:
 

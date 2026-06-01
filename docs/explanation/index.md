@@ -15,7 +15,7 @@ Understanding-oriented background. These pages step back from the immediate task
 
 ## See also
 
-The 36 [Architecture Decision Records](/adrs) under Reference are also explanation-shaped — each one captures the context, decision, and consequences of one architectural choice. They're filed under Reference because they're a structured catalog, but read individually they're explanation material.
+The 49 [Architecture Decision Records](/adrs) under Reference are also explanation-shaped — each one captures the context, decision, and consequences of one architectural choice. They're filed under Reference because they're a structured catalog, but read individually they're explanation material. The most recent (ADRs 047-050) explain the v0.22.0 routing, memory, intent-decomposition, and LLM-context-manager subsystems.
 
 ## What goes here
 

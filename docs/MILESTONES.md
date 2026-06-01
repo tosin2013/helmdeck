@@ -186,9 +186,20 @@ This phase validated the "host, don't rebuild" architecture from ADR 035 and add
 
 ---
 
+## Milestone: Post-6.5 shipped releases (v0.9 → v0.22)
+
+A rapid cadence of feature releases shipped on top of the Phase 6.5 base (all on the single-node Compose deployment; full detail in [RELEASES.md](RELEASES.md)):
+
+- [x] **v0.9–v0.12** — content packs (`blog.publish`, `podcast.generate`, `image.generate`), MCP resources (`models`, `image-models`, `voices`), image chaining, the Pack Test Runner UI, and the `cmd.*` subprocess pack type.
+- [x] **v0.13–v0.16** — community pack **marketplace** (signed catalog, `helmdeck pack install`, `/marketplace` UI, `helmdeck` CLI), `hyperframes.render`, `stock.search`, `email.send`, autonomous code-fix (`swe.solve`, ADR 046), and pipelines as a first-class resource (ADR 041).
+- [x] **v0.17–v0.21** — legible/recoverable pipeline failures (ADR 043/044), `slides.outline`, honest pipeline descriptions, the `helmdeck-debug` skill, live per-step progress + cancel, CPU profiles (ADR 045), and `hyperframes.compose`.
+- [x] **v0.22** — *agents that work on free models, with memory*: pipeline routing + memory (ADR 047), memory write surface + OpenClaw bridge (ADR 048), intent decomposition (ADR 049), and the LLM context manager (ADR 050). Catalog reaches **52 packs / 21 pipelines / 6 always-listed MCP resources**.
+
+---
+
 ## Milestone: `v1.0 — Kubernetes & GA` (Phase 7)
 
-**Status:** Phase 6.5 complete (v0.8.0 tagged). 36 packs ship. All pre-GA feature work is done. Phase 7 is the production-readiness push: Kubernetes deployment, Helm chart, scaling, TLS, external secrets, load testing, security audit.
+**Status:** Phase 6.5 complete (v0.8.0 tagged) and a long run of post-6.5 feature releases shipped through **v0.22.0** (52 packs, 21 pipelines). Phase 7 is the remaining production-readiness push: Kubernetes deployment, Helm chart, scaling, TLS, external secrets, load testing, security audit.
 
 ---
 
@@ -204,11 +215,11 @@ This phase validated the "host, don't rebuild" architecture from ADR 035 and add
 - [x] ~~**T807** Pre-packaged Chrome DevTools MCP / Playwright MCP entries~~ — **completed by T807a** (Phase 6.5). Playwright MCP bundled in the sidecar Dockerfile, auto-registered on session start. Chrome DevTools MCP is redundant — chromedp-based packs already drive CDP directly.
 - [ ] **T808** Firecracker isolation tier productionization
 - [ ] **T809** Lightpanda alternate browser engine evaluation
-- [ ] **T810** Pack marketplace registry model — `index.yaml` catalog, `helmdeck-pack.yaml` manifest schema, cosign trust verification, `HELMDECK_MARKETPLACE_URL` config *(ADR 034)*
-- [ ] **T811** `command` handler type — subprocess packs in any language (stdin JSON / stdout JSON protocol) with egress guard + audit
-- [ ] **T812** `helmdeck pack install/uninstall` CLI commands + `POST /api/v1/marketplace/install` endpoint
-- [ ] **T813** Marketplace UI panel — `/marketplace` route with browse-by-category, search, pack detail, install/uninstall, trust badges
-- [ ] **T814** Community marketplace repo (`tosin2013/helmdeck-marketplace`) with initial pack catalog + contribution guide
+- [x] **T810** Pack marketplace registry model — `index.yaml` catalog, `helmdeck-pack.yaml` manifest schema, cosign trust verification, `HELMDECK_MARKETPLACE_URL` config *(ADR 034)* — **shipped v0.13.0**
+- [x] **T811** `command` handler type — subprocess packs in any language (stdin JSON / stdout JSON protocol) with egress guard + audit — **shipped v0.12.0** (`cmd.*` packs)
+- [x] **T812** `helmdeck pack install/uninstall` CLI commands + `POST /api/v1/marketplace/install` endpoint — **shipped v0.13.0**
+- [x] **T813** Marketplace UI panel — `/marketplace` route with browse-by-category, search, pack detail, install/uninstall, trust badges — **shipped v0.13.0**
+- [x] **T814** Community marketplace repo (`tosin2013/helmdeck-marketplace`) with initial pack catalog + contribution guide — **shipped v0.13.0**
 - [ ] **T815** Pack ratings + install counts (requires marketplace-web frontend)
 - [ ] **T816** MCP Server Hosting framework — generic `helmdeck mcp install <server>` for community MCP servers with sandboxed execution; converges with ADR 034 marketplace *(ADR 035)*
 

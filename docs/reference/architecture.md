@@ -7,7 +7,7 @@ sidebar_position: 1
 
 # Architecture overview
 
-This page is the canonical architecture reference. It assumes the reader is an engineer or architect evaluating helmdeck for adoption — not a hands-on operator. For step-by-step setup, see the [tutorials](../tutorials/install-cli.md) and [how-to guides](../howto/index.md). For the *why* behind specific design decisions, see the [Architecture Decision Records](./adrs).
+This page is the canonical architecture reference. It assumes the reader is an engineer or architect evaluating helmdeck for adoption — not a hands-on operator. For step-by-step setup, see the [tutorials](../tutorials/install-cli.md) and [how-to guides](../howto/index.md). For the *why* behind specific design decisions, see the [Architecture Decision Records](../adrs).
 
 Five views, each answering a question architects ask first:
 
@@ -41,7 +41,7 @@ graph TB
         api["REST API<br/>/api/v1/*"]
         mcp_server["MCP server<br/>WS + SSE + stdio"]
         gateway["AI gateway<br/>OpenAI-compatible /v1/*"]
-        registry["Pack registry<br/>(38 packs)"]
+        registry["Pack registry<br/>(52 packs)"]
         vault["Credential vault<br/>(AES-256-GCM)"]
         sess_mgr["Session manager"]
         ui["Embedded React UI"]
@@ -107,6 +107,21 @@ graph TB
 
 The control plane is the **only** thing your agents talk to. Sidecars don't accept inbound traffic; agents don't reach Garage; LLMs don't see your raw prompts directly (everything routes through the gateway, which strips/injects credentials and writes audit rows).
 
+### 1.a Orchestration & memory subsystems (v0.22.0)
+
+Beyond the pack registry, the control plane hosts several subsystems that make the catalog usable by small models and learnable over time:
+
+| Subsystem | Package | Role | ADR |
+|---|---|---|---|
+| **Pipelines** | `internal/pipelines` | 21 curated, auto-seeded multi-step chains (`builtin.*`), run async with `${{ inputs.* }}` / `${{ steps.* }}` wiring; exposed as `helmdeck__pipeline-*` MCP tools. | 041 |
+| **Orchestration meta-packs** | `internal/packs/builtin/{route,plan,memory_store,memory_forget}.go` | `helmdeck.route` (recommend + gap analysis), `helmdeck.plan` (decompose), and the memory write/forget surface. | 047, 049 |
+| **Routing memory** | `internal/memory` + audit categories `pack_history` / `pipeline_history` / `plan_history` | Per-caller audit projection that powers learned defaults; surfaced via `helmdeck://my-defaults`, `helmdeck://my-plans`, and the `/memory` UI. | 047 |
+| **Memory write surface + OpenClaw bridge** | `internal/memory`, QMD corpus SSE endpoint | Durable user facts (`helmdeck://my-memory`) and an optional embedding sidecar exposing them to OpenClaw `memory_search`. | 048 |
+| **LLM context manager** | `internal/llmcontext` | Compacts the catalog projection to per-model budgets (tiered select + lexical rank + optional LLM filter) so orchestration packs work on free models; surfaced via `helmdeck://context-budgets`. | 050 |
+| **Marketplace** | `internal/marketplace` | Install community packs from a signed catalog at runtime (`helmdeck pack install`, `/marketplace` UI). | 038 |
+
+These add to the always-listed MCP resource set (`packs`, `sessions`, `voices`, `image-models`, `models`, plus the five v0.22.0 resources above). See the [MCP resources reference](./mcp-resources.md).
+
 ---
 
 ## 2. Request flows
@@ -143,7 +158,7 @@ sequenceDiagram
     API->>Reg: dispatch(pack_name, input)
     Reg->>Reg: validate input schema
     Reg->>Sess: acquire session
-    Sess->>Side: docker run --rm -d helmdeck-sidecar:0.10.0
+    Sess->>Side: docker run --rm -d helmdeck-sidecar:0.22.0
     Side-->>Sess: container ID + CDP endpoint
     Reg->>Vault: ResolveByName(actor, "credential-name") <br/>(only if pack needs creds)
     Vault-->>Reg: secret (decrypted, in-memory)
@@ -235,7 +250,7 @@ If you need provider-native shapes (e.g. Anthropic's `/v1/messages` or Gemini's 
 
 ### Today — single-node Docker Compose
 
-This is what `make install` produces. It's what every production install runs on as of v0.10.0.
+This is what `make install` produces. It's what every production install runs on as of v0.22.0.
 
 ```mermaid
 graph TB
@@ -441,8 +456,8 @@ If you're an architect comparing helmdeck against alternatives, read in this ord
 
 1. **This page** — system shape, request flow, security boundaries
 2. **[Why helmdeck](../explanation/why-helmdeck.md)** — the cost-positioning argument and the structural reasons cheap models can do frontier work
-3. **[ADRs 001–013](./adrs)** — the 13 core platform decisions (sidecar pattern, Go control plane, capability packs, AI gateway, MCP registry, vault, isolation tiers, observability)
-4. **[Capability pack reference](./packs)** — the 38-pack catalog with input/output schemas
+3. **[ADRs 001–013](../adrs)** — the 13 core platform decisions (sidecar pattern, Go control plane, capability packs, AI gateway, MCP registry, vault, isolation tiers, observability); the routing/memory/context subsystems are ADRs 047-050
+4. **[Capability pack reference](./packs)** — the 52-pack catalog with input/output schemas
 5. **[Security hardening](../SECURITY-HARDENING.md)** — the operational hardening checklist for a real deployment
 
 If you're scoping a deployment:
@@ -463,6 +478,6 @@ The diagrams above are abstractions over the actual code. If a diagram and the c
 - Auth: `internal/auth/jwt.go`
 - Vault: `internal/vault/vault.go`
 - Compose topology: `deploy/compose/compose.yaml`
-- Architecture decisions: [`docs/adrs/`](./adrs)
+- Architecture decisions: [`docs/adrs/`](../adrs)
 
 If you spot a divergence, please [open an issue](https://github.com/tosin2013/helmdeck/issues/new) — the diagrams are versioned with the docs, so a stale diagram is a real defect.

@@ -8,7 +8,7 @@ changefreq: monthly
 
 # Pack Demo Playbook — LLM Prompts for Testing Every Pack
 
-**Status:** v0.8.0 · 35 packs · validated against OpenClaw (23/23 pass)
+**Status:** v0.22.0 · 52 packs · originally validated against OpenClaw (23/23 pass)
 
 This playbook contains copy-pasteable prompts you can send to **any MCP client** (OpenClaw, Claude Code, Claude Desktop, Gemini CLI, Hermes Agent) connected to helmdeck. Each prompt exercises one pack and tells you what to expect. Use it to:
 
@@ -311,7 +311,7 @@ Browser automation for AI agents.
 
 # Key Features
 
-- 35 capability packs
+- 52 capability packs
 - Cross-provider computer use
 - Vault-aware credential injection
 

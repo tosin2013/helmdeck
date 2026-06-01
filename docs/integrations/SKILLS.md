@@ -1,6 +1,6 @@
 ---
 title: Agent skills (load into your MCP client prompt)
-description: Drop-in agent guidance for helmdeck's 41 capability packs. Teaches the LLM how to call each pack, retry transient errors, chain workflows, and file bug reports. Load this into your MCP client's system prompt.
+description: Drop-in agent guidance for helmdeck's 52 capability packs. Teaches the LLM how to call each pack, retry transient errors, chain workflows, and file bug reports. Load this into your MCP client's system prompt.
 keywords: [helmdeck, agent skills, MCP, system prompt, OpenClaw, Claude Code, Claude Desktop, Gemini CLI, capability packs, weak models]
 priority: 0.9
 changefreq: weekly
@@ -8,7 +8,7 @@ changefreq: weekly
 
 # Helmdeck Agent Skills
 
-**Load this file into your MCP client's system prompt or agent config.** It teaches the LLM how to use helmdeck's 41 capability packs correctly, retry transient errors, diagnose failures, chain multi-step workflows, and file bug reports.
+**Load this file into your MCP client's system prompt or agent config.** It teaches the LLM how to use helmdeck's 52 capability packs correctly, retry transient errors, diagnose failures, chain multi-step workflows, and file bug reports.
 
 The intent is the same across every client: this file's content must be in the model's context **before** it sees the user's first prompt. The mechanism varies — pick the subsection that matches your client.
 
@@ -83,7 +83,7 @@ Find the client's "system prompt" / "custom instructions" / "agent context" fiel
 
 ## You are connected to helmdeck
 
-Helmdeck is a browser automation and AI capability platform. You have access to 43 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
+Helmdeck is a browser automation and AI capability platform. You have access to up to 52 capability packs exposed as MCP tools (42 when no AI gateway is configured — the 10 LLM/vision packs are gated on a gateway). Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
 
 ## Pack catalog
 
@@ -217,6 +217,16 @@ Beyond packs, helmdeck exposes read-only resources for catalog discovery. Use `r
 - `helmdeck://voices` — ElevenLabs voice catalog (id, name, labels, preview URL) for `podcast.generate`'s `speakers` and `slides.narrate`'s `voice_id`. Requires `elevenlabs-key` in the vault.
 - `helmdeck://image-models` (v0.12.0 #158) — Curated fal.ai model catalog for `image.generate` and the chained image inputs (`cover_image_model`, `hero_image_model`). Each entry has cost, p50 latency, max resolution, capabilities. **Read this before picking a non-default model** so you understand cost/quality trade-offs.
 - `helmdeck://models` (ADR 043) — Chat-completion models the gateway can route to **right now**, as full `provider/model` IDs (e.g. `openrouter/minimax/minimax-m2.7`). Use one **verbatim** for any pack's `model` input (`content.ground`, `research.deep`, `blog.publish` prompt mode, `web.test`) or a pipeline step's `model`. Pick from here rather than guessing — an unroutable model fails with `invalid_input`. Providers like minimax/groq are reached **via** `openrouter/…`, not as bare providers.
+
+### Routing, memory & context resources (v0.22.0, ADRs 047-050)
+
+These five resources are **always listed** (they return an empty-state payload with a `note` when there's nothing yet). See [`reference/mcp-resources.md`](/reference/mcp-resources) for the full payload shapes.
+
+- `helmdeck://routing-guide` (ADR 047) — The structured catalog the agent queries to pick the right pipeline/pack. Each entry carries `accepts` / `produces` / `intent_keywords` / `typical_use` / `limitations` (+ `supersedes` for pipelines). **Query this first** for a multi-step request; prefer a pipeline over chaining packs when its `supersedes` lists those packs. This is what `helmdeck.route` / `helmdeck.plan` read internally.
+- `helmdeck://my-defaults` (ADR 047) — Per-caller projection over recent pack/pipeline runs: `packs[]` and `pipelines[]` ranked by frequency, each with `common_inputs` (the most-used value per learnable field — persona, audience, model, theme, …). **Read before asking the user for inputs that already have a learned default** — pre-fill and confirm rather than re-asking.
+- `helmdeck://my-memory` (ADR 048) — Per-caller index of user facts stored via `helmdeck.memory_store`: `categories[]` with name + count + `recent_keys[]`. **Read before storing a new fact** to avoid duplicates or re-asking. Audit categories are excluded (they surface via `my-defaults`).
+- `helmdeck://context-budgets` (ADR 050) — Per-model prompt budgets `llmcontext` applies when compacting the catalog for LLM-backed packs: `budgets[]` (`{model, input_tokens, output_tokens, max_catalog_bytes, tier}`) + a `fallback` + a `policy` string. Tier A = no compaction; Tier B/C = aggressive trim. Read when a free-model plan saw a slim catalog, or when adding a model id to your deployment.
+- `helmdeck://my-plans` (ADR 049 + 050) — Per-caller projection over `plan_history`: `groups[]` of intent-sha cohorts with count + most-frequent complexity + top tools + last-seen + models used. Use to audit the planner's behavior and spot stable learned plans.
 
 ## Chained image generation (v0.12.0 #146)
 

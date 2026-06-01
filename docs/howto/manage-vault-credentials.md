@@ -271,5 +271,5 @@ This is intentional: rotation is a *new credential* with a fresh fingerprint, no
 
 - [Configure LLM providers](./configure-llm-providers.md) — LLM API keys live in a *separate* keystore (T203), not the credential vault. Different REST surface, different encryption key (`HELMDECK_KEYSTORE_KEY` vs `HELMDECK_VAULT_KEY`).
 - [Inspect audit logs](./inspect-audit-logs.md) — query patterns for the audit + vault-usage tables
-- [ADR 007 — Credential vault with placeholder-token injection](../adrs/007-credential-vault-with-placeholder-token-injection.md) — the architectural decision behind the vault shape
+- [ADR 007 — Credential vault with placeholder-token injection](../adrs/007-credential-vault-with-placeholder-tokens.md) — the architectural decision behind the vault shape
 - [Architecture overview §4 Trust boundaries](../reference/architecture.md#4-trust-boundaries) — where the vault fits in helmdeck's trust model

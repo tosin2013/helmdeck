@@ -31,6 +31,19 @@ func TestBudgetFor_PrefixMatch(t *testing.T) {
 		{"openrouter/nvidia/nemotron-3-super-120b-a12b:free", TierC},
 		{"openrouter/z-ai/glm-4.5-air:free", TierC},
 		{"openrouter/meta-llama/llama-3.1-70b-instruct", TierB},
+		// ADR 051 PR #1 additions — calibrated from the research report.
+		{"openai/o3-mini", TierA},
+		{"google/gemini-2.5-pro", TierA},
+		{"google/gemini-2.5-flash", TierA},
+		{"anthropic/claude-3.7-sonnet", TierA},
+		{"openrouter/openai/o3-mini", TierA},
+		{"openrouter/google/gemini-2.5-pro", TierA},
+		{"openrouter/deepseek/deepseek-v4-pro", TierB},
+		{"openrouter/deepseek/deepseek-v3.2", TierB},
+		{"openrouter/x-ai/grok-4", TierB},
+		{"openrouter/moonshotai/kimi-k2.6", TierC},
+		{"openrouter/moonshotai/kimi-k2.6:free", TierC},
+		{"openrouter/tencent/hy3-preview", TierC},
 	}
 	for _, tc := range cases {
 		t.Run(tc.model, func(t *testing.T) {

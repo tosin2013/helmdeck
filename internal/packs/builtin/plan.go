@@ -290,38 +290,19 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 		if len(chat.Choices) == 0 {
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: "gateway returned no choices"}
 		}
-		body := unwrapCodeFence(strings.TrimSpace(chat.Choices[0].Message.Content.Text()))
-		if body == "" {
-			return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: "gateway returned an empty plan response"}
-		}
-
-		// Decode the LLM's structural plan, then enforce the guards
-		// before we trust the steps for the audit + rewritten_prompt.
+		// ADR 051 PR #1: defensive parse handles reasoning-token
+		// blocks (hybrid models), code fences, trailing prose, and
+		// the balanced-brace substring fallback all in one shared
+		// helper. Replaces the inline pattern this handler used to
+		// carry. Same error contract: CodeHandlerFailed on any
+		// failure with a descriptive Message.
 		var raw struct {
 			Steps      []planStep `json:"steps"`
 			Complexity string     `json:"complexity"`
 			Reasoning  string     `json:"reasoning"`
 		}
-		// Free models sometimes emit a valid JSON object followed by
-		// trailing prose / HTML / a second object. json.Unmarshal is
-		// strict and rejects trailing content; json.Decoder reads one
-		// value and stops. Robustifying here matches the tolerance
-		// route.go's own parser will need (PR #5 if separate). If
-		// the streaming-decoder approach still can't parse, fall
-		// back to substring extraction (first { ... matching } pair).
-		dec := json.NewDecoder(strings.NewReader(body))
-		if derr := dec.Decode(&raw); derr != nil {
-			// Try substring extraction as a fallback — model emitted
-			// something garbled around a recoverable object.
-			if start, end := strings.Index(body, "{"), strings.LastIndex(body, "}"); start >= 0 && end > start {
-				if jerr := json.Unmarshal([]byte(body[start:end+1]), &raw); jerr != nil {
-					return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-						Message: "model output is not valid JSON: " + derr.Error(), Cause: derr}
-				}
-			} else {
-				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-					Message: "model output is not valid JSON: " + derr.Error(), Cause: derr}
-			}
+		if perr := DecodeStructuredResponse(chat.Choices[0].Message.Content.Text(), "plan", &raw); perr != nil {
+			return nil, perr
 		}
 		steps := normalizePlanSteps(raw.Steps, validIDs)
 		complexity := normalizeComplexity(raw.Complexity, steps)

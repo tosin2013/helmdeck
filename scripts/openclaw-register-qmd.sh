@@ -3,17 +3,19 @@
 # QMD memory-corpus endpoint (ADR 048 PR #3).
 #
 # What this does:
-#   1. Reads the helmdeck JWT OpenClaw already stores at
+#   1. Bootstraps an mcporter config entry naming "helmdeck" with the
+#      QMD-bridge URL + transport=sse.
+#   2. Reads the helmdeck JWT OpenClaw already stores at
 #      /home/node/.openclaw/openclaw.json:mcp.servers.helmdeck.headers
-#      (the same JWT it uses for the main /api/v1/mcp/sse connection).
-#   2. Writes an mcporter config entry naming "helmdeck" with the
-#      QMD-bridge URL, transport=sse, and that JWT as the
-#      Authorization header.
-#   3. Reuses the OpenClaw container's bundled `npx mcporter` so no
-#      extra binaries need to be installed on the host.
+#      (the same JWT it uses for the main /api/v1/mcp/sse connection)
+#      and patches it into the mcporter entry's Authorization header.
+#   3. Uses the bundled `npx mcporter` so no extra host binaries.
 #
-# Idempotent. Safe to re-run; updates the JWT each time so a
-# rotated token doesn't break the bridge.
+# Idempotent. Safe to re-run; updates the JWT each time so a rotated
+# token doesn't break the bridge. Re-run after any
+# `docker compose ... up -d --force-recreate openclaw-gateway` —
+# the mcporter config lives in the container's writable layer, not a
+# named volume, so a recreate wipes it.
 #
 # Why this is a separate script, not baked into the compose overlay:
 #   The helmdeck JWT is materialized only after OpenClaw boots and
@@ -66,59 +68,56 @@ fi
 
 info "Registering helmdeck QMD bridge with MCPorter inside $CONTAINER..."
 
-# ── do the work inside the container ───────────────────────────────
-# The JWT is read from OpenClaw's config file inside the container
-# and threaded into a Python script via a heredoc — never appears in
-# argv or shell history. mcporter config add bootstraps the entry if
-# it doesn't exist; the Python step updates the auth header so a
-# rotated JWT propagates.
-docker exec "$CONTAINER" bash -s <<EOF
-set -e
-
-# Extract the helmdeck JWT OpenClaw uses for /api/v1/mcp/sse.
-JWT=\$(python3 - <<PYEOF
-import json, sys
-try:
-    with open("/home/node/.openclaw/openclaw.json") as f:
-        cfg = json.load(f)
-    print(cfg["mcp"]["servers"]["helmdeck"]["headers"]["authorization"])
-except (FileNotFoundError, KeyError) as e:
-    print(f"missing: {e}", file=sys.stderr)
-    sys.exit(2)
-PYEOF
-)
-if [[ -z "\$JWT" ]]; then
-  echo "JWT not found in /home/node/.openclaw/openclaw.json" >&2
-  exit 2
-fi
-
-# Ensure the mcporter entry exists. config add is idempotent — it
-# overwrites the URL/transport/description but preserves nothing else
-# we'd want to keep.
-if ! /usr/local/bin/npx --yes mcporter config add "$SERVER_NAME" \\
-    --url "$HELMDECK_URL" \\
-    --transport sse \\
-    --description "helmdeck QMD memory-corpus bridge (ADR 048 PR #3)" \\
+# ── step 1: bootstrap the mcporter entry ───────────────────────────
+# `mcporter config add` is idempotent — overwrites url/transport/
+# description but doesn't touch headers if the entry already exists.
+# We capture stderr separately so a real failure (vs a benign warning)
+# fails the script.
+if ! docker exec "$CONTAINER" /usr/local/bin/npx --yes mcporter config add "$SERVER_NAME" \
+    --url "$HELMDECK_URL" \
+    --transport sse \
+    --description "helmdeck QMD memory-corpus bridge (ADR 048 PR #3)" \
     --scope home >/dev/null 2>&1; then
-  echo "mcporter config add failed" >&2
+  fail "mcporter config add failed — re-run with the docker exec above unsilenced to see the error"
   exit 3
 fi
 
-# Patch the Authorization header in-place — covers both fresh and
-# rotated-token cases without losing the rest of the entry.
-python3 - <<PYEOF
+# ── step 2: patch the Authorization header ─────────────────────────
+# The JWT is read from OpenClaw's config inside the container and
+# never appears in this script's argv or shell history — Python
+# reads it from one JSON file and writes it into another.
+# We pipe the Python source via stdin (docker exec -i) instead of
+# inlining it in a heredoc because bash heredoc nesting through
+# `bash -s` doesn't preserve inner heredocs cleanly.
+PATCH_PY=$(cat <<'PYEOF'
 import json, sys
-path = "/home/node/.mcporter/mcporter.json"
-with open(path) as f:
-    cfg = json.load(f)
-cfg.setdefault("mcpServers", {}).setdefault("$SERVER_NAME", {})
-cfg["mcpServers"]["$SERVER_NAME"].setdefault("headers", {})
-cfg["mcpServers"]["$SERVER_NAME"]["headers"]["Authorization"] = "\$JWT"
-with open(path, "w") as f:
-    json.dump(cfg, f, indent=2)
-print("config updated")
+try:
+    with open("/home/node/.openclaw/openclaw.json") as f:
+        oc = json.load(f)
+    jwt = oc["mcp"]["servers"]["helmdeck"]["headers"]["authorization"]
+except (FileNotFoundError, KeyError) as e:
+    print(f"helmdeck JWT not found in /home/node/.openclaw/openclaw.json: {e}", file=sys.stderr)
+    sys.exit(2)
+mp_path = "/home/node/.mcporter/mcporter.json"
+try:
+    with open(mp_path) as f:
+        mp = json.load(f)
+except FileNotFoundError:
+    print(f"mcporter config not found at {mp_path} (step 1 should have created it)", file=sys.stderr)
+    sys.exit(3)
+mp.setdefault("mcpServers", {}).setdefault("helmdeck", {})
+mp["mcpServers"]["helmdeck"].setdefault("headers", {})
+mp["mcpServers"]["helmdeck"]["headers"]["Authorization"] = jwt
+with open(mp_path, "w") as f:
+    json.dump(mp, f, indent=2)
+print("patched")
 PYEOF
-EOF
+)
+
+if ! echo "$PATCH_PY" | docker exec -i "$CONTAINER" python3 - >/dev/null; then
+  fail "Authorization header patch failed"
+  exit 3
+fi
 
 ok "MCPorter wired to $HELMDECK_URL"
 dim "Verify with: docker exec $CONTAINER npx mcporter list"

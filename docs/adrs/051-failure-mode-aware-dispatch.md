@@ -1,6 +1,6 @@
 # 51. Failure-Mode-Aware Dispatch for Mixed-Tier Model Deployments
 
-**Status**: Accepted (slice 1 shipped: reasoning-token stripping, JSON parser parity, research-calibrated tier table. PRs #2–#4 remain.)
+**Status**: Accepted (slice 1 shipped: reasoning-token stripping, JSON parser parity, research-calibrated tier table. PRs #2–#5 remain.)
 **Date**: 2026-06-02
 **Domain**: gateway, packs, llmcontext, agent-integrations
 
@@ -71,6 +71,31 @@ Restructure the PR #4 (ADR 050) cascade to preserve the catalog prefix verbatim 
 - Today's flow: full catalog → compact (Tier C trims aggressively) → if lexical low-confidence → filter pass with TRIMMED catalog → planning pass with RESTRICTED catalog. Three different catalog projections in the two LLM calls; no cache reuse.
 - New flow when `Budget.SupportsPrefixCache` is true: filter pass sees the FULL catalog (the small filter prompt makes catalog size irrelevant — the system prompt + names-only catalog listing is ~3KB regardless); planning pass sees the FULL catalog as system prompt, with the filter's id list communicated in the USER message as a "prefer these tools" hint. Both passes hit the same system-prompt cache.
 - Document the contract: catalog projection is now a STABLE prefix; user-variable content (intent, filter hints, defaults projection) lives in the user message tail.
+
+### PR #5 — Model-tier calibration tooling + maintenance docs
+
+The tier table PR #1 introduces is a snapshot from one research synthesis on 2026-06-02. Model fleets churn fast — DeepSeek shipped v3.2-exp two weeks ago, Moonshot is on K2.6 already, Anthropic ships a minor Claude every month. Without a documented calibration process the table will be stale within a quarter and operators won't know how to extend it. PR #5 fixes that by shipping the methodology + automation we ourselves used during PR #1, so the *next* tier addition is a 5-minute task instead of an afternoon of reverse-engineering.
+
+- **`docs/howto/calibrate-model-tiers.md`** (new) — operator-facing methodology walkthrough. When a new model appears in OpenRouter's `/v1/models` (or a new provider is added), here's how to:
+  - Find the model on relevant leaderboards: Berkeley Function-Calling Leaderboard (`gorilla.cs.berkeley.edu/leaderboard.html`), Aider polyglot (`aider.chat/docs/leaderboards`), Artificial Analysis (`artificialanalysis.ai/models`) for pricing + speed.
+  - Identify the model's architectural quirks from its provider docs: is it a hybrid reasoning model (emits `<think>` blocks)? Does it support strict JSON mode? Is it on a prompt-caching provider? These map directly to the `IsHybridReasoning` / `WantsStrictJSON` / `SupportsPrefixCache` flags PR #2 introduces on `Budget`.
+  - Run the calibration prompt suite (see script below) and interpret the results: success rate on trivial + multi-action + paste-heavy intents, average latency per tier, observed empty-completion rate, reasoning-token presence.
+  - Decide on a tier per the rules already documented in `internal/llmcontext/budgets.go` package comment.
+  - Add an entry with the source-of-classification trailing comment so the next maintainer can verify your call.
+- **`scripts/calibrate-model.sh`** (new) — automation helper. Takes a model id (and optional max-cost-per-call cap). Runs a fixed suite of helmdeck-specific prompts against it via the live REST `/api/v1/packs/helmdeck.plan` and `/api/v1/packs/helmdeck.route` endpoints. Measures success / failure / typed-error rate per prompt class. Emits a recommended tier + a draft `budgets.go` entry the operator pastes into a branch. Pure shell + curl + jq — no new dependencies. The prompt suite includes:
+  - Trivial single-action intent (baseline latency)
+  - Multi-action 3-step intent (tests structured output reliability)
+  - Long-paste intent matching the original MiniMax M3 motivating prompt (tests catalog-pressure failure modes)
+  - A prompt that intentionally has no good answer (tests gap-warning behavior + hallucination guard)
+- **`scripts/calibrate-model.test.sh`** (new) — self-test invoking the calibrator against a known-Tier-A model (`openrouter/anthropic/claude-haiku-`) and a known-Tier-C model (`openrouter/openrouter/free`) and asserting the tier recommendation matches. Catches regressions in the calibration heuristics.
+- **Reminder mechanism**: PR #5 also adds a quarterly-review note to `docs/RELEASES.md` §"Agent sync checklist" — the same checklist already covers SKILL.md stamp refresh and changelog rotation; tier-table review fits the same cadence. New release checklist line: *"Have any new models shipped to OpenRouter or any of the configured providers? If yes, scan `openrouter/v1/models` for additions, calibrate via `scripts/calibrate-model.sh`, open a docs PR adding the new tier entries with source comments."*
+
+PR #5 deliberately ships BEFORE PRs #2–#4 because:
+
+1. **It documents the methodology that produced PR #1's table** while it's freshest in maintainer memory.
+2. **It gives the operator who hits "I want to add `gemini-3-pro`" next month a 5-minute path** instead of an afternoon of reverse-engineering.
+3. **PR #2's capability flags (`IsHybridReasoning`, `WantsStrictJSON`, `SupportsPrefixCache`) need calibration data** to populate accurately for each model. The script feeds that data to whoever's writing the PR.
+4. **Calibration changes can ship asynchronously** with the typed-errors / strict-JSON / prefix-cache architecture work. Decoupling the tier table from the cascade architecture lets each evolve at its own pace.
 
 ## Consequences
 

@@ -231,7 +231,35 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 		// marshaled catalog fits — supersedes is preserved so rule
 		// P2 stays anchored even on aggressive compaction.
 		budget := llmcontext.BudgetFor(in.Model)
-		selectedRG, trim := llmcontext.Select(routingGuideFromCatalog(catalog), intent, budget)
+		fullRG := routingGuideFromCatalog(catalog)
+		selectedRG, trim := llmcontext.Select(fullRG, intent, budget)
+		// ADR 050 PR #4: two-pass LLM-filter escalation. When the
+		// lexical pass (stage 3) couldn't confidently narrow the
+		// catalog and the budget opted in to filtering, dispatch a
+		// small filter call to the same model — its prompt is
+		// catalog-names-plus-descriptions only, much smaller than
+		// the planning prompt, so even weak models produce reliable
+		// JSON for the candidate id list. Then restrict the catalog
+		// to the union of the filter picks and the lexical top-N,
+		// preserving everything the cheap stages already chose.
+		if budget.AllowsLLMFilter && shouldEscalateFromTrim(trim) {
+			filterModel := budget.FilterModel
+			if filterModel == "" {
+				filterModel = in.Model
+			}
+			filteredRG, fStats, ferr := runFilterPass(ctx, d, ec, fullRG, selectedRG, intent, filterModel)
+			if ferr == nil {
+				selectedRG = filteredRG
+				if b, mErr := json.Marshal(selectedRG); mErr == nil {
+					trim.AfterBytes = len(b)
+				}
+				trim.Dropped = append(trim.Dropped, fStats)
+			} else {
+				ec.Logger.Warn("helmdeck.plan: LLM filter pass failed; falling back to lexical selection",
+					"err", ferr,
+				)
+			}
+		}
 		catalog = catalogFromRoutingGuide(selectedRG)
 		if len(trim.Dropped) > 0 {
 			ec.Logger.Info("helmdeck.plan: catalog selection ran",
@@ -274,11 +302,27 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 			Complexity string     `json:"complexity"`
 			Reasoning  string     `json:"reasoning"`
 		}
-		if err := json.Unmarshal([]byte(body), &raw); err != nil {
-			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-				Message: "model output is not valid JSON: " + err.Error(), Cause: err}
+		// Free models sometimes emit a valid JSON object followed by
+		// trailing prose / HTML / a second object. json.Unmarshal is
+		// strict and rejects trailing content; json.Decoder reads one
+		// value and stops. Robustifying here matches the tolerance
+		// route.go's own parser will need (PR #5 if separate). If
+		// the streaming-decoder approach still can't parse, fall
+		// back to substring extraction (first { ... matching } pair).
+		dec := json.NewDecoder(strings.NewReader(body))
+		if derr := dec.Decode(&raw); derr != nil {
+			// Try substring extraction as a fallback — model emitted
+			// something garbled around a recoverable object.
+			if start, end := strings.Index(body, "{"), strings.LastIndex(body, "}"); start >= 0 && end > start {
+				if jerr := json.Unmarshal([]byte(body[start:end+1]), &raw); jerr != nil {
+					return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+						Message: "model output is not valid JSON: " + derr.Error(), Cause: derr}
+				}
+			} else {
+				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+					Message: "model output is not valid JSON: " + derr.Error(), Cause: derr}
+			}
 		}
-
 		steps := normalizePlanSteps(raw.Steps, validIDs)
 		complexity := normalizeComplexity(raw.Complexity, steps)
 
@@ -575,4 +619,75 @@ func catalogFromRoutingGuide(rg llmcontext.RoutingGuide) catalogProjection {
 		c.Pipelines[i] = routeCatalogPipe{ID: p.ID, Name: p.Name, Description: p.Description, Metadata: p.Metadata}
 	}
 	return c
+}
+
+// shouldEscalateFromTrim decides whether to fire the LLM-filter pass
+// (ADR 050 PR #4). Gated on `lexical.low_confidence` — Select appends
+// that marker only when the lexical retrieval ended with ambiguous
+// top scores (HighConfidence below 0.4 gap). Lexical truncation
+// alone is NOT enough: when the top score is decisively ahead of
+// the runner-up, the planning call already has a strong signal and
+// the extra filter round-trip would only add latency.
+func shouldEscalateFromTrim(trim llmcontext.Trim) bool {
+	for _, d := range trim.Dropped {
+		if d == "lexical.low_confidence" {
+			return true
+		}
+	}
+	return false
+}
+
+// runFilterPass dispatches the small filter LLM call that picks
+// catalog ids relevant to the intent, then returns the restricted
+// catalog. The full RoutingGuide (fullRG) is what the filter prompt
+// lists — the model picks from EVERY id, not just lexical's
+// survivors, so it can recover from a lexical false-negative. The
+// lexical survivors (selectedRG) are merged into the keep list so a
+// confident-but-wrong lexical pass doesn't trump the filter's
+// (potentially better) picks.
+func runFilterPass(
+	ctx context.Context,
+	d vision.Dispatcher,
+	ec *packs.ExecutionContext,
+	fullRG llmcontext.RoutingGuide,
+	selectedRG llmcontext.RoutingGuide,
+	intent string,
+	filterModel string,
+) (llmcontext.RoutingGuide, string, error) {
+	if d == nil {
+		return selectedRG, "", fmt.Errorf("no dispatcher available")
+	}
+	// Build the filter prompt from the FULL catalog so the model
+	// can recover from a lexical truncation that dropped the right
+	// tool. The filter prompt is small enough (just names +
+	// descriptions) that the full catalog fits comfortably.
+	user := llmcontext.BuildFilterUserMessage(fullRG, intent)
+	mt := 600 // small response: just a JSON list of ids
+	ec.Report(15, "running filter pass to narrow catalog")
+	chat, err := d.Dispatch(ctx, gateway.ChatRequest{
+		Model:     filterModel,
+		MaxTokens: &mt,
+		Messages: []gateway.Message{
+			{Role: "system", Content: gateway.TextContent(llmcontext.FilterSystemPrompt)},
+			{Role: "user", Content: gateway.TextContent(user)},
+		},
+	})
+	if err != nil {
+		return selectedRG, "", err
+	}
+	if len(chat.Choices) == 0 {
+		return selectedRG, "", fmt.Errorf("filter dispatcher returned no choices")
+	}
+	picks := llmcontext.ParseFilterResponse(chat.Choices[0].Message.Content.Text())
+	if len(picks) == 0 {
+		return selectedRG, "", fmt.Errorf("filter response did not parse to any ids")
+	}
+	// Merge filter picks with the lexical survivors so we don't
+	// regress when the filter model is being conservative. The
+	// merged list is bounded by the filter's <=12 cap plus lexical's
+	// top-N cap, so the final catalog stays small.
+	keep := llmcontext.MergeKeepOrder(picks, llmcontext.IDsFromRoutingGuide(selectedRG))
+	out := llmcontext.RestrictCatalog(fullRG, keep)
+	stats := fmt.Sprintf("llm_filter(picks=%d,kept=%d)", len(picks), len(out.Packs)+len(out.Pipelines))
+	return out, stats, nil
 }

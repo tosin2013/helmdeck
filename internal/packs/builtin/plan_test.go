@@ -456,3 +456,146 @@ func TestPlan_CompactionFieldPresentOnTierCWithLargeCatalog(t *testing.T) {
 		t.Errorf("compaction.dropped should name the steps that fired; got empty")
 	}
 }
+
+// TestPlan_TwoPassLLMFilterFires — ADR 050 PR #4: when the lexical
+// pass leaves an ambiguous result on a Tier C model that allows the
+// filter pass, the handler dispatches a SECOND LLM call (the filter)
+// before the planning call. The scripted dispatcher returns the
+// filter response first, then the plan response — order matters.
+func TestPlan_TwoPassLLMFilterFires(t *testing.T) {
+	// Filter response: pick a small set of ids the planner should see.
+	filterReply := `{"ids":["test.bulk0","test.bulk1","test.bulk2"]}`
+	// Planning response: a valid 1-step plan referring to one of the kept ids.
+	planReply := `{"steps":[{"order":1,"tool":"test.bulk0","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
+
+	// Build a registry with enough packs to force lexical truncation
+	// AND lexical ambiguity (close scores).
+	reg := packs.NewPackRegistry()
+	for i := 0; i < 60; i++ {
+		name := fmt.Sprintf("test.bulk%d", i)
+		if err := reg.Register(&packs.Pack{
+			Name:        name,
+			Version:     "v1",
+			Description: "Bulk test pack to push catalog over Tier C budget for filter-pass coverage tests; padded with words to consume bytes consistently across the metadata fields the compaction loop strips.",
+			Metadata: packs.PackMetadata{
+				Accepts:        []string{"input_a", "input_b"},
+				Produces:       []string{"output_a"},
+				IntentKeywords: []string{"do something useful", "another keyword phrase"},
+				TypicalUse:     "Generic typical-use string to push compaction along through every priority step until lexical truncation triggers escalation.",
+				Limitations:    []string{"slow on weak models", "not stable in heavy parallelism", "requires network access"},
+			},
+			Handler: func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+				return json.RawMessage(`{}`), nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	disp := &scriptedDispatcher{replies: []string{filterReply, planReply}}
+	pipes := fakePipelinesLister{raw: json.RawMessage(`[]`)}
+	pack := Plan(disp, reg, pipes)
+	store := memory.NewInMemoryStore()
+	eng := packs.New(
+		packs.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		packs.WithMemoryStore(store),
+	)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	res, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"do something useful","model":"openrouter/openrouter/free"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// The dispatcher should have been called TWICE: filter pass + planning pass.
+	if len(disp.captured) != 2 {
+		t.Fatalf("expected 2 dispatcher calls (filter + plan); got %d", len(disp.captured))
+	}
+	// First call uses the filter system prompt, second uses the planning prompt.
+	if !strings.Contains(disp.captured[0].Messages[0].Content.Text(), "tool-filter assistant") {
+		t.Errorf("first call should be the filter pass; got system=%s",
+			disp.captured[0].Messages[0].Content.Text()[:60])
+	}
+	if !strings.Contains(disp.captured[1].Messages[0].Content.Text(), "planning agent") {
+		t.Errorf("second call should be the planning pass; got system=%s",
+			disp.captured[1].Messages[0].Content.Text()[:60])
+	}
+	// Plan output should have the compaction record with an llm_filter entry.
+	var out planOutput
+	if err := json.Unmarshal(res.Output, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Compaction == nil {
+		t.Fatal("compaction record missing")
+	}
+	sawFilter := false
+	for _, d := range out.Compaction.Dropped {
+		if strings.HasPrefix(d, "llm_filter(") {
+			sawFilter = true
+			break
+		}
+	}
+	if !sawFilter {
+		t.Errorf("compaction.dropped should include llm_filter(...) entry; got %v", out.Compaction.Dropped)
+	}
+}
+
+// TestPlan_FilterFailsFallsBackToLexical — when the filter dispatch
+// errors or returns garbage, the handler must continue with the
+// lexical-only selection instead of failing the plan call. The
+// filter is an OPTIONAL enhancement, never a hard dependency.
+func TestPlan_FilterFailsFallsBackToLexical(t *testing.T) {
+	// Filter response is malformed (model returned prose); planning
+	// response is a valid plan. The handler should fall back to the
+	// lexical selection and still produce a plan.
+	filterReply := `Sorry, I cannot determine the relevant tools from this list.`
+	planReply := `{"steps":[{"order":1,"tool":"test.bulk0","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
+
+	reg := packs.NewPackRegistry()
+	for i := 0; i < 60; i++ {
+		name := fmt.Sprintf("test.bulk%d", i)
+		if err := reg.Register(&packs.Pack{
+			Name:        name,
+			Version:     "v1",
+			Description: "Bulk test pack with enough metadata fields to push the catalog past Tier C's 10000-byte budget so lexical truncation fires and the filter pass gets dispatched.",
+			Metadata: packs.PackMetadata{
+				Accepts:        []string{"input_a", "input_b"},
+				Produces:       []string{"output_a"},
+				IntentKeywords: []string{"do something useful", "another phrase"},
+				TypicalUse:     "Long typical-use string padding bytes so compaction has multiple metadata fields to strip before escalating.",
+				Limitations:    []string{"slow", "limited concurrency"},
+			},
+			Handler: func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+				return json.RawMessage(`{}`), nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	disp := &scriptedDispatcher{replies: []string{filterReply, planReply}}
+	pipes := fakePipelinesLister{raw: json.RawMessage(`[]`)}
+	pack := Plan(disp, reg, pipes)
+	store := memory.NewInMemoryStore()
+	eng := packs.New(
+		packs.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		packs.WithMemoryStore(store),
+	)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	res, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"do something useful","model":"openrouter/openrouter/free"}`))
+	if err != nil {
+		t.Fatalf("Execute should not fail when filter fails; got err=%v", err)
+	}
+	var out planOutput
+	if err := json.Unmarshal(res.Output, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Steps) == 0 {
+		t.Errorf("plan should still produce steps after filter fallback")
+	}
+	// Compaction record exists (lexical fired) but should NOT
+	// include the llm_filter(...) entry — the filter pass failed.
+	if out.Compaction != nil {
+		for _, d := range out.Compaction.Dropped {
+			if strings.HasPrefix(d, "llm_filter(") {
+				t.Errorf("filter failure should NOT add llm_filter entry; got %v", out.Compaction.Dropped)
+			}
+		}
+	}
+}

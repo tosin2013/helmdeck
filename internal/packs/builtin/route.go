@@ -258,7 +258,30 @@ func routeHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesListe
 		// observationally parallel makes operator traces easier to
 		// read across both packs.
 		budget := llmcontext.BudgetFor(in.Model)
-		selectedRG, trim := llmcontext.Select(routingGuideFromCatalog(catalog), in.UserIntent, budget)
+		fullRG := routingGuideFromCatalog(catalog)
+		selectedRG, trim := llmcontext.Select(fullRG, in.UserIntent, budget)
+		// ADR 050 PR #4: same two-pass escalation helmdeck.plan
+		// uses. The filter pass keeps the routing decision usable
+		// on weak free models when lexical retrieval alone couldn't
+		// narrow the catalog confidently.
+		if budget.AllowsLLMFilter && shouldEscalateFromTrim(trim) {
+			filterModel := budget.FilterModel
+			if filterModel == "" {
+				filterModel = in.Model
+			}
+			filteredRG, fStats, ferr := runFilterPass(ctx, d, ec, fullRG, selectedRG, in.UserIntent, filterModel)
+			if ferr == nil {
+				selectedRG = filteredRG
+				if b, mErr := json.Marshal(selectedRG); mErr == nil {
+					trim.AfterBytes = len(b)
+				}
+				trim.Dropped = append(trim.Dropped, fStats)
+			} else {
+				ec.Logger.Warn("helmdeck.route: LLM filter pass failed; falling back to lexical selection",
+					"err", ferr,
+				)
+			}
+		}
 		catalog = catalogFromRoutingGuide(selectedRG)
 		if len(trim.Dropped) > 0 {
 			ec.Logger.Info("helmdeck.route: catalog selection ran",

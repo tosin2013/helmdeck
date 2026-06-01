@@ -59,22 +59,41 @@ const (
 // advertised maximums — we leave headroom). MaxCatalogBytes is the
 // upper bound CompactCatalog targets when trimming; 0 disables
 // compaction entirely (used for Tier A).
+//
+// AllowsLLMFilter + FilterModel control the ADR 050 PR #4 two-pass
+// cascade: when set and the lexical retrieval result is ambiguous
+// (low HighConfidence), the caller may dispatch a separate "filter"
+// LLM call to narrow the catalog before the real planning call. The
+// trade is one extra round-trip for usable structured output on the
+// hardest Tier C cases. Tier A budgets never need it (full catalog
+// fits); Tier B often doesn't either (lexical alone produces
+// confident picks). Empty FilterModel means "use the caller's
+// planning model for both passes" — the simplest setup, works because
+// the filter prompt is small enough that even weak models handle it
+// reliably.
 type Budget struct {
 	Model           string
 	InputTokens     int // safe input ceiling (1 token ≈ 4 chars heuristic)
 	OutputTokens    int // recommended max_tokens for structured output
 	MaxCatalogBytes int // 0 = no compaction; otherwise CompactCatalog trims until len(JSON) <= this
 	Tier            Tier
+	AllowsLLMFilter bool   // ADR 050 PR #4: opt-in to the two-pass filter cascade
+	FilterModel     string // model id for the filter pass; "" → reuse the planning model
 }
 
 // tierC is the conservative fallback for unknown models. Free
 // OpenRouter routes inherit this profile because we treat unknown =
-// untrusted.
+// untrusted. AllowsLLMFilter=true: when lexical retrieval can't
+// confidently narrow the catalog, callers may dispatch a filter
+// pass with the planning model itself (FilterModel="") to get a
+// usable subset before the real planning call.
 var tierC = Budget{
 	InputTokens:     16000,
 	OutputTokens:    1500,
 	MaxCatalogBytes: 10000,
 	Tier:            TierC,
+	AllowsLLMFilter: true,
+	FilterModel:     "",
 }
 
 // budgetTable maps canonical model ids (provider/family/name as
@@ -114,10 +133,10 @@ var budgetTable = []Budget{
 	// route empty-completing on a 35KB catalog. The empirical limit
 	// for these is around 10KB of catalog before structured output
 	// gets unreliable.
-	{Model: "openrouter/openrouter/free", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC},
-	{Model: "openrouter/nvidia/nemotron-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC},
-	{Model: "openrouter/z-ai/glm-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC},
-	{Model: "openrouter/qwen/qwen-2.5-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC},
+	{Model: "openrouter/openrouter/free", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},
+	{Model: "openrouter/nvidia/nemotron-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},
+	{Model: "openrouter/z-ai/glm-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},
+	{Model: "openrouter/qwen/qwen-2.5-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},
 }
 
 // BudgetFor returns the Budget for a model id. Lookup is exact-match

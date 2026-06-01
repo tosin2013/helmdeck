@@ -16,6 +16,8 @@ This playbook contains copy-pasteable prompts you can send to **any MCP client**
 2. **Demo helmdeck to your team** — walk through the prompts in order, show artifacts in the Management UI
 3. **Regression test after upgrades** — re-run the prompts after a version bump
 
+> **Where to start when the user prompt spans multiple actions.** The `### Orchestration meta-packs` section below covers `helmdeck.route` (single intent), `helmdeck.plan` (multi-intent decomposition), and the memory pair (`helmdeck.memory_store` / `helmdeck.memory_forget`). Both route and plan see packs **and** pipelines through the same catalog projection, honor pipeline `metadata.supersedes`, and write per-caller audit rows that future calls mine as priors. For a fresh-install validation run, call `helmdeck.plan` once with a representative multi-action prompt before walking the per-pack prompts — it exercises the orchestration layer that the per-pack section doesn't.
+
 ## Prerequisites
 
 | Requirement | How to check | Needed for |
@@ -140,6 +142,152 @@ First clone https://github.com/octocat/Hello-World.git using the helmdeck repo f
 **Tip:** Use `rewrite true` for blog-quality output — the LLM reads each source and rewrites vague claims into specific, authoritative prose with inline citations. Without `rewrite`, it just appends `[source](url)` links. Use keywords in your `topic` field to help the search engine find better sources.
 
 **Expected:** `claims_grounded >= 1`, `grounded_text` with `[source](url)` citations. With `rewrite true`, claims are rewritten using source content (e.g. "Rust guarantees memory safety" becomes "Rust guarantees memory safety without needing a garbage collector through its ownership system..."). A `grounded.md` artifact is uploaded to `/artifacts` for download. Each grounding entry includes a `snippet` showing the source excerpt that supports the claim. Requires Firecrawl + LLM.
+
+---
+
+### Orchestration meta-packs — route, plan, memory_store, memory_forget
+
+These four packs don't *do* a task themselves; they help the agent **pick** and **sequence** the right packs and pipelines. They share one catalog projection (`helmdeck://routing-guide`) and one per-caller memory namespace, so the agent's choices get sharper as it accumulates history.
+
+| Meta-pack | When to call | Returns |
+| --- | --- | --- |
+| `helmdeck.route` | Single intent, *"which one tool fits?"* | One recommendation + alternatives + a structured `gap_warning` when nothing fits |
+| `helmdeck.plan` | Multi-intent prompt, *"do A, then B, then C"* | Ordered `steps[]` (each {tool, args, rationale}) + a derived `rewritten_prompt` |
+| `helmdeck.memory_store` | User shared a durable preference/fact | The stored entry + the namespace it landed in |
+| `helmdeck.memory_forget` | User asked to clear defaults / a specific key | Number of rows removed, scoped by `scope:` selector |
+
+Both route and plan see **packs AND pipelines** through the same catalog, and both honor pipeline `metadata.supersedes` so a curated pipeline wins over re-decomposing its constituent packs.
+
+---
+
+#### `helmdeck.route` — Pick ONE tool for a single-intent prompt (ADR 047 PR #3)
+
+**Prompt:**
+```
+Use the helmdeck route tool with user_intent "I have a PDF of a research paper and I want it turned into a blog post" and model "openrouter/openrouter/free".
+```
+
+**Expected:** A JSON `recommendation` naming a real pack or pipeline (likely `builtin.doc-rewrite-blog` because that pipeline's `metadata.accepts` covers `pdf` and `produces` covers `blog_markdown`), `suggested_inputs` pre-filled from any learned `helmdeck://my-defaults` for this caller, up to 3 `alternatives`, and `reasoning` citing the chosen pack's metadata. When NOTHING in the catalog fits (e.g. "transcribe a YouTube video"), `gap_warning` populates with a `proposed_pack` sketch ({name, input_schema, output_schema, integration_pattern, why_useful}) — the agent confirms and either files a GitHub issue or pivots.
+
+---
+
+#### `helmdeck.plan` — Decompose a multi-intent prompt into ordered tool calls (ADR 049 PR #1)
+
+**Prompt (pack-chain — three distinct actions):**
+```
+Use the helmdeck plan tool with user_intent "remember this MiniMax M3 launch announcement as a durable fact, then write a 300-word technical blog post about it, then generate an illustration for the post" and model "openrouter/openrouter/free".
+```
+
+**Expected:** A 3-step `steps[]` array. Step 1 calls `helmdeck.memory_store` to persist the fact. Step 2 likely calls `helmdeck__pipeline-run` with `args.id` = a blog pipeline (e.g. `builtin.brief-rewrite-blog`) **rather than chaining three packs by hand** — the planner's pipeline-aware rule P1 fires when the pipeline covers `accepts`/`produces` end-to-end, and rule P2 fires when the pipeline's `metadata.supersedes` lists packs the user mentioned. Step 3 calls `image.generate`. `complexity` is `pack-chain`. `rewritten_prompt` is the same plan rendered as `Step N: call X with args Y — rationale` lines an agent can execute line-by-line.
+
+**Prompt (pipeline-direct — one step to a curated pipeline):**
+```
+Use the helmdeck plan tool with user_intent "I have this brief, rewrite it as a blog post and ground every claim with citations" and model "openrouter/openrouter/free".
+```
+
+**Expected:** ONE step calling `helmdeck__pipeline-run` with `args.id` = `builtin.brief-rewrite-blog`. `complexity` is `pipeline-direct`. The planner did NOT decompose the pipeline's three internal stages into three separate steps — that's the supersedes rule in action.
+
+**Prompt (single-action — degenerate case, exercises route fallback):**
+```
+Use the helmdeck plan tool with user_intent "take a screenshot of github.com" and model "openrouter/openrouter/free".
+```
+
+**Expected:** ONE step calling `browser.screenshot_url`. `complexity` is `single-action`. The agent should consider calling `helmdeck.route` next time — route is cheaper for the one-tool case.
+
+**Tip — agent execution paths:** if your runtime can iterate `steps[]` and dispatch each tool, do that. If your model produces brittle tool-calls when handed long JSON specs, feed the `rewritten_prompt` string back as the next user message — it's the same plan as a single natural-language instruction. Both surfaces encode the same plan and can't drift (the handler derives `rewritten_prompt` from `steps` post-LLM).
+
+**Tip — unknown steps:** any step whose `tool` doesn't resolve to a registered pack or pipeline id is demoted to `"tool": "unknown"` with a populated `rationale`. Surface those to the user (or to `helmdeck.route`'s gap-warning flow) — do NOT dispatch them. Partial demotion is fine: a 4-step plan can have 3 valid steps + 1 `unknown`.
+
+---
+
+#### `helmdeck.memory_store` — Persist a durable user fact (ADR 048 PR #2)
+
+**Prompt:**
+```
+Use the helmdeck memory_store tool with key "preferences/blog-persona", value "technical, with mermaid diagrams when explaining architecture", category "preferences", and ttl_seconds 7776000.
+```
+
+**Expected:** The entry lands under the caller's bare namespace. Subsequent `helmdeck://my-memory` reads show it grouped by category. Categories `pack_history`, `pipeline_history`, and `plan_history` are reserved for engine audit hooks and rejected with `reserved_category` if you try to write into them.
+
+**Tip:** Read `helmdeck://my-memory` BEFORE storing to avoid duplicates and to discover existing keys. The agent should peek at the top of a session, not every turn.
+
+---
+
+#### `helmdeck.memory_forget` — Clear learned defaults or a specific key (ADR 047 PR #2)
+
+**Prompt (forget everything):**
+```
+Use the helmdeck memory_forget tool with scope "all".
+```
+
+**Prompt (forget a specific fact):**
+```
+Use the helmdeck memory_forget tool with scope "key:preferences/blog-persona".
+```
+
+**Prompt (forget all pack defaults for a specific pack):**
+```
+Use the helmdeck memory_forget tool with scope "pack:blog.rewrite_for_audience".
+```
+
+**Expected:** A JSON response with `removed_count`. Other scopes: `packs` (all pack audit), `pipelines` (all pipeline audit), `pipeline:<id>` (one pipeline's audit). Cache rows (per-pack output cache) are NEVER touched — forget only targets audit and user-fact categories. Use this when the user says *"forget my defaults"* or *"don't remember that"*.
+
+---
+
+### Meta-pack workflows — combining route + plan + memory
+
+These prompts show how the meta-packs compose for end-to-end orchestration. Use them as templates for the agent's first turn in a fresh session.
+
+#### Cold-start orientation — read defaults, then route
+
+**Prompt:**
+```
+1. Read helmdeck://my-defaults to discover what packs and inputs I've used most.
+2. Read helmdeck://my-memory to discover what user facts are already stored.
+3. Then, given the intent "draft a blog post about my last research topic", call helmdeck route to pick the best tool, pre-filling suggested_inputs from the defaults you just read.
+```
+
+**Expected:** Three calls in sequence — two resource reads, then `helmdeck.route` returning a recommendation whose `suggested_inputs` reflects the agent's actual usage history. On a fresh deployment with no audit history, defaults are empty and route falls back to keyword matching.
+
+---
+
+#### Plan-then-execute — let the planner decompose, then dispatch each step
+
+**Prompt:**
+```
+I want to (a) remember that I prefer dark-themed slide decks, (b) take the README at https://github.com/tosin2013/helmdeck/blob/main/README.md and produce a 7-slide presentation as a video.
+
+Step 1: call helmdeck plan with user_intent matching that ask and model "openrouter/openrouter/free".
+Step 2: execute the returned steps in order. After each step, report progress to me.
+Step 3: when all steps complete, list every artifact produced.
+```
+
+**Expected:** Plan returns a multi-step decomposition (memory_store for the dark-theme preference, then a slides pipeline like `scrape-deck` or `repo-presentation` for the README → narrated video). The agent dispatches each step in order and reports progress. If any step's tool is `"unknown"`, the agent surfaces it instead of dispatching.
+
+---
+
+#### Plan-then-route — when the user's intent has a gap
+
+**Prompt:**
+```
+I want to transcribe a YouTube video, summarize the transcript, and generate slides from the summary.
+
+Step 1: call helmdeck plan with user_intent matching that ask.
+Step 2: if any step in the returned plan has tool="unknown", call helmdeck route on that step's intent to surface a gap_warning. Otherwise execute the plan.
+```
+
+**Expected:** YouTube transcription doesn't exist in helmdeck's catalog today. Plan demotes step 1 to `"tool": "unknown"`. The agent calls route on the transcription intent, and route returns a `gap_warning` with a `proposed_pack` named (e.g.) `youtube.transcript` plus an integration pattern. The agent reports the gap to the user and offers to file a GitHub issue or proceed with an alternative.
+
+---
+
+#### Forget cycle — after the user changes their mind
+
+**Prompt:**
+```
+I told you earlier I preferred React, but I'm switching to Solid. Forget the React preference and store the new one.
+```
+
+**Expected:** Two calls — `helmdeck.memory_forget` with `scope: "key:preferences/frontend-framework"` (or whatever key was used originally), then `helmdeck.memory_store` with the same key and the new value. The agent confirms both actions and reports the new state by reading `helmdeck://my-memory`.
 
 ---
 

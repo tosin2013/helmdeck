@@ -61,11 +61,12 @@ type FactStoreError struct {
 func (e *FactStoreError) Error() string { return e.Message }
 
 // IsReservedFactCategory returns true when category is owned by the
-// engine and external writers must not touch it. Today the reserved
-// set is just the audit categories.
+// engine and external writers must not touch it. The reserved set is
+// the audit categories; ADR 049 added plan_history so agents can't
+// poison the projection via the write surface.
 func IsReservedFactCategory(category string) bool {
 	switch category {
-	case AuditCategoryPack, AuditCategoryPipeline:
+	case AuditCategoryPack, AuditCategoryPipeline, AuditCategoryPlan:
 		return true
 	}
 	return false

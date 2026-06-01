@@ -22,21 +22,25 @@ import (
 // before the TTL expires.
 const AuditTTL = 30 * 24 * time.Hour
 
-// AuditCategoryPack and AuditCategoryPipeline are the memory
-// categories used by the audit-write seam. helmdeck.memory_forget
-// and the my-defaults projection both filter by category so they
-// never touch cache rows (which live under "cache" or pack-defined
-// categories).
+// AuditCategoryPack, AuditCategoryPipeline, and AuditCategoryPlan
+// are the memory categories used by audit-write seams. The forget
+// pack and the my-defaults / my-plans projections filter by category
+// so they never touch cache rows (which live under "cache" or pack-
+// defined categories). AuditCategoryPlan was added in ADR 049 PR #1
+// for the helmdeck.plan pack's decomposition history.
 const (
 	AuditCategoryPack     = "pack_history"
 	AuditCategoryPipeline = "pipeline_history"
+	AuditCategoryPlan     = "plan_history"
 )
 
-// AuditKeyPrefixPack and AuditKeyPrefixPipeline are the key prefixes
-// that List(ns, prefix) uses to scope to audit rows.
+// AuditKeyPrefix* are the key prefixes that List(ns, prefix) uses to
+// scope a query to one audit category. ADR 049 added the plan_history
+// prefix for helmdeck.plan's decomposition rows.
 const (
 	AuditKeyPrefixPack     = "pack_history/"
 	AuditKeyPrefixPipeline = "pipeline_history/"
+	AuditKeyPrefixPlan     = "plan_history/"
 )
 
 // learnableInputFields names the input JSON fields that get mined
@@ -76,6 +80,57 @@ type PipelineAudit struct {
 	AtUnix      int64             `json:"at_unix"`
 	DurationMs  int64             `json:"duration_ms,omitempty"`
 	LearnInputs map[string]string `json:"learn_inputs,omitempty"`
+}
+
+// PlanAuditStep is one step's compact summary inside a PlanAudit row.
+// We persist only the tool name + a hash of the args so the audit
+// stays small but PR #2's projection can group plans by shape.
+type PlanAuditStep struct {
+	Order   int    `json:"order"`
+	Tool    string `json:"tool"`
+	ArgsSHA string `json:"args_sha,omitempty"`
+}
+
+// PlanAudit is one helmdeck.plan-execution audit row. Captures the
+// intent hash (so PR #2 can group similar prompts), the complexity
+// classification, and the step sequence — not the full rewritten
+// prompt or rationales, which can be large and contain user data.
+type PlanAudit struct {
+	IntentSHA  string          `json:"intent_sha"`
+	Complexity string          `json:"complexity"`
+	Steps      []PlanAuditStep `json:"steps,omitempty"`
+	Outcome    string          `json:"outcome"`
+	AtUnix     int64           `json:"at_unix"`
+	DurationMs int64           `json:"duration_ms,omitempty"`
+	Model      string          `json:"model,omitempty"`
+}
+
+// WritePlanAudit records one plan-execution audit row under the
+// caller's bare namespace. Mirrors WritePipelineAudit's contract:
+// nil-store-safe, fail-soft, exported because the pack handler lives
+// in internal/packs/builtin and calls in through the engine handle.
+// Each call gets a nanosecond-suffix key for chronological List().
+func (e *Engine) WritePlanAudit(ctx context.Context, audit PlanAudit) {
+	if e.memory == nil {
+		return
+	}
+	caller := callerFromContext(ctx)
+	now := e.now().UTC()
+	if audit.AtUnix == 0 {
+		audit.AtUnix = now.Unix()
+	}
+	body, err := json.Marshal(audit)
+	if err != nil {
+		e.logger.Warn("plan audit marshal failed", "err", err)
+		return
+	}
+	key := fmt.Sprintf("%s%s/%020d", AuditKeyPrefixPlan, audit.IntentSHA, now.UnixNano())
+	if _, err := e.memory.Put(ctx, caller, key, body,
+		memory.WithTTL(AuditTTL),
+		memory.WithCategory(AuditCategoryPlan),
+	); err != nil {
+		e.logger.Warn("plan audit write failed", "err", err)
+	}
 }
 
 // extractLearnableInputs scans the input JSON for low-cardinality

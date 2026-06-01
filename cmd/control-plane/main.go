@@ -778,6 +778,16 @@ func main() {
 	if err := packReg.Register(builtin.Route(visionDispatcher, packReg, mainPipelinesLister{store: pipeStore})); err != nil {
 		logger.Warn("register helmdeck.route pack failed", "err", err)
 	}
+	// helmdeck.plan — LLM-backed intent decomposition (ADR 049 PR #1).
+	// Sibling to helmdeck.route: same dispatcher, registry, and pipeline-
+	// list adapter. Where route picks ONE tool, plan returns an ORDERED
+	// sequence of tool/pipeline calls plus a rewritten_prompt the agent
+	// can execute step-by-step. Pipeline-aware: the system prompt teaches
+	// the model to prefer a curated pipeline over re-decomposing its
+	// constituent packs.
+	if err := packReg.Register(builtin.Plan(visionDispatcher, packReg, mainPipelinesLister{store: pipeStore})); err != nil {
+		logger.Warn("register helmdeck.plan pack failed", "err", err)
+	}
 	// Reap any in-flight rows the previous control-plane process left
 	// behind — their owning goroutines died with that process and
 	// nothing will ever flip them. Runs once here, before the HTTP

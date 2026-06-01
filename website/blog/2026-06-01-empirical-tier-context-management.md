@@ -6,7 +6,7 @@ tags: [weak-models, agent-architecture, friction]
 description: A live test exposed that some free LLMs return empty completions when a tool catalog exceeds their effective working set. We responded by classifying models by their observed structured-output reliability — not their advertised context windows — and compacting the catalog with explicit dispatch invariants.
 image: /img/social-card.png
 date: 2026-06-01
-draft: true
+draft: false
 ---
 
 We shipped `helmdeck.plan` (ADR 049 PR #1) — an LLM-backed meta-pack that decomposes multi-intent user prompts into ordered tool/pipeline calls. It worked on frontier models. It worked on trivial intents against free models. Then we tested the actual scenario that motivated the pack: a real OpenClaw chat prompt with a 1.5KB launch announcement paste and *"remember this, draft a blog about it, generate an image."*

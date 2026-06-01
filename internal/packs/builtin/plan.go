@@ -231,10 +231,10 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 		// marshaled catalog fits — supersedes is preserved so rule
 		// P2 stays anchored even on aggressive compaction.
 		budget := llmcontext.BudgetFor(in.Model)
-		compactedRG, trim := llmcontext.CompactCatalog(routingGuideFromCatalog(catalog), budget)
-		catalog = catalogFromRoutingGuide(compactedRG)
+		selectedRG, trim := llmcontext.Select(routingGuideFromCatalog(catalog), intent, budget)
+		catalog = catalogFromRoutingGuide(selectedRG)
 		if len(trim.Dropped) > 0 {
-			ec.Logger.Info("helmdeck.plan: catalog compacted to fit model budget",
+			ec.Logger.Info("helmdeck.plan: catalog selection ran",
 				"model", in.Model,
 				"tier", string(budget.Tier),
 				"before_bytes", trim.BeforeBytes,

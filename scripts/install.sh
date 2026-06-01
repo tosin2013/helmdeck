@@ -626,6 +626,7 @@ main() {
   compose_up
   wait_for_health
   setup_github_token
+  register_qmd_bridge
   print_summary
 
   # Optional: drive an OpenClaw agent round-trip against the stack we
@@ -638,6 +639,26 @@ main() {
     bash "${REPO_ROOT}/scripts/smoke-integration.sh" || \
       warn "integration smoke check failed — see output above (install itself succeeded)"
   fi
+}
+
+# ────────────────────────────────────────────────────────────────────────
+# ADR 048 PR #3 — wire MCPorter to the QMD memory-corpus bridge
+# ────────────────────────────────────────────────────────────────────────
+
+register_qmd_bridge() {
+  # Skip when OpenClaw isn't part of this deployment — the script
+  # checks for the container itself and exits cleanly when absent, so
+  # we just run it and silence the prerequisite-missing exit code.
+  # OpenClaw needs to be up + have the helmdeck server entry seeded
+  # before mcporter can be wired; that happens during compose_up on
+  # the same boot, so by the time we get here the JWT is materialized.
+  if ! docker inspect openclaw-openclaw-gateway-1 >/dev/null 2>&1; then
+    return 0
+  fi
+  echo
+  info "wiring MCPorter → helmdeck QMD bridge (ADR 048 PR #3)"
+  bash "${REPO_ROOT}/scripts/openclaw-register-qmd.sh" || \
+    warn "QMD bridge registration failed — run scripts/openclaw-register-qmd.sh manually after the stack is healthy"
 }
 
 # ────────────────────────────────────────────────────────────────────────

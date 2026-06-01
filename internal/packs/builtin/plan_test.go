@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -367,5 +368,91 @@ func TestPlan_TierAModelGetsFullCatalog(t *testing.T) {
 	// means it must show up in the prompt.
 	if !strings.Contains(user, "rewrite for audience") {
 		t.Errorf("Tier A model should see full metadata including intent_keywords; user message lacks 'rewrite for audience'")
+	}
+}
+
+// TestPlan_CompactionFieldOmittedOnTierA — Tier A models pass the
+// catalog through unchanged; the plan output must NOT carry a
+// compaction field in that case. Asserts the omitempty contract on
+// the wire shape PR #2 ships.
+func TestPlan_CompactionFieldOmittedOnTierA(t *testing.T) {
+	reply := `{"steps":[{"order":1,"tool":"helmdeck.memory_store","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
+	eng, _, pack, _ := planFixture(t, reply)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	res, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"x","model":"anthropic/claude-haiku-4-5"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// Decode into a permissive map so we can assert the field's
+	// absence (a typed planOutput would carry a nil pointer that
+	// looks the same as an omitted field on the wire).
+	var out map[string]any
+	if err := json.Unmarshal(res.Output, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, has := out["compaction"]; has {
+		t.Errorf("Tier A output should omit `compaction` field; got %+v", out["compaction"])
+	}
+}
+
+// TestPlan_CompactionFieldPresentOnTierCWithLargeCatalog — when
+// compaction actually fires (Tier C model + catalog over budget),
+// the output carries the Trim record so agents can inspect it. The
+// planFixture's catalog is too small to trigger trim, so this test
+// uses a deliberately-tiny budget via the openrouter/openrouter/free
+// model id and a third pack with enough metadata to push the catalog
+// past 10000 bytes.
+func TestPlan_CompactionFieldPresentOnTierCWithLargeCatalog(t *testing.T) {
+	reply := `{"steps":[{"order":1,"tool":"helmdeck.memory_store","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
+	// Reuse the standard fixture, then register more packs with
+	// verbose metadata so the catalog projection exceeds 10000 bytes
+	// before compaction. The fixture's helper hides the registry, so
+	// we rebuild here from scratch.
+	reg := packs.NewPackRegistry()
+	for i := 0; i < 30; i++ {
+		name := fmt.Sprintf("test.bulk%d", i)
+		if err := reg.Register(&packs.Pack{
+			Name:        name,
+			Version:     "v1",
+			Description: "A bulky test pack that exists to push the catalog past Tier C's MaxCatalogBytes budget so the compaction loop fires every priority step. This description is deliberately long to consume bytes.",
+			Metadata: packs.PackMetadata{
+				Accepts:        []string{"input_kind_a", "input_kind_b", "input_kind_c"},
+				Produces:       []string{"output_kind"},
+				IntentKeywords: []string{"keyword one", "keyword two", "keyword three"},
+				TypicalUse:     "A long typical-use string explaining the canonical caller pattern in detail so this entry consumes bytes during compaction tests.",
+				Limitations:    []string{"limit one with explanation", "limit two with explanation"},
+			},
+			Handler: func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+				return json.RawMessage(`{}`), nil
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	disp := &scriptedDispatcher{replies: []string{reply}}
+	pipes := fakePipelinesLister{raw: json.RawMessage(`[]`)}
+	pack := Plan(disp, reg, pipes)
+	store := memory.NewInMemoryStore()
+	eng := packs.New(
+		packs.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		packs.WithMemoryStore(store),
+	)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	res, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"x","model":"openrouter/openrouter/free"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var out planOutput
+	if err := json.Unmarshal(res.Output, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Compaction == nil {
+		t.Fatalf("compaction should be present on Tier C with large catalog; got nil")
+	}
+	if out.Compaction.BeforeBytes <= out.Compaction.AfterBytes {
+		t.Errorf("compaction should reduce size; before=%d after=%d", out.Compaction.BeforeBytes, out.Compaction.AfterBytes)
+	}
+	if len(out.Compaction.Dropped) == 0 {
+		t.Errorf("compaction.dropped should name the steps that fired; got empty")
 	}
 }

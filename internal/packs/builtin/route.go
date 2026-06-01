@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"github.com/tosin2013/helmdeck/internal/gateway"
+	"github.com/tosin2013/helmdeck/internal/llmcontext"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/vision"
 )
@@ -248,6 +249,26 @@ func routeHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesListe
 			} else {
 				ec.Logger.Warn("helmdeck.route: my-defaults projection failed; routing without learned defaults", "err", derr)
 			}
+		}
+
+		// ADR 050 PR #2: compact the catalog to fit the model's
+		// budget before assembling the prompt. Tier A models pass
+		// through unchanged; Tier B/C trim metadata in deterministic
+		// priority order. Same converter helpers and INFO logging as
+		// helmdeck.plan — keeping the two prompts visually parallel
+		// also keeps the two compaction paths observationally
+		// parallel for operators reading traces.
+		budget := llmcontext.BudgetFor(in.Model)
+		compactedRG, trim := llmcontext.CompactCatalog(routingGuideFromCatalog(catalog), budget)
+		catalog = catalogFromRoutingGuide(compactedRG)
+		if len(trim.Dropped) > 0 {
+			ec.Logger.Info("helmdeck.route: catalog compacted to fit model budget",
+				"model", in.Model,
+				"tier", string(budget.Tier),
+				"before_bytes", trim.BeforeBytes,
+				"after_bytes", trim.AfterBytes,
+				"dropped", trim.Dropped,
+			)
 		}
 
 		ec.Report(20, "calling model for routing decision")

@@ -32,6 +32,18 @@ OpenClaw agent
 
 The bridge is a separate MCP endpoint (`/api/v1/mcp/qmd/sse`) — not multiplexed onto the main `/api/v1/mcp/sse` — because MCPorter expects the tool name to be exactly `query` and the main PackServer uses dotted pack names. Keeping the QMD endpoint narrow also keeps the security review tractable.
 
+## First-time setup
+
+`scripts/install.sh` runs `scripts/openclaw-register-qmd.sh` automatically at the end of every install (when the OpenClaw container is present). If you're applying the openclaw-sidecar overlay manually — or upgrading from before ADR 048 PR #3 landed — run it yourself once:
+
+```bash
+scripts/openclaw-register-qmd.sh
+```
+
+The script reads the helmdeck JWT OpenClaw already stores at `/home/node/.openclaw/openclaw.json:mcp.servers.helmdeck.headers.authorization` (the same one used for the main `/api/v1/mcp/sse` connection) and writes a matching `mcporter` config entry inside the OpenClaw container. Idempotent — safe to re-run; updates the JWT each time so a rotated token doesn't break the bridge.
+
+Why this isn't baked into the compose overlay: the helmdeck JWT is materialized only after OpenClaw boots and reads its server config. A compose-level init container would have to race that boot. Running this script AFTER the stack is healthy is simpler and survives token rotation.
+
 ## Verifying the bridge is on
 
 After `compose.openclaw-sidecar.yml` is applied (default in `scripts/install.sh`):

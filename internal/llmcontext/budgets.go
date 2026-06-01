@@ -110,33 +110,59 @@ var tierC = Budget{
 // when their model gets reclassified.
 var budgetTable = []Budget{
 	// --- Tier A (frontier; compaction off) ---
-	{Model: "anthropic/claude-opus-", InputTokens: 200000, OutputTokens: 8000, MaxCatalogBytes: 0, Tier: TierA},
-	{Model: "anthropic/claude-sonnet-", InputTokens: 200000, OutputTokens: 8000, MaxCatalogBytes: 0, Tier: TierA},
-	{Model: "anthropic/claude-haiku-", InputTokens: 200000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA},
-	{Model: "openai/gpt-4o", InputTokens: 100000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA},
-	{Model: "openai/gpt-5", InputTokens: 100000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA},
-	{Model: "openrouter/anthropic/claude-", InputTokens: 200000, OutputTokens: 8000, MaxCatalogBytes: 0, Tier: TierA},
-	{Model: "openrouter/openai/gpt-4o", InputTokens: 100000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA},
-	{Model: "openrouter/openai/gpt-5", InputTokens: 100000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA},
+	//
+	// Tier-A models reliably produce structured JSON on prompts up to
+	// ~50KB of catalog. Empirical scores cited from the ADR 051 research
+	// synthesis: BFCL (Berkeley Function-Calling Leaderboard), Aider
+	// polyglot edit-format adherence, and Artificial Analysis pricing.
+	// Each entry's classification source is named in its trailing
+	// comment so future operators can trace the call to its evidence.
+	{Model: "anthropic/claude-opus-", InputTokens: 200000, OutputTokens: 8000, MaxCatalogBytes: 0, Tier: TierA},         // ADR 050; Anthropic flagship, extreme robustness under load
+	{Model: "anthropic/claude-sonnet-", InputTokens: 200000, OutputTokens: 8000, MaxCatalogBytes: 0, Tier: TierA},       // ADR 050; primary working model class for helmdeck
+	{Model: "anthropic/claude-3.7-sonnet", InputTokens: 200000, OutputTokens: 8000, MaxCatalogBytes: 0, Tier: TierA},    // BFCL 73.24%, Aider 84.2%; hybrid thinking mode — emits <think>, stripped by ADR 051 helper
+	{Model: "anthropic/claude-haiku-", InputTokens: 200000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA},        // ADR 050; fastest Anthropic, used for the helmdeck.plan filter pass when budget allows
+	{Model: "openai/gpt-4o", InputTokens: 100000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA},                  // BFCL 83.88%; stable, surfaces real HTTP errors rather than silent drops
+	{Model: "openai/gpt-5", InputTokens: 1050000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA},                  // BFCL 72.92%, Aider 88.0%, 91.6% diff-format adherence — current frontier benchmark
+	{Model: "openai/o3-mini", InputTokens: 200000, OutputTokens: 4400, MaxCatalogBytes: 0, Tier: TierA},                 // BFCL 84.00%; reasoning model — emits <think>, stripped by ADR 051 helper
+	{Model: "google/gemini-2.5-pro", InputTokens: 1050000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA},         // BFCL 85.04% (leaderboard top), Aider 99.6% edit-format
+	{Model: "google/gemini-2.5-flash", InputTokens: 1050000, OutputTokens: 2500, MaxCatalogBytes: 0, Tier: TierA},       // BFCL 75.58%; fast + cheap, watch for silent safety-filter drops on code-execution prompts
+	{Model: "openrouter/anthropic/claude-", InputTokens: 200000, OutputTokens: 8000, MaxCatalogBytes: 0, Tier: TierA},   // ADR 050; OpenRouter relay of the Anthropic family
+	{Model: "openrouter/openai/gpt-4o", InputTokens: 100000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA},       // ADR 050
+	{Model: "openrouter/openai/gpt-5", InputTokens: 1050000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA},       // ADR 050
+	{Model: "openrouter/openai/o3-mini", InputTokens: 200000, OutputTokens: 4400, MaxCatalogBytes: 0, Tier: TierA},      // mirrors openai/o3-mini above
+	{Model: "openrouter/google/gemini-2.5-", InputTokens: 1050000, OutputTokens: 4000, MaxCatalogBytes: 0, Tier: TierA}, // covers both pro and flash routes
 
 	// --- Tier B (mid-tier hosted) ---
-	{Model: "openrouter/meta-llama/llama-3.1-70b", InputTokens: 32000, OutputTokens: 2000, MaxCatalogBytes: 22000, Tier: TierB},
-	{Model: "openrouter/meta-llama/llama-3.3-70b", InputTokens: 32000, OutputTokens: 2000, MaxCatalogBytes: 22000, Tier: TierB},
-	{Model: "openrouter/google/gemma-2-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 12000, Tier: TierB},
-	{Model: "openrouter/mistralai/", InputTokens: 32000, OutputTokens: 2000, MaxCatalogBytes: 22000, Tier: TierB},
+	//
+	// Tier-B models handle structured JSON reliably up to ~25KB of
+	// catalog but show empirical wobbles documented in the ADR 051
+	// research synthesis. Compaction trims metadata; lexical fallback
+	// fires when the trim isn't enough.
+	{Model: "openrouter/meta-llama/llama-3.1-70b", InputTokens: 32000, OutputTokens: 2000, MaxCatalogBytes: 22000, Tier: TierB},                          // ADR 050; baseline mid-tier hosted
+	{Model: "openrouter/meta-llama/llama-3.3-70b", InputTokens: 32000, OutputTokens: 2000, MaxCatalogBytes: 22000, Tier: TierB},                          // ADR 050
+	{Model: "openrouter/google/gemma-2-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 12000, Tier: TierB},                                   // ADR 050
+	{Model: "openrouter/mistralai/", InputTokens: 32000, OutputTokens: 2000, MaxCatalogBytes: 22000, Tier: TierB},                                        // ADR 050; trailing-comma JSON degradation at high temperature
+	{Model: "openrouter/deepseek/deepseek-v4-pro", InputTokens: 1000000, OutputTokens: 2000, MaxCatalogBytes: 22000, Tier: TierB, AllowsLLMFilter: true}, // BFCL proxy 71.4%, Aider proxy 74.2%; HYBRID reasoning, can hit 30-min serverless timeouts — keep filter cascade on
+	{Model: "openrouter/deepseek/deepseek-v3.2", InputTokens: 128000, OutputTokens: 2000, MaxCatalogBytes: 22000, Tier: TierB},                           // Aider 74.2%; smaller context window than V4, otherwise comparable
+	{Model: "openrouter/deepseek/deepseek-chat", InputTokens: 128000, OutputTokens: 2000, MaxCatalogBytes: 22000, Tier: TierB},                           // catches the broader deepseek-chat-v3/v3.1 family
+	{Model: "openrouter/x-ai/grok-", InputTokens: 256000, OutputTokens: 2000, MaxCatalogBytes: 22000, Tier: TierB},                                       // BFCL proxy 61.38%, Aider 97.3% edit-format; price-tier bumps past 128K context
 
-	// --- Tier C (free / weak; aggressive compaction) ---
+	// --- Tier C (free / weak; aggressive compaction + filter cascade) ---
 	//
 	// The :free suffix is OpenRouter's marker for zero-cost routes.
 	// We treat ALL free routes as Tier C regardless of underlying
 	// model — the failure mode that motivated ADR 050 was a free
 	// route empty-completing on a 35KB catalog. The empirical limit
 	// for these is around 10KB of catalog before structured output
-	// gets unreliable.
+	// gets unreliable. Hybrid-reasoning entries here (kimi-k2 series)
+	// rely on ADR 051's <think>-stripping to be usable at all.
 	{Model: "openrouter/openrouter/free", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},
 	{Model: "openrouter/nvidia/nemotron-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},
-	{Model: "openrouter/z-ai/glm-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},
-	{Model: "openrouter/qwen/qwen-2.5-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},
+	{Model: "openrouter/z-ai/glm-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},           // BFCL 70.85%; infrastructure drops on the free routing tier (chronic empty completions)
+	{Model: "openrouter/qwen/qwen-2.5-", InputTokens: 16000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},      // Aider 71.4%; injects ```json fences even in strict mode — ADR 051 helper unwraps
+	{Model: "openrouter/moonshotai/kimi-k2", InputTokens: 256000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true}, // HYBRID reasoning (large <think> output); observed 5-minute timeouts on long prompts; ADR 051 helper strips think blocks
+	{Model: "openrouter/moonshotai/kimi-", InputTokens: 256000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},   // covers kimi-latest and future Kimi releases until empirically reclassified
+	{Model: "openrouter/tencent/", InputTokens: 250000, OutputTokens: 1500, MaxCatalogBytes: 10000, Tier: TierC, AllowsLLMFilter: true},           // hy3-preview + future Tencent routes; conservative until live-validated
 }
 
 // BudgetFor returns the Budget for a model id. Lookup is exact-match

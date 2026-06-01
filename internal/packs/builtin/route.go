@@ -312,16 +312,13 @@ func routeHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesListe
 		if len(chat.Choices) == 0 {
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: "gateway returned no choices"}
 		}
-		body := unwrapCodeFence(strings.TrimSpace(chat.Choices[0].Message.Content.Text()))
-		if body == "" {
-			return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: "gateway returned an empty routing response"}
-		}
-
-		// 4. Decode + validate.
+		// ADR 051 PR #1: defensive parse uniform with plan.go. The
+		// helper handles reasoning-token blocks (hybrid models),
+		// code fences, trailing prose, and the balanced-brace
+		// substring fallback.
 		var out routeOutput
-		if err := json.Unmarshal([]byte(body), &out); err != nil {
-			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-				Message: "model output is not valid JSON: " + err.Error(), Cause: err}
+		if perr := DecodeStructuredResponse(chat.Choices[0].Message.Content.Text(), "routing", &out); perr != nil {
+			return nil, perr
 		}
 		// Defensive: id MUST exist in the catalog. If the model
 		// hallucinated, demote the recommendation to a gap_warning so

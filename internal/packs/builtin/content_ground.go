@@ -90,8 +90,8 @@ import (
 )
 
 const (
-	defaultContentGroundClaims  = 5
-	maxContentGroundClaims      = 8
+	defaultContentGroundClaims = 5
+	maxContentGroundClaims     = 8
 	// defaultContentGroundTokens is the completion-token cap for the
 	// claim-extractor call. 1024 was too tight: the system prompt +
 	// topic + 5-8 claim JSON entries can land near ~750 tokens, leaving
@@ -99,8 +99,8 @@ const (
 	// JSON mid-response, surfacing as "unparseable JSON" with an empty
 	// snippet (#179). 2048 gives ~1200 tokens of output budget while
 	// staying cheap on the common case.
-	defaultContentGroundTokens  = 2048
-	maxContentGroundTokens      = 8192
+	defaultContentGroundTokens = 2048
+	maxContentGroundTokens     = 8192
 	// contentGroundPrompt is the frozen system prompt for the claim
 	// extractor. The strict JSON schema is critical — we parse the
 	// response with json.Unmarshal and bail on invalid_input if it
@@ -555,28 +555,31 @@ func extractClaims(ctx context.Context, d vision.Dispatcher, model, markdown, to
 	return plan.Claims, raw, nil
 }
 
-// parseClaimPlan tolerates the same prose/markdown wrapping as
-// webtest.parsePlan — strict unmarshal first, balanced-brace
-// fallback second. Returns a PackError so callers can plug it
-// into their error return directly.
+// parseClaimPlan delegates to the shared DecodeStructuredResponse
+// helper (ADR 051 PR #1) so the same defensive pipeline — reasoning-
+// token stripping, code-fence unwrap, decoder-tolerant parse,
+// balanced-brace substring fallback — applies uniformly across
+// every LLM-backed pack. On failure, the helper's error already
+// has the right CodeHandlerFailed code; we wrap to keep the
+// content.ground-flavored message so operators can tell which
+// pack the model output came from.
 func parseClaimPlan(raw string) (claimPlan, *packs.PackError) {
 	var p claimPlan
-	if err := json.Unmarshal([]byte(raw), &p); err == nil {
-		return p, nil
-	}
-	if obj := extractFirstJSONObject(raw); obj != "" {
-		if err := json.Unmarshal([]byte(obj), &p); err == nil {
-			return p, nil
+	if perr := DecodeStructuredResponse(raw, "claim extractor", &p); perr != nil {
+		// Preserve the caller-visible snippet preview so trace
+		// diagnostics keep the same shape they had before
+		// consolidation.
+		snippet := raw
+		if len(snippet) > 256 {
+			snippet = snippet[:256] + "…"
+		}
+		return claimPlan{}, &packs.PackError{
+			Code:    packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("claim extractor returned unparseable JSON: %s", snippet),
+			Cause:   perr.Cause,
 		}
 	}
-	snippet := raw
-	if len(snippet) > 256 {
-		snippet = snippet[:256] + "…"
-	}
-	return claimPlan{}, &packs.PackError{
-		Code:    packs.CodeHandlerFailed,
-		Message: fmt.Sprintf("claim extractor returned unparseable JSON: %s", snippet),
-	}
+	return p, nil
 }
 
 // firstUsableSource returns the first search result with a

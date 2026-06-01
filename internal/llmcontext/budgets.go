@@ -158,3 +158,22 @@ func withModel(b Budget, model string) Budget {
 	b.Model = model
 	return b
 }
+
+// AllBudgets returns a copy of the budgets table so the
+// helmdeck://context-budgets MCP resource (ADR 050 PR #2) can
+// project it for operators and agents. The returned slice is
+// safe to marshal directly — entries are immutable value types,
+// and we deep-copy to keep callers from mutating the package's
+// internal table by accident.
+func AllBudgets() []Budget {
+	out := make([]Budget, len(budgetTable))
+	copy(out, budgetTable)
+	return out
+}
+
+// TierCFallback returns the conservative Tier-C default that
+// BudgetFor uses for unmapped models. Exported so the
+// helmdeck://context-budgets MCP resource can surface the
+// fallback alongside the explicit table — operators need to
+// see what a "novel model" gets, not just what's in the table.
+func TierCFallback() Budget { return tierC }

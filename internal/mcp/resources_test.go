@@ -84,17 +84,19 @@ func TestResourcesList_PacksOnly_WhenNoSessionLister(t *testing.T) {
 	if err := json.Unmarshal([]byte(resp), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	// helmdeck://packs / routing-guide / my-defaults / my-memory are
-	// always present (ADR 047 + ADR 048 — unconditional). The optional
-	// resources (sessions/voices/image-models/models) are absent here.
-	if len(got.Result.Resources) != 4 {
-		t.Fatalf("want 4 resources (packs + routing-guide + my-defaults + my-memory), got %d: %s", len(got.Result.Resources), resp)
+	// helmdeck://packs / routing-guide / my-defaults / my-memory /
+	// context-budgets are always present (ADR 047 + ADR 048 + ADR 050 PR #2 —
+	// all unconditional). The optional resources
+	// (sessions/voices/image-models/models) are absent here.
+	if len(got.Result.Resources) != 5 {
+		t.Fatalf("want 5 resources (packs + routing-guide + my-defaults + my-memory + context-budgets), got %d: %s", len(got.Result.Resources), resp)
 	}
 	want := map[string]bool{
-		"helmdeck://packs":         false,
-		"helmdeck://routing-guide": false,
-		"helmdeck://my-defaults":   false,
-		"helmdeck://my-memory":     false,
+		"helmdeck://packs":           false,
+		"helmdeck://routing-guide":   false,
+		"helmdeck://my-defaults":     false,
+		"helmdeck://my-memory":       false,
+		"helmdeck://context-budgets": false,
 	}
 	for _, r := range got.Result.Resources {
 		if _, ok := want[r.URI]; ok {
@@ -887,5 +889,101 @@ func TestResources_MyMemory_Read_EmptyWithoutMemory(t *testing.T) {
 	}
 	if mm.Note == "" {
 		t.Errorf("expected explanatory note in nil-store projection")
+	}
+}
+
+// TestResources_ContextBudgets_AlwaysListed — context-budgets is
+// unconditionally available. Budgets are global engine policy with no
+// caller scoping and no memory dependency, so the resource must show
+// up in resources/list every time regardless of session/memory wiring.
+func TestResources_ContextBudgets_AlwaysListed(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`)
+	resp := read()
+
+	var got struct {
+		Result struct {
+			Resources []Resource `json:"resources"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	found := false
+	for _, r := range got.Result.Resources {
+		if r.URI == "helmdeck://context-budgets" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("helmdeck://context-budgets should always be listed, got %+v", got.Result.Resources)
+	}
+}
+
+// TestResources_ContextBudgets_Read_Shape — reading the resource
+// returns the expected projection: budgets[] with at least one Tier A
+// and one Tier C entry, the conservative fallback, a non-empty policy
+// string, and a fetched_at timestamp. Asserts the wire-shape contract
+// PR #2 publishes to operators.
+func TestResources_ContextBudgets_Read_Shape(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://context-budgets"}}`)
+	resp := read()
+
+	var rpc struct {
+		Result struct {
+			Contents []ResourceContent `json:"contents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &rpc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(rpc.Result.Contents) != 1 {
+		t.Fatalf("want 1 content block; got %d", len(rpc.Result.Contents))
+	}
+	if rpc.Result.Contents[0].MimeType != "application/json" {
+		t.Errorf("mime: %q", rpc.Result.Contents[0].MimeType)
+	}
+	var cb ContextBudgets
+	if err := json.Unmarshal([]byte(rpc.Result.Contents[0].Text), &cb); err != nil {
+		t.Fatalf("decode context-budgets body: %v", err)
+	}
+	if cb.FetchedAt == "" {
+		t.Errorf("fetched_at should be populated")
+	}
+	if cb.Policy == "" {
+		t.Errorf("policy string should explain lookup rules; got empty")
+	}
+	if cb.Fallback.Tier != "C" {
+		t.Errorf("fallback should be Tier C; got %q", cb.Fallback.Tier)
+	}
+	if cb.Fallback.MaxCatalogBytes == 0 {
+		t.Errorf("fallback should have non-zero MaxCatalogBytes (compaction enabled); got %d", cb.Fallback.MaxCatalogBytes)
+	}
+	if len(cb.Budgets) == 0 {
+		t.Fatalf("budgets[] should be non-empty; got %+v", cb)
+	}
+	sawA, sawC := false, false
+	for _, b := range cb.Budgets {
+		switch b.Tier {
+		case "A":
+			sawA = true
+			if b.MaxCatalogBytes != 0 {
+				t.Errorf("Tier A entry %q should have MaxCatalogBytes=0; got %d", b.Model, b.MaxCatalogBytes)
+			}
+		case "C":
+			sawC = true
+		}
+	}
+	if !sawA {
+		t.Errorf("budgets[] should include at least one Tier A entry")
+	}
+	if !sawC {
+		t.Errorf("budgets[] should include at least one Tier C entry")
 	}
 }

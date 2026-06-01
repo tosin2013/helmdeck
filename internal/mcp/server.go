@@ -420,6 +420,19 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			Description: "Per-caller index of user-supplied facts stored via helmdeck.memory_store (ADR 048 PR #2). Returns `categories[]` with name + count + recent_keys[] so the agent can discover existing facts before re-asking the user or duplicating an entry. Audit categories (`pack_history` / `pipeline_history`) are excluded — those surface via helmdeck://my-defaults. Empty when the caller has no stored facts.",
 			MimeType:    "application/json",
 		})
+		// helmdeck://context-budgets exposes the per-model prompt
+		// budgets llmcontext applies when LLM-backed packs compact
+		// their catalog projection (ADR 050 PR #2). Always listed —
+		// budgets are global engine policy, no caller scoping, no
+		// memory dependency. Operators audit which model gets which
+		// tier without grepping source; agents read it to understand
+		// why a plan was made under a slim catalog.
+		resources = append(resources, Resource{
+			URI:         "helmdeck://context-budgets",
+			Name:        "Per-model prompt budgets",
+			Description: "Per-model prompt budgets that llmcontext (ADR 050) applies when compacting the catalog projection for LLM-backed packs. Returns `budgets[]` (each `{model, input_tokens, output_tokens, max_catalog_bytes, tier}`) plus a `fallback` entry for unmapped models and a `policy` string explaining the lookup rules. Tier A = no compaction; Tier B/C = aggressive metadata trim. Read this when investigating why a free-model plan saw a slim catalog or when adding a new model id to helmdeck's deployment.",
+			MimeType:    "application/json",
+		})
 		return mk(map[string]any{"resources": resources}, nil)
 
 	case "resources/read":
@@ -575,6 +588,20 @@ func (s *PackServer) dispatch(ctx context.Context, req rpcRequest, writeFrame fu
 			body, err := json.Marshal(payload)
 			if err != nil {
 				return mk(nil, &rpcError{Code: -32603, Message: "encode my-memory: " + err.Error()})
+			}
+			return mk(map[string]any{
+				"contents": []ResourceContent{
+					{URI: params.URI, MimeType: "application/json", Text: string(body)},
+				},
+			}, nil)
+		case "helmdeck://context-budgets":
+			payload, perr := s.buildContextBudgets(ctx)
+			if perr != nil {
+				return mk(nil, perr)
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				return mk(nil, &rpcError{Code: -32603, Message: "encode context-budgets: " + err.Error()})
 			}
 			return mk(map[string]any{
 				"contents": []ResourceContent{

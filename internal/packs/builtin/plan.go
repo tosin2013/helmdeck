@@ -114,12 +114,29 @@ type planStep struct {
 // planOutput is the wire shape helmdeck.plan returns. RewrittenPrompt
 // is derived from Steps in the handler — the model does not emit it
 // directly, which keeps the two outputs from drifting.
+//
+// Compaction is the optional Trim record from llmcontext.CompactCatalog
+// (ADR 050 PR #2): set when the model's budget required trimming the
+// catalog projection, omitted when the catalog passed through (Tier A
+// or small catalogs that fit Tier C's budget without work). Agents
+// inspecting `compaction` can detect when a plan was made under a slim
+// catalog and decide whether to escalate to a stronger model.
 type planOutput struct {
-	Steps           []planStep `json:"steps"`
-	RewrittenPrompt string     `json:"rewritten_prompt"`
-	Complexity      string     `json:"complexity"`
-	Reasoning       string     `json:"reasoning,omitempty"`
-	Model           string     `json:"model"`
+	Steps           []planStep      `json:"steps"`
+	RewrittenPrompt string          `json:"rewritten_prompt"`
+	Complexity      string          `json:"complexity"`
+	Reasoning       string          `json:"reasoning,omitempty"`
+	Model           string          `json:"model"`
+	Compaction      *planCompaction `json:"compaction,omitempty"`
+}
+
+// planCompaction is the wire shape of llmcontext.Trim when surfaced
+// to the agent. Mirrors the Trim fields so agents reading the output
+// see the same numbers operators see in the INFO log line.
+type planCompaction struct {
+	BeforeBytes int      `json:"before_bytes"`
+	AfterBytes  int      `json:"after_bytes"`
+	Dropped     []string `json:"dropped,omitempty"`
 }
 
 // Plan returns the helmdeck.plan pack. Constructor signature mirrors
@@ -158,6 +175,7 @@ func Plan(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister) *pack
 				"complexity":       "string",
 				"reasoning":        "string",
 				"model":            "string",
+				"compaction":       "object",
 			},
 		},
 		Handler: planHandler(d, reg, pipes),
@@ -270,6 +288,17 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 			Complexity:      complexity,
 			Reasoning:       strings.TrimSpace(raw.Reasoning),
 			Model:           in.Model,
+		}
+		// Surface the Trim record to the agent ONLY when compaction
+		// actually fired (trim.Dropped non-empty). Tier A models pass
+		// through with empty Dropped — omitting the field there keeps
+		// the wire shape clean for the unaffected path. ADR 050 PR #2.
+		if len(trim.Dropped) > 0 {
+			out.Compaction = &planCompaction{
+				BeforeBytes: trim.BeforeBytes,
+				AfterBytes:  trim.AfterBytes,
+				Dropped:     trim.Dropped,
+			}
 		}
 
 		// Audit-write seam. We write through ec.Memory because

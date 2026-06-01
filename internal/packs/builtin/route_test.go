@@ -249,3 +249,41 @@ func TestRoute_InvalidInput(t *testing.T) {
 		t.Errorf("want CodeInvalidInput, got %v", err)
 	}
 }
+
+// TestRoute_TierAModelGetsFullCatalog — ADR 050 PR #2 wired
+// llmcontext.CompactCatalog into route.go. Tier A models must pass
+// through with full metadata; the routeFixture's blog pack declared
+// IntentKeywords that should survive in the prompt verbatim.
+func TestRoute_TierAModelGetsFullCatalog(t *testing.T) {
+	reply := `{"recommendation":{"kind":"pack","id":"blog.rewrite_for_audience"},"alternatives":[],"gap_warning":null,"reasoning":"ok"}`
+	eng, disp, pack := routeFixture(t, reply, nil)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"rewrite this","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	user := disp.captured[0].Messages[1].Content.Text()
+	if !strings.Contains(user, "rewrite for audience") {
+		t.Errorf("Tier A model should see full metadata including intent_keywords; user message lacks 'rewrite for audience'")
+	}
+}
+
+// TestRoute_TierCModelPreservesSupersedes — ADR 050 PR #2 wired
+// llmcontext.CompactCatalog into route.go. Tier C models trim
+// aggressively, but pipeline metadata.supersedes must survive — the
+// supersedes link anchors helmdeck.route's rule R2 the same way it
+// anchors helmdeck.plan's rule P2.
+func TestRoute_TierCModelPreservesSupersedes(t *testing.T) {
+	reply := `{"recommendation":{"kind":"pipeline","id":"builtin.doc-rewrite-blog"},"alternatives":[],"gap_warning":null,"reasoning":"ok"}`
+	eng, disp, pack := routeFixture(t, reply, nil)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"x","model":"openrouter/openrouter/free"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	user := disp.captured[0].Messages[1].Content.Text()
+	// The fixture's pipeline JSON includes
+	// "supersedes":["builtin.doc-ground-blog"] — that field MUST
+	// survive Tier C compaction.
+	if !strings.Contains(user, "supersedes") || !strings.Contains(user, "builtin.doc-ground-blog") {
+		t.Errorf("Tier C compaction must preserve pipeline supersedes link; got: %s", user)
+	}
+}

@@ -125,6 +125,7 @@ func NewRouter(deps Deps) http.Handler {
 	registerMCPRoutes(mux, deps)
 	registerMCPServerRoute(mux, deps)
 	registerMCPSSERoutes(mux, deps)
+	registerMCPQMDSSERoutes(mux, deps)
 	registerBridgeVersionRoute(mux, deps)
 	registerConnectRoutes(mux, deps)
 	registerAuditRoutes(mux, deps)

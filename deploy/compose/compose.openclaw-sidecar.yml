@@ -46,3 +46,12 @@ services:
       # `shouldEnableShellEnvFallback`. Without it, OPENROUTER_API_KEY
       # is ignored and `models status` reports "Shell env: off".
       OPENCLAW_LOAD_SHELL_ENV: "true"
+      # ADR 048 PR #3: enable the QMD memory-corpus bridge so
+      # OpenClaw's memory_search surfaces helmdeck's audit history +
+      # user_facts alongside the user's conversational chunks.
+      # OpenClaw's MCPorter daemon dials helmdeck-control-plane's
+      # /api/v1/mcp/qmd/sse and calls the `query` tool. Set
+      # OPENCLAW_QMD_ENABLED=false in your shell to opt out.
+      OPENCLAW_MEMORY_QMD_MCPORTER_ENABLED: "${OPENCLAW_QMD_ENABLED:-true}"
+      OPENCLAW_MEMORY_QMD_MCPORTER_SERVERNAME: "helmdeck"
+      OPENCLAW_MEMORY_QMD_MCPORTER_STARTDAEMON: "true"

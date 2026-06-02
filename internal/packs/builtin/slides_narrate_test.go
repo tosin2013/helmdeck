@@ -189,8 +189,8 @@ func TestSlidesNarrate_NoNotes(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 	var out struct {
-		HasNarration bool    `json:"has_narration"`
-		SlideCount   int     `json:"slide_count"`
+		HasNarration   bool    `json:"has_narration"`
+		SlideCount     int     `json:"slide_count"`
 		TotalDurationS float64 `json:"total_duration_s"`
 	}
 	_ = json.Unmarshal(raw, &out)
@@ -573,5 +573,47 @@ func TestElevenLabsTTS_Stub(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if len(body) == 0 {
 		t.Error("empty response body")
+	}
+}
+
+// TestNormalizeSlidesNarrateResolution — the named-preset vocabulary
+// hyperframes.render uses ("1080p", "720p", "4k") is now translated
+// to the "WIDTHxHEIGHT" string ffmpeg's scale filter requires
+// BEFORE the per-segment encode. The motivating failure was a real
+// run that exited handler_failed with ffmpeg: "Invalid size '1080p'"
+// because the caller's "resolution":"1080p" reached the scale=
+// filter unmodified. Operators can use the same value across both
+// packs now.
+func TestNormalizeSlidesNarrateResolution(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		// Named presets translate.
+		{"720p", "1280x720"},
+		{"1080p", "1920x1080"},
+		{"1440p", "2560x1440"},
+		{"2160p", "3840x2160"},
+		{"4k", "3840x2160"},
+		// Case-insensitive, whitespace-tolerant.
+		{"4K", "3840x2160"},
+		{"  1080P  ", "1920x1080"},
+		// Pre-formatted strings pass through (already ffmpeg-shape).
+		{"1920x1080", "1920x1080"},
+		{"640x480", "640x480"},
+		// Empty stays empty — caller applies its default downstream.
+		{"", ""},
+		// Unknown values pass through unchanged so ffmpeg surfaces
+		// its own "Invalid size" error with the offending input.
+		// Silent normalization would mask typos.
+		{"giant", "giant"},
+		{"1080", "1080"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			if got := normalizeSlidesNarrateResolution(tc.in); got != tc.want {
+				t.Errorf("normalizeSlidesNarrateResolution(%q) = %q; want %q",
+					tc.in, got, tc.want)
+			}
+		})
 	}
 }

@@ -24,6 +24,7 @@ func TestClassify(t *testing.T) {
 		{"internal is a pack bug", &packs.PackError{Code: packs.CodeInternal, Message: "invariant"}, packs.CodeInternal, FailurePackBug},
 		{"timeout is transient", &packs.PackError{Code: packs.CodeTimeout}, packs.CodeTimeout, FailureTransient},
 		{"session unavailable is transient", &packs.PackError{Code: packs.CodeSessionUnavailable}, packs.CodeSessionUnavailable, FailureTransient},
+		{"resource exhausted (OOM kill) is transient, NOT a pack bug", &packs.PackError{Code: packs.CodeResourceExhausted, Message: "ffmpeg segment 9 killed by the OS on exit 137"}, packs.CodeResourceExhausted, FailureTransient},
 		{"schema mismatch is state-changed", &packs.PackError{Code: packs.CodeSchemaMismatch}, packs.CodeSchemaMismatch, FailureStateChanged},
 		{"non-PackError is a pipeline definition problem", errors.New("unresolved reference"), "", FailureCallerFixable},
 	}
@@ -53,7 +54,16 @@ func TestClassify(t *testing.T) {
 }
 
 func TestIsRetryable(t *testing.T) {
-	retryable := []packs.ErrorCode{packs.CodeTimeout, packs.CodeSessionUnavailable, packs.CodeArtifactFailed}
+	retryable := []packs.ErrorCode{
+		packs.CodeTimeout,
+		packs.CodeSessionUnavailable,
+		packs.CodeArtifactFailed,
+		// CodeResourceExhausted (OOM kills): re-running with a
+		// bumped memory budget or smaller job size frequently
+		// succeeds, so the retry loop should give it a shot
+		// before surfacing.
+		packs.CodeResourceExhausted,
+	}
 	for _, c := range retryable {
 		if !isRetryable(c) {
 			t.Errorf("%s should be retryable", c)

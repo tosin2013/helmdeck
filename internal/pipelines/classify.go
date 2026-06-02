@@ -59,6 +59,9 @@ func classify(err error, pack string) (code packs.ErrorCode, class, reason strin
 	case packs.CodeTimeout, packs.CodeSessionUnavailable, packs.CodeArtifactFailed:
 		class = FailureTransient
 		reason = "A transient/environment error (timeout, session, or artifact store). Re-running may succeed."
+	case packs.CodeResourceExhausted:
+		class = FailureTransient
+		reason = "The OS killed a child process for resource reasons (typically OOM — exit 137 / SIGKILL). The pack itself isn't buggy; the workload was too heavy for the session's memory/CPU budget. Bump SessionSpec.MemoryLimit, reduce the job size (fewer slides/segments/pages), or re-run on a host with more memory."
 	default: // CodeHandlerFailed, CodeInvalidOutput, CodeInternal, unknown
 		class = FailurePackBug
 		reason = fmt.Sprintf(
@@ -72,7 +75,7 @@ func classify(err error, pack string) (code packs.ErrorCode, class, reason strin
 // (ADR 044 slice 2). Lives here now as the seam the retry policy keys off.
 func isRetryable(code packs.ErrorCode) bool {
 	switch code {
-	case packs.CodeTimeout, packs.CodeSessionUnavailable, packs.CodeArtifactFailed:
+	case packs.CodeTimeout, packs.CodeSessionUnavailable, packs.CodeArtifactFailed, packs.CodeResourceExhausted:
 		return true
 	default:
 		return false

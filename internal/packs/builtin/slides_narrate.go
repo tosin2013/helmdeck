@@ -51,7 +51,7 @@ const (
 	elevenLabsDefaultModelID = "eleven_multilingual_v2"
 	elevenLabsDefaultFormat  = "mp3_44100_128"
 
-	defaultSlideDuration = 5.0  // seconds for slides without narration
+	defaultSlideDuration = 5.0       // seconds for slides without narration
 	maxVideoSize         = 256 << 20 // 256 MiB cap on final video
 
 	narrateYouTubePrompt = `You are a YouTube metadata writer. Given the content and durations of a slide presentation, produce ONE JSON object with exactly these fields:
@@ -430,9 +430,22 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 				stderr := strings.TrimSpace(string(res.Stderr))
 				artKey := persistFfmpegStderr(ctx, ec, fmt.Sprintf("ffmpeg-stderr-segment-%03d.txt", i),
 					cmd, res.Stderr)
-				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-					Message: fmt.Sprintf("ffmpeg segment %d failed (exit %d): %s%s",
-						i, res.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))}
+				// Lift OS-side kills (typically OOM at 1080p with
+				// large segment counts) into CodeResourceExhausted so
+				// classify.go routes them to FailureTransient instead
+				// of FailurePackBug. The classify path adds an
+				// actionable "bump MemoryLimit / split the deck"
+				// reason; we replace the message here too so an
+				// operator reading the raw error sees the same hint.
+				code := packs.CodeHandlerFailed
+				msg := fmt.Sprintf("ffmpeg segment %d failed (exit %d): %s%s",
+					i, res.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))
+				if rc, ok := classifyShellExitCode(res.ExitCode); ok {
+					code = rc
+					msg = fmt.Sprintf("ffmpeg segment %d killed by the OS on exit %d (likely OOM at 1080p — bump SessionSpec.MemoryLimit, reduce slide count, or lower the encode resolution). stderr: %s%s",
+						i, res.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))
+				}
+				return nil, &packs.PackError{Code: code, Message: msg}
 			}
 		}
 
@@ -453,9 +466,15 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			stderr := strings.TrimSpace(string(concatRes.Stderr))
 			artKey := persistFfmpegStderr(ctx, ec, "ffmpeg-stderr-concat.txt",
 				"ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt -c copy /tmp/final.mp4", concatRes.Stderr)
-			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-				Message: fmt.Sprintf("ffmpeg concat failed (exit %d): %s%s",
-					concatRes.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))}
+			code := packs.CodeHandlerFailed
+			msg := fmt.Sprintf("ffmpeg concat failed (exit %d): %s%s",
+				concatRes.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))
+			if rc, ok := classifyShellExitCode(concatRes.ExitCode); ok {
+				code = rc
+				msg = fmt.Sprintf("ffmpeg concat killed by the OS on exit %d (likely OOM — concat is usually cheap, but tight memory limits + large per-segment files can still trip the OOM killer). stderr: %s%s",
+					concatRes.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))
+			}
+			return nil, &packs.PackError{Code: code, Message: msg}
 		}
 
 		// 8. Read back the final video.

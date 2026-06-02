@@ -70,6 +70,30 @@ type ChatRequest struct {
 	Stream      bool             `json:"stream,omitempty"`
 	Tools       []ToolDefinition `json:"tools,omitempty"`
 	ToolChoice  *ToolChoice      `json:"tool_choice,omitempty"`
+
+	// ResponseFormat opts into provider-side structured-output mode
+	// (ADR 051 PR #3). Empty string is the default unconstrained
+	// behavior, identical to pre-PR-3 dispatches. The string-based
+	// type keeps the wire shape forward-compatible: providers that
+	// don't recognize a value pass through unconstrained, and adding
+	// new values (e.g. "json_schema" with a separate schema field) is
+	// purely additive.
+	//
+	// Recognized values:
+	//   "" (or absent)  — no provider-side JSON constraint
+	//   "json_object"   — provider validates output is syntactically
+	//                     valid JSON (OpenAI `response_format`,
+	//                     Gemini `responseMimeType`, Mistral
+	//                     `response_format`). Providers that don't
+	//                     expose a strict-JSON mode (Anthropic,
+	//                     Ollama, Deepseek native) silently fall
+	//                     through to the prompt-driven path.
+	//
+	// Pack handlers set this from Budget.WantsStrictJSON; the
+	// dispatcher passes it through unchanged so any future
+	// gateway-internal client (engine.Execute, integration tests) can
+	// opt in without touching pack code.
+	ResponseFormat string `json:"response_format,omitempty"`
 }
 
 // ToolDefinition is a provider-agnostic tool the LLM may call. Name

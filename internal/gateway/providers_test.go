@@ -994,3 +994,128 @@ func TestToolsOmittedByDefault(t *testing.T) {
 		check(t, gotBody, `"tools"`, `"toolConfig"`)
 	})
 }
+
+// TestResponseFormatTranslation locks the ADR 051 PR #3 contract:
+// ChatRequest.ResponseFormat="json_object" lands on the wire as the
+// provider's strict-JSON envelope for providers that support it
+// (OpenAI-family, Gemini) and is silently dropped for providers that
+// don't (Anthropic uses tool calls for structured output).
+func TestResponseFormatTranslation(t *testing.T) {
+	t.Run("openai forwards json_object envelope", func(t *testing.T) {
+		var gotBody string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+			_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"{}"},"finish_reason":"stop"}],"usage":{}}`))
+		}))
+		defer srv.Close()
+		p := NewOpenAIProvider(OpenAIConfig{APIKey: "k", BaseURL: srv.URL})
+		_, err := p.ChatCompletion(context.Background(), ChatRequest{
+			Model:          "gpt-4o",
+			Messages:       []Message{{Role: "user", Content: TextContent("hi")}},
+			ResponseFormat: "json_object",
+		})
+		if err != nil {
+			t.Fatalf("ChatCompletion: %v", err)
+		}
+		if !strings.Contains(gotBody, `"response_format":{"type":"json_object"}`) {
+			t.Errorf("openai body missing response_format envelope: %s", gotBody)
+		}
+	})
+
+	t.Run("openai omits response_format when unset", func(t *testing.T) {
+		var gotBody string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+			_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{}}`))
+		}))
+		defer srv.Close()
+		p := NewOpenAIProvider(OpenAIConfig{APIKey: "k", BaseURL: srv.URL})
+		_, _ = p.ChatCompletion(context.Background(), ChatRequest{
+			Model:    "gpt-4o",
+			Messages: []Message{{Role: "user", Content: TextContent("hi")}},
+		})
+		if strings.Contains(gotBody, `response_format`) {
+			t.Errorf("openai body leaked response_format on unset: %s", gotBody)
+		}
+	})
+
+	t.Run("openai ignores unknown response_format values", func(t *testing.T) {
+		var gotBody string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+			_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","created":1,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{}}`))
+		}))
+		defer srv.Close()
+		p := NewOpenAIProvider(OpenAIConfig{APIKey: "k", BaseURL: srv.URL})
+		_, _ = p.ChatCompletion(context.Background(), ChatRequest{
+			Model:          "gpt-4o",
+			Messages:       []Message{{Role: "user", Content: TextContent("hi")}},
+			ResponseFormat: "json_schema", // not yet translated — should fall through
+		})
+		if strings.Contains(gotBody, `response_format`) {
+			t.Errorf("openai forwarded unrecognized response_format: %s", gotBody)
+		}
+	})
+
+	t.Run("gemini sets responseMimeType", func(t *testing.T) {
+		var gotBody string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"{}"}]},"finishReason":"STOP","index":0}],"usageMetadata":{}}`))
+		}))
+		defer srv.Close()
+		p := NewGeminiProvider(GeminiConfig{APIKey: "k", BaseURL: srv.URL})
+		_, err := p.ChatCompletion(context.Background(), ChatRequest{
+			Model:          "gemini-2.5-flash",
+			Messages:       []Message{{Role: "user", Content: TextContent("hi")}},
+			ResponseFormat: "json_object",
+		})
+		if err != nil {
+			t.Fatalf("ChatCompletion: %v", err)
+		}
+		if !strings.Contains(gotBody, `"responseMimeType":"application/json"`) {
+			t.Errorf("gemini body missing responseMimeType: %s", gotBody)
+		}
+	})
+
+	t.Run("gemini omits responseMimeType when unset", func(t *testing.T) {
+		var gotBody string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]},"finishReason":"STOP","index":0}],"usageMetadata":{}}`))
+		}))
+		defer srv.Close()
+		p := NewGeminiProvider(GeminiConfig{APIKey: "k", BaseURL: srv.URL})
+		_, _ = p.ChatCompletion(context.Background(), ChatRequest{
+			Model:    "gemini-2.5-flash",
+			Messages: []Message{{Role: "user", Content: TextContent("hi")}},
+		})
+		if strings.Contains(gotBody, `responseMimeType`) {
+			t.Errorf("gemini body leaked responseMimeType on unset: %s", gotBody)
+		}
+	})
+
+	t.Run("anthropic ignores response_format silently", func(t *testing.T) {
+		var gotBody string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+			_, _ = w.Write([]byte(`{"id":"x","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"{}"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+		}))
+		defer srv.Close()
+		p := NewAnthropicProvider(AnthropicConfig{APIKey: "k", BaseURL: srv.URL})
+		_, _ = p.ChatCompletion(context.Background(), ChatRequest{
+			Model:          "claude-sonnet-4-6",
+			Messages:       []Message{{Role: "user", Content: TextContent("hi")}},
+			ResponseFormat: "json_object",
+		})
+		if strings.Contains(gotBody, `response_format`) {
+			t.Errorf("anthropic body leaked response_format: %s", gotBody)
+		}
+	})
+}

@@ -371,6 +371,48 @@ func TestPlan_TierAModelGetsFullCatalog(t *testing.T) {
 	}
 }
 
+// TestPlan_StrictJSONFlipsOnTierA — ADR 051 PR #3. Tier A models with
+// WantsStrictJSON=true should opt the dispatch into provider-side
+// structured-output mode by setting ChatRequest.ResponseFormat to
+// "json_object". This locks the wiring from Budget → ChatRequest.
+func TestPlan_StrictJSONFlipsOnTierA(t *testing.T) {
+	reply := `{"steps":[{"order":1,"tool":"helmdeck.memory_store","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
+	eng, disp, pack, _ := planFixture(t, reply)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	// anthropic/claude-haiku-* is Tier A + WantsStrictJSON=true per
+	// budgets.go. The fact that strict JSON is forwarded to a provider
+	// that ignores it (Anthropic uses tool-call structure) is fine —
+	// the gateway-level field is provider-agnostic and providers that
+	// don't support it pass through unchanged.
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"x","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := disp.captured[0].ResponseFormat; got != "json_object" {
+		t.Errorf("Tier A + WantsStrictJSON should set ResponseFormat=json_object; got %q", got)
+	}
+}
+
+// TestPlan_StrictJSONSuppressedOnTierC — Tier C entries deliberately
+// stay on the prompt-engineered JSON path even when an admin flags
+// WantsStrictJSON. The research synthesis cited in ADR 051 names
+// constrained-decoding deadlock as the dominant failure mode of
+// quantized open-weight inference; strict mode makes that worse.
+func TestPlan_StrictJSONSuppressedOnTierC(t *testing.T) {
+	reply := `{"steps":[{"order":1,"tool":"helmdeck.memory_store","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
+	eng, disp, pack, _ := planFixture(t, reply)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	// Unknown model id falls through to the Tier C default fallback.
+	// Even if a future admin sets WantsStrictJSON=true on the fallback
+	// entry, the Tier C tier guard suppresses strict mode at the
+	// dispatch site, so ResponseFormat must stay empty here.
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"x","model":"someone/unknown-model-id"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := disp.captured[0].ResponseFormat; got != "" {
+		t.Errorf("Tier C should suppress strict-JSON mode regardless of flag; got ResponseFormat=%q", got)
+	}
+}
+
 // TestPlan_CompactionFieldOmittedOnTierA — Tier A models pass the
 // catalog through unchanged; the plan output must NOT carry a
 // compaction field in that case. Asserts the omitempty contract on

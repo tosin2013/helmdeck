@@ -77,6 +77,37 @@ func routeFixture(t *testing.T, reply string, seedAudit func(memory.MemoryStore,
 	return eng, disp, pack
 }
 
+// TestRoute_StrictJSONFlipsOnTierA — ADR 051 PR #3. Same as the
+// helmdeck.plan test: route opts into provider-side strict JSON when
+// the model's tier entry advertises WantsStrictJSON AND the tier is
+// not C. Tier A claude-haiku has both flags set.
+func TestRoute_StrictJSONFlipsOnTierA(t *testing.T) {
+	reply := `{"recommendation":{"kind":"pack","id":"doc.parse","why":"x"},"alternatives":[],"gap_warning":null,"reasoning":"x"}`
+	eng, disp, pack := routeFixture(t, reply, nil)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"parse this pdf","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := disp.captured[0].ResponseFormat; got != "json_object" {
+		t.Errorf("Tier A + WantsStrictJSON should set ResponseFormat=json_object; got %q", got)
+	}
+}
+
+// TestRoute_StrictJSONSuppressedOnTierC — Tier C entries stay on the
+// prompt-engineered JSON path; constrained-decoding mode is the wrong
+// tool for crash-prone quantized inference.
+func TestRoute_StrictJSONSuppressedOnTierC(t *testing.T) {
+	reply := `{"recommendation":{"kind":"pack","id":"doc.parse","why":"x"},"alternatives":[],"gap_warning":null,"reasoning":"x"}`
+	eng, disp, pack := routeFixture(t, reply, nil)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"parse this pdf","model":"someone/unknown-model-id"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := disp.captured[0].ResponseFormat; got != "" {
+		t.Errorf("Tier C should suppress strict-JSON mode regardless of flag; got %q", got)
+	}
+}
+
 // TestRoute_HappyPath_ProposesPipeline — model picks the doc-rewrite-blog
 // pipeline. Handler returns the recommendation verbatim (no demotion).
 func TestRoute_HappyPath_ProposesPipeline(t *testing.T) {

@@ -58,13 +58,23 @@ func (p *openAIProvider) Models(ctx context.Context) ([]string, error) {
 // rather than a raw JSON object. We build openAIMessage values per
 // call instead of passing req.Messages through verbatim.
 type openAIChatRequest struct {
-	Model       string           `json:"model"`
-	Messages    []openAIMessage  `json:"messages"`
-	Temperature *float64         `json:"temperature,omitempty"`
-	MaxTokens   *int             `json:"max_tokens,omitempty"`
-	Stream      bool             `json:"stream,omitempty"`
-	Tools       []openAITool     `json:"tools,omitempty"`
-	ToolChoice  any              `json:"tool_choice,omitempty"`
+	Model          string             `json:"model"`
+	Messages       []openAIMessage    `json:"messages"`
+	Temperature    *float64           `json:"temperature,omitempty"`
+	MaxTokens      *int               `json:"max_tokens,omitempty"`
+	Stream         bool               `json:"stream,omitempty"`
+	Tools          []openAITool       `json:"tools,omitempty"`
+	ToolChoice     any                `json:"tool_choice,omitempty"`
+	ResponseFormat *openAIResponseFmt `json:"response_format,omitempty"`
+}
+
+// openAIResponseFmt is the upstream `response_format` envelope. Today
+// we only translate `"json_object"` from the gateway-level
+// ChatRequest.ResponseFormat; OpenAI documents the same field accepts
+// `"json_schema"` with a nested `json_schema` object — adding that is
+// purely additive once a caller needs it.
+type openAIResponseFmt struct {
+	Type string `json:"type"`
 }
 
 // openAIMessage mirrors the openai /v1/chat/completions message
@@ -162,6 +172,16 @@ func (p *openAIProvider) ChatCompletion(ctx context.Context, req ChatRequest) (C
 	if req.ToolChoice != nil {
 		upstream.ToolChoice = translateOpenAIToolChoice(req.ToolChoice)
 	}
+	// Structured-output mode (ADR 051 PR #3). OpenAI's documented
+	// response_format values are "text" (default), "json_object"
+	// (validates JSON syntax), and "json_schema" (constrained
+	// decoding against a caller-supplied schema). We forward
+	// "json_object" verbatim; unknown values fall through
+	// unconstrained so a future ResponseFormat value rolling out
+	// faster than this translator updates can't break dispatch.
+	if req.ResponseFormat == "json_object" {
+		upstream.ResponseFormat = &openAIResponseFmt{Type: "json_object"}
+	}
 	// Translate each gateway Message into an openAIMessage. Most
 	// messages pass through with Content untouched — the gateway
 	// MessageContent already marshals to string or array shapes
@@ -184,8 +204,8 @@ func (p *openAIProvider) ChatCompletion(ctx context.Context, req ChatRequest) (C
 		}
 		// Multipart — split tool_use / tool_result out from text/image.
 		var (
-			cleanParts []ContentPart
-			toolCalls  []openAIToolCall
+			cleanParts  []ContentPart
+			toolCalls   []openAIToolCall
 			toolResults []openAIMessage
 		)
 		for _, part := range m.Content.Parts() {

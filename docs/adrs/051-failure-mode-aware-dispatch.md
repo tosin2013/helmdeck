@@ -56,13 +56,13 @@ Promote helmdeck's empty-completion handling from "string error message" to "typ
   - `CachedInputCostUSDPerMTok float64` — surfaced via `helmdeck://context-budgets` for cost-aware routing.
 - The Tier A entries PR #1 introduces (`o3-mini`, `claude-3.7-sonnet`, `deepseek-v4-pro` despite being Tier B) get `IsHybridReasoning: true` in PR #2; the rest stay false by default.
 
-### PR #3 — Provider-side strict JSON / structured-output mode
+### PR #3 — Provider-side strict JSON / structured-output mode (shipped 2026-06-02)
 
 Most provider APIs now support a `response_format` field constraining the model to syntactically valid JSON. Today our `gateway.ChatRequest` doesn't expose this — we rely entirely on prompt-engineering. On Tier A models that natively support strict mode, this eliminates trailing-prose and markdown-injection failure classes. On Tier C weak open-weights models running through quantized inference engines, the report describes a "constrained-decoding deadlock" failure mode where strict mode aborts the generation entirely; strict mode is contraindicated on these models.
 
-- `ResponseFormat` field on `gateway.ChatRequest` — values `""` (current behavior), `"json_object"`, `"json_schema"`.
-- Per-provider translation in `gateway.go`: OpenAI `response_format.json_object`, Anthropic tool-call contract, Gemini `responseMimeType`. Unsupported providers fall through to unconstrained dispatch with a debug warning.
-- `helmdeck.plan` and `helmdeck.route` opt in by passing `ResponseFormat: "json_object"` when `Budget.WantsStrictJSON` is true.
+- `ResponseFormat` field on `gateway.ChatRequest` — values `""` (current behavior), `"json_object"`, `"json_schema"`. String-based so forward-compat values land additively without touching every adapter.
+- Per-provider translation: OpenAI sends `response_format.json_object` (Mistral / Groq / Fireworks / OpenRouter inherit it for free via `NewOpenAIProvider`); Gemini sets `generationConfig.responseMimeType`; Anthropic ignores it (uses tool-call structure); Ollama passes through unconstrained. Unknown ResponseFormat values fall through unconstrained at every adapter.
+- `helmdeck.plan` and `helmdeck.route` opt in by passing `ResponseFormat: "json_object"` when `Budget.WantsStrictJSON` is true AND `Budget.Tier != TierC` — the tier guard is the safety belt for crash-prone quantized inference on weak open-weights.
 
 ### PR #4 — Prefix-cache-aware two-pass cascade
 

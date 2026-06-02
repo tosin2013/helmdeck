@@ -45,12 +45,24 @@ import (
 // the validator stays self-contained; the two values must match.
 const elevenLabsBaseURL = "https://api.elevenlabs.io"
 
-// ValidateElevenLabs makes a single GET /v1/user against the
+// ValidateElevenLabs makes a single GET /v1/voices against the
 // ElevenLabs API to confirm the provided key is accepted before the
 // caller burns more expensive work (LLM metadata calls, Marp render,
 // per-slide TTS round-trips). The call is cheap by design — it
-// returns a small JSON describing the account and never bills
-// against the TTS character quota.
+// returns the voice list (small JSON) and never bills against the
+// TTS character quota.
+//
+// Why /v1/voices and NOT /v1/user: ElevenLabs API keys are
+// scope-gated, and the four scopes (text_to_speech, voices_read,
+// user_read, history_read) are GRANTED INDEPENDENTLY. A real
+// production key minted with just text_to_speech + voices_read can
+// do every TTS operation slides.narrate needs but will 401 against
+// /v1/user with "missing the permission user_read". Validating
+// against /v1/user therefore blocked working keys with a
+// scope-mismatch false-positive (observed on a live run). /v1/voices
+// requires voices_read, which is the same scope slides.narrate's own
+// pickRandomVoice path already calls — keys that pass this precheck
+// are guaranteed to work through the rest of the handler.
 //
 // Return contract:
 //
@@ -79,7 +91,7 @@ func ValidateElevenLabs(ctx context.Context, hc *http.Client, apiKey string) err
 		return &packs.PackError{Code: packs.CodeCredentialInvalid,
 			Message: "ElevenLabs API key is empty — vault hydration may have failed or HELMDECK_ELEVENLABS_API_KEY is unset"}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, elevenLabsBaseURL+"/v1/user", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, elevenLabsBaseURL+"/v1/voices", nil)
 	if err != nil {
 		return fmt.Errorf("build elevenlabs validate request: %w", err)
 	}

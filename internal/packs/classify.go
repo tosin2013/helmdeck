@@ -10,7 +10,13 @@ import (
 
 // validCodes is the closed-set referenced by ADR 008. T206's promise
 // is that no error returned from Engine.Execute carries a code outside
-// this set, regardless of what a handler did internally.
+// this set, regardless of what a handler did internally. Codes added
+// in later PRs (CodeResourceExhausted in #379, CodeCredentialInvalid
+// in #381) MUST be added here too — otherwise Classify below coerces
+// them to CodeInternal and the pipeline-level FailureClass router maps
+// them to pack_bug instead of their intended transient / caller_fixable
+// buckets. The missing entries were the silent regression that made
+// both prior PRs ship non-functional in the wire envelope.
 var validCodes = map[ErrorCode]struct{}{
 	CodeInvalidInput:       {},
 	CodeInvalidOutput:      {},
@@ -19,6 +25,8 @@ var validCodes = map[ErrorCode]struct{}{
 	CodeHandlerFailed:      {},
 	CodeArtifactFailed:     {},
 	CodeTimeout:            {},
+	CodeResourceExhausted:  {},
+	CodeCredentialInvalid:  {},
 	CodeInternal:           {},
 }
 

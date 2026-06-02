@@ -23,6 +23,12 @@ func TestClassifyTable(t *testing.T) {
 		{"wrapped deadline", fmt.Errorf("upstream: %w", context.DeadlineExceeded), CodeTimeout},
 		{"session not found", session.ErrSessionNotFound, CodeSessionUnavailable},
 		{"valid pack error", &PackError{Code: CodeArtifactFailed, Message: "s3 down"}, CodeArtifactFailed},
+		// Regression guard: PR #379 (CodeResourceExhausted) and PR #381
+		// (CodeCredentialInvalid) added typed codes whose pipeline-level
+		// FailureClass mappings are useless if Classify silently coerces
+		// them to CodeInternal here. Both must round-trip unchanged.
+		{"resource exhausted preserved", &PackError{Code: CodeResourceExhausted, Message: "OOM killed ffmpeg"}, CodeResourceExhausted},
+		{"credential invalid preserved", &PackError{Code: CodeCredentialInvalid, Message: "ElevenLabs 401"}, CodeCredentialInvalid},
 		{"invalid pack error code", &PackError{Code: "weird", Message: "x"}, CodeInternal},
 		{"artifact hint", errors.New("artifact upload failed"), CodeArtifactFailed},
 		{"session hint", errors.New("session was reaped"), CodeSessionUnavailable},

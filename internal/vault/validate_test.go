@@ -48,8 +48,8 @@ func TestValidateElevenLabs_OK(t *testing.T) {
 		if got := r.Header.Get("xi-api-key"); got != "test-key" {
 			t.Errorf("xi-api-key header missing or wrong: %q", got)
 		}
-		if r.URL.Path != "/v1/user" {
-			t.Errorf("validator should hit /v1/user; got %q", r.URL.Path)
+		if r.URL.Path != "/v1/voices" {
+			t.Errorf("validator should hit /v1/voices (scope: voices_read — matches the per-slide TTS path); got %q", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"xi_api_key":"test-key"}`))

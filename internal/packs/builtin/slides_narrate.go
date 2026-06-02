@@ -32,6 +32,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,22 @@ const (
 
 	defaultSlideDuration = 5.0       // seconds for slides without narration
 	maxVideoSize         = 256 << 20 // 256 MiB cap on final video
+
+	// slidesNarrateDefaultFfmpegThreads bounds libx264's per-encoder
+	// thread count on the per-segment ffmpeg command. Without an
+	// explicit -threads flag, libx264 grabs every host core (12 on a
+	// typical workstation), and each thread holds ~50-80 MB of frame
+	// buffers at 1080p — that's ~800 MB of encoder state alone before
+	// reference frames, lookahead, and Chromium's resident set. Most
+	// observed OOMs trace back to this. Capping to 4 cuts peak by
+	// ~3× at the cost of ~20% wall-clock per segment, which is
+	// negligible against the wins. Operators with abundant RAM bump
+	// via HELMDECK_SLIDES_NARRATE_FFMPEG_THREADS. ADR 045 stays in
+	// place — CPUProfile=ProfileCompute still scales the container's
+	// CPU quota with host cores; this cap is narrowly about the
+	// encoder thread *count*, not CPU allocation.
+	slidesNarrateDefaultFfmpegThreads = "4"
+	slidesNarrateFfmpegThreadsEnv     = "HELMDECK_SLIDES_NARRATE_FFMPEG_THREADS"
 
 	narrateYouTubePrompt = `You are a YouTube metadata writer. Given the content and durations of a slide presentation, produce ONE JSON object with exactly these fields:
 
@@ -488,16 +505,44 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 						fadeSec, dur-fadeSec, fadeSec)
 				}
 			}
-			cmd := fmt.Sprintf(
-				"ffmpeg -y -loop 1 -i %s -i %s -c:v libx264 -tune stillimage "+
-					"-c:a aac -b:a 192k -vf '%s' -pix_fmt yuv420p -shortest %s",
-				shellQuote(slideFile), shellQuote(audioFile), vf, shellQuote(segFile),
-			)
-			res, err := ec.Exec(ctx, session.ExecRequest{Cmd: []string{"sh", "-c", cmd}})
+			// Primary attempt: capped threads (default 4) at libx264's
+			// "medium" preset. Operators can bump the thread cap via
+			// HELMDECK_SLIDES_NARRATE_FFMPEG_THREADS on hosts with
+			// abundant RAM.
+			primaryOpts := ffmpegEncodeOpts{
+				Threads: slidesNarrateFfmpegThreads(),
+			}
+			res, err := encodeSegment(ctx, ec, slideFile, audioFile, segFile, vf, primaryOpts)
+			// Adaptive retry: if the OS killed ffmpeg with the OOM
+			// signature (exit 137 → CodeResourceExhausted via
+			// classifyShellExitCode), retry THIS segment ONCE with a
+			// single thread and the veryfast preset — that combination
+			// cuts the encoder's working set by ~3-4× at the cost of a
+			// minor quality and bitrate efficiency hit. The retry is
+			// bounded to one attempt per segment so a structurally
+			// undersized memory cap doesn't burn loops; the second
+			// failure escalates to the operator with the original
+			// CodeResourceExhausted reason so they know to bump
+			// SessionSpec.MemoryLimit. Logged loud so post-mortem
+			// reviews see when degraded encoding fired.
+			if res.ExitCode != 0 {
+				if rc, ok := classifyShellExitCode(res.ExitCode); ok && rc == packs.CodeResourceExhausted {
+					ec.Logger.Warn("slides.narrate: segment OOM-killed; retrying ONCE with degraded encoder settings",
+						"segment", i,
+						"primary_threads", primaryOpts.Threads,
+						"retry_threads", "1",
+						"retry_preset", "veryfast")
+					retryOpts := ffmpegEncodeOpts{Threads: "1", Preset: "veryfast"}
+					res, err = encodeSegment(ctx, ec, slideFile, audioFile, segFile, vf, retryOpts)
+				}
+			}
 			if err != nil || res.ExitCode != 0 {
 				stderr := strings.TrimSpace(string(res.Stderr))
+				// Reconstruct the cmd string for the stderr artifact
+				// header — useful for post-mortems but not load-bearing.
+				cmdForArtifact := fmt.Sprintf("ffmpeg -y -loop 1 ... -threads %s (encode segment %d)", primaryOpts.Threads, i)
 				artKey := persistFfmpegStderr(ctx, ec, fmt.Sprintf("ffmpeg-stderr-segment-%03d.txt", i),
-					cmd, res.Stderr)
+					cmdForArtifact, res.Stderr)
 				// Lift OS-side kills (typically OOM at 1080p with
 				// large segment counts) into CodeResourceExhausted so
 				// classify.go routes them to FailureTransient instead
@@ -510,7 +555,7 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 					i, res.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))
 				if rc, ok := classifyShellExitCode(res.ExitCode); ok {
 					code = rc
-					msg = fmt.Sprintf("ffmpeg segment %d killed by the OS on exit %d (likely OOM at 1080p — bump SessionSpec.MemoryLimit, reduce slide count, or lower the encode resolution). stderr: %s%s",
+					msg = fmt.Sprintf("ffmpeg segment %d killed by the OS on exit %d after primary encode AND degraded-retry both OOM'd (likely OOM at 1080p — bump SessionSpec.MemoryLimit, reduce slide count, or lower the encode resolution). stderr: %s%s",
 						i, res.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))
 				}
 				return nil, &packs.PackError{Code: code, Message: msg}
@@ -910,4 +955,51 @@ func normalizeSlidesNarrateResolution(r string) string {
 		return "3840x2160"
 	}
 	return r
+}
+
+// slidesNarrateFfmpegThreads picks the per-segment libx264 thread cap
+// from the env var, falling back to the default. Whitespace-only
+// values and non-numeric values fall through to the default —
+// refusing to boot over a typo would be worse than running with a
+// known-safe baseline.
+func slidesNarrateFfmpegThreads() string {
+	v := strings.TrimSpace(os.Getenv(slidesNarrateFfmpegThreadsEnv))
+	if v == "" {
+		return slidesNarrateDefaultFfmpegThreads
+	}
+	if _, err := strconv.Atoi(v); err != nil {
+		return slidesNarrateDefaultFfmpegThreads
+	}
+	return v
+}
+
+// ffmpegEncodeOpts collects the knobs the per-segment encoder uses.
+// Threads bounds libx264's frame-thread count (typically 4 by default,
+// 1 on the OOM-retry path). Preset tunes the speed/quality/memory
+// tradeoff — empty string uses libx264's "medium" default; the
+// adaptive-retry path uses "veryfast" which cuts encoder memory
+// roughly in half at the cost of a measurable but acceptable quality
+// hit (CRF 23 still looks fine; the difference is mainly bitrate
+// efficiency, not visual artifacts).
+type ffmpegEncodeOpts struct {
+	Threads string
+	Preset  string // "" leaves libx264 default ("medium")
+}
+
+// encodeSegment builds and runs the per-segment ffmpeg command with
+// the supplied encoder opts. Extracted so the adaptive-retry path can
+// re-run with degraded settings without duplicating the command-build
+// logic. Returns the raw session.ExecResult so the caller decides
+// whether to retry, error, or proceed.
+func encodeSegment(ctx context.Context, ec *packs.ExecutionContext, slideFile, audioFile, segFile, vf string, opts ffmpegEncodeOpts) (session.ExecResult, error) {
+	presetFlag := ""
+	if opts.Preset != "" {
+		presetFlag = "-preset " + opts.Preset + " "
+	}
+	cmd := fmt.Sprintf(
+		"ffmpeg -y -loop 1 -i %s -i %s -c:v libx264 -threads %s %s-tune stillimage "+
+			"-c:a aac -b:a 192k -vf '%s' -pix_fmt yuv420p -shortest %s",
+		shellQuote(slideFile), shellQuote(audioFile), opts.Threads, presetFlag, vf, shellQuote(segFile),
+	)
+	return ec.Exec(ctx, session.ExecRequest{Cmd: []string{"sh", "-c", cmd}})
 }

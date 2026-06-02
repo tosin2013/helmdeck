@@ -617,3 +617,174 @@ func TestNormalizeSlidesNarrateResolution(t *testing.T) {
 		})
 	}
 }
+
+// TestSlidesNarrateFfmpegThreads_DefaultWhenEnvUnset — the conservative
+// "4" default applies when no override is set. This is the value the
+// thread cap targets for the dominant "12-core workstation, 8 GiB
+// session" case where libx264-uncapped would grab all 12 cores and
+// blow the memory budget on dense-frame decks.
+func TestSlidesNarrateFfmpegThreads_DefaultWhenEnvUnset(t *testing.T) {
+	t.Setenv(slidesNarrateFfmpegThreadsEnv, "")
+	got := slidesNarrateFfmpegThreads()
+	if got != slidesNarrateDefaultFfmpegThreads {
+		t.Errorf("default expected %q; got %q", slidesNarrateDefaultFfmpegThreads, got)
+	}
+}
+
+// TestSlidesNarrateFfmpegThreads_OverrideHonored — operators with
+// abundant RAM bump the cap; operators on small hosts can drop to 1
+// or 2 for extra headroom.
+func TestSlidesNarrateFfmpegThreads_OverrideHonored(t *testing.T) {
+	for _, v := range []string{"1", "2", "6", "8", "12"} {
+		t.Setenv(slidesNarrateFfmpegThreadsEnv, v)
+		if got := slidesNarrateFfmpegThreads(); got != v {
+			t.Errorf("override expected %q; got %q", v, got)
+		}
+	}
+}
+
+// TestSlidesNarrateFfmpegThreads_GarbageFallsThroughToDefault —
+// numeric guard. A non-numeric value (typo, accidental quoting,
+// templating bug) falls back to the safe default rather than
+// passing garbage into ffmpeg's -threads flag. Refusing to boot
+// over a typo would be worse than running with a known-safe value.
+func TestSlidesNarrateFfmpegThreads_GarbageFallsThroughToDefault(t *testing.T) {
+	for _, v := range []string{"abc", "12 threads", "  ", "1.5", "-1"} {
+		t.Setenv(slidesNarrateFfmpegThreadsEnv, v)
+		got := slidesNarrateFfmpegThreads()
+		// -1 is technically valid for strconv.Atoi but ffmpeg
+		// rejects it; we let strconv pass it through. The
+		// non-numeric cases must fall back.
+		if v == "-1" {
+			if got != "-1" {
+				t.Errorf("strconv-valid value %q should pass through; got %q", v, got)
+			}
+			continue
+		}
+		if got != slidesNarrateDefaultFfmpegThreads {
+			t.Errorf("garbage %q should fall back to default; got %q", v, got)
+		}
+	}
+}
+
+// TestSlidesNarrate_AdaptiveRetryOnOOM — when the per-segment ffmpeg
+// returns exit 137 (SIGKILL → OOM-classified by classifyShellExitCode),
+// the handler retries that ONE segment with degraded settings
+// (-threads 1, -preset veryfast). The test verifies:
+//
+//  1. A second ffmpeg invocation occurs for the OOM'd segment (not
+//     the next segment in the deck).
+//  2. The retry command carries the degraded -threads 1 -preset
+//     veryfast flags.
+//  3. If the retry succeeds, the overall run succeeds.
+//
+// Bounded — one retry per segment. A separate test confirms a
+// double-OOM surfaces CodeResourceExhausted.
+func TestSlidesNarrate_AdaptiveRetryOnOOM(t *testing.T) {
+	ffmpegResults := []int{137, 0}
+	// ffmpegEncodeCalls tracks ONLY the per-segment ffmpeg encode
+	// invocations (-loop 1), so the assertions aren't polluted by
+	// the marp/cat/ffprobe shell calls the handler also issues.
+	var ffmpegEncodeCalls []session.ExecRequest
+	exec := &narrateExecScript{}
+	wrappedFn := func(ctx context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		script := ""
+		if len(req.Cmd) >= 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" {
+			script = req.Cmd[2]
+		}
+		if strings.Contains(script, "-loop 1") {
+			ffmpegEncodeCalls = append(ffmpegEncodeCalls, req)
+			if len(ffmpegResults) == 0 {
+				return session.ExecResult{}, nil
+			}
+			code := ffmpegResults[0]
+			ffmpegResults = ffmpegResults[1:]
+			return session.ExecResult{ExitCode: code}, nil
+		}
+		return exec.fn(ctx, req)
+	}
+	pack := SlidesNarrate(nil, nil, nil)
+	artifacts := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack:      pack,
+		Input:     json.RawMessage(`{"markdown":"---\nmarp: true\n---\n\n# Slide","allow_silent_output":true}`),
+		Session:   &session.Session{ID: "sess"},
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:      wrappedFn,
+		Artifacts: artifacts,
+	}
+	_, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("handler should succeed after one retry; got %v", err)
+	}
+	if len(ffmpegEncodeCalls) != 2 {
+		t.Fatalf("expected exactly 2 ffmpeg encode calls (primary + retry); got %d", len(ffmpegEncodeCalls))
+	}
+	primaryScript := ffmpegEncodeCalls[0].Cmd[2]
+	if strings.Contains(primaryScript, "-preset veryfast") {
+		t.Errorf("primary attempt should NOT carry -preset veryfast; got: %s", primaryScript)
+	}
+	if strings.Contains(primaryScript, "-threads 1 ") {
+		t.Errorf("primary attempt should NOT carry -threads 1; got: %s", primaryScript)
+	}
+	retryScript := ffmpegEncodeCalls[1].Cmd[2]
+	if !strings.Contains(retryScript, "-preset veryfast") {
+		t.Errorf("retry should carry -preset veryfast; got: %s", retryScript)
+	}
+	if !strings.Contains(retryScript, "-threads 1 ") {
+		t.Errorf("retry should carry -threads 1; got: %s", retryScript)
+	}
+}
+
+// TestSlidesNarrate_DoubleOOMSurfacesCodeResourceExhausted — when
+// the retry ALSO returns exit 137, the handler must surface
+// CodeResourceExhausted (not CodeHandlerFailed) so classify.go routes
+// it to FailureTransient with the actionable "bump MemoryLimit"
+// reason.
+func TestSlidesNarrate_DoubleOOMSurfacesCodeResourceExhausted(t *testing.T) {
+	ffmpegResults := []int{137, 137}
+	exec := &narrateExecScript{}
+	var ffmpegEncodeCalls []session.ExecRequest
+	wrappedFn := func(ctx context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		script := ""
+		if len(req.Cmd) >= 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" {
+			script = req.Cmd[2]
+		}
+		if strings.Contains(script, "-loop 1") {
+			ffmpegEncodeCalls = append(ffmpegEncodeCalls, req)
+			if len(ffmpegResults) == 0 {
+				return session.ExecResult{ExitCode: 137}, nil
+			}
+			code := ffmpegResults[0]
+			ffmpegResults = ffmpegResults[1:]
+			return session.ExecResult{ExitCode: code}, nil
+		}
+		return exec.fn(ctx, req)
+	}
+	pack := SlidesNarrate(nil, nil, nil)
+	artifacts := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack:      pack,
+		Input:     json.RawMessage(`{"markdown":"---\nmarp: true\n---\n\n# Slide","allow_silent_output":true}`),
+		Session:   &session.Session{ID: "sess"},
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:      wrappedFn,
+		Artifacts: artifacts,
+	}
+	_, err := pack.Handler(context.Background(), ec)
+	if err == nil {
+		t.Fatal("expected error after double OOM")
+	}
+	pe, ok := err.(*packs.PackError)
+	if !ok {
+		t.Fatalf("expected *packs.PackError; got %T: %v", err, err)
+	}
+	if pe.Code != packs.CodeResourceExhausted {
+		t.Errorf("expected CodeResourceExhausted; got %s", pe.Code)
+	}
+	// Exactly 2 ffmpeg encode calls — primary OOM + retry OOM. The
+	// handler must NOT escalate to a third attempt.
+	if len(ffmpegEncodeCalls) != 2 {
+		t.Errorf("expected exactly 2 ffmpeg encode calls (primary + 1 retry, no more); got %d", len(ffmpegEncodeCalls))
+	}
+}

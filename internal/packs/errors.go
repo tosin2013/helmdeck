@@ -33,6 +33,18 @@ const (
 	CodeArtifactFailed ErrorCode = "artifact_failed"
 	// CodeTimeout — handler exceeded its deadline or the caller cancelled.
 	CodeTimeout ErrorCode = "timeout"
+	// CodeCredentialInvalid — a vault-resolved API credential was
+	// rejected by the upstream provider (401/403, or a quota response
+	// that's effectively "your account can't do this"). Distinct from
+	// CodeInvalidInput (the CALLER passed bad input — they can fix
+	// it without touching the vault) and from CodeHandlerFailed (the
+	// pack code itself misbehaved): the pack ran correctly, the
+	// caller's input was structurally fine, the stored credential is
+	// just dead. classify.go maps this to FailureCallerFixable with
+	// an actionable "update the vault" reason. isRetryable=false —
+	// retrying the same bad key burns more provider quota / tokens
+	// for no benefit.
+	CodeCredentialInvalid ErrorCode = "credential_invalid"
 	// CodeResourceExhausted — the OS killed a child process for
 	// resource reasons, typically the OOM killer (SIGKILL → exit
 	// 137 from a shelled-out tool like ffmpeg/imagemagick/playwright).

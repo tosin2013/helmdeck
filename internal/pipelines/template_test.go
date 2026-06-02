@@ -160,3 +160,40 @@ func TestValidate(t *testing.T) {
 		t.Error("unknown pack should be rejected")
 	}
 }
+
+// TestResolve_MissingInputDefaultsToEmpty — pipeline inputs are
+// frequently optional; resolving an absent ${{ inputs.X }} to "" lets
+// callers omit fields they don't need without the runner failing the
+// step. Inter-step references (${{ steps.* }}) keep failing loud —
+// covered by TestResolve_MissingStepStillFails below.
+func TestResolve_MissingInputDefaultsToEmpty(t *testing.T) {
+	out, err := Resolve(json.RawMessage(`{"a":"${{ inputs.missing }}","b":"prefix-${{ inputs.also_missing }}-suffix"}`),
+		map[string]any{"present": "v"}, nil)
+	if err != nil {
+		t.Fatalf("missing input should not error; got: %v", err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	if got["a"] != "" {
+		t.Errorf("whole-value missing ref should resolve to empty string; got %q", got["a"])
+	}
+	if got["b"] != "prefix--suffix" {
+		t.Errorf("embedded missing ref should coerce to empty; got %q", got["b"])
+	}
+}
+
+// TestResolve_MissingStepStillFails — the safety net for inter-step
+// wiring bugs. A missing step output indicates a typo in the pipeline
+// definition or a producer/consumer mismatch and MUST surface loud.
+// (Contrast with TestResolve_MissingInputDefaultsToEmpty.)
+func TestResolve_MissingStepStillFails(t *testing.T) {
+	_, err := Resolve(json.RawMessage(`{"a":"${{ steps.nonexistent.output.x }}"}`),
+		nil, steps(map[string]string{"other": `{"x":"v"}`}))
+	if err == nil {
+		t.Fatal("missing step reference should fail loud, not default to empty")
+	}
+	var rerr *RefError
+	if !errors.As(err, &rerr) {
+		t.Errorf("expected *RefError; got %T", err)
+	}
+}

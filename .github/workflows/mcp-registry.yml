@@ -62,7 +62,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # When chained off Release, default ref is the default
           # branch — not the tag. Check out the tag the Release run

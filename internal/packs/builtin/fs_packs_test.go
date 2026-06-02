@@ -30,7 +30,7 @@ func TestSafeJoin(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := safeJoin(tc.clonePath, tc.rel)
+			got, err := safeJoin(tc.clonePath, tc.rel, nil)
 			if tc.wantErr {
 				if err == nil {
 					t.Errorf("expected error, got %q", got)
@@ -59,7 +59,7 @@ func newFSEngine(t *testing.T, ex *recordingExecutor) *packs.Engine {
 
 func TestFSRead_HappyPath(t *testing.T) {
 	ex := &recordingExecutor{replies: []session.ExecResult{
-		{Stdout: []byte("12\n"), ExitCode: 0}, // wc -c
+		{Stdout: []byte("12\n"), ExitCode: 0},          // wc -c
 		{Stdout: []byte("hello world\n"), ExitCode: 0}, // cat
 	}}
 	eng := newFSEngine(t, ex)
@@ -139,9 +139,9 @@ func TestFSWrite_HappyPath(t *testing.T) {
 func TestFSPatch_LiteralReplace(t *testing.T) {
 	original := "package main\n\nfunc Hello() {}\n"
 	ex := &recordingExecutor{replies: []session.ExecResult{
-		{Stdout: []byte("32\n")},          // wc -c
-		{Stdout: []byte(original)},        // cat
-		{ExitCode: 0},                     // write back
+		{Stdout: []byte("32\n")},   // wc -c
+		{Stdout: []byte(original)}, // cat
+		{ExitCode: 0},              // write back
 	}}
 	eng := newFSEngine(t, ex)
 	body := `{

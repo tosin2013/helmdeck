@@ -296,7 +296,7 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 					Message: "content.ground file mode requires a session executor; use 'text' for direct markdown input"}
 			}
 			var perr *packs.PackError
-			full, perr = safeJoin(in.ClonePath, in.Path)
+			full, perr = safeJoin(in.ClonePath, in.Path, ec)
 			if perr != nil {
 				return nil, perr
 			}

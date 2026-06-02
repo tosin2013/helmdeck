@@ -39,9 +39,9 @@ import (
 )
 
 const (
-	maxFsReadBytes  = 8 << 20  // 8 MiB
-	maxFsListFiles  = 5000
-	maxCmdOutBytes  = 8 << 20  // 8 MiB combined stdout+stderr
+	maxFsReadBytes = 8 << 20 // 8 MiB
+	maxFsListFiles = 5000
+	maxCmdOutBytes = 8 << 20 // 8 MiB combined stdout+stderr
 )
 
 // --- shared helpers ------------------------------------------------------
@@ -49,11 +49,13 @@ const (
 // safeJoin validates a relative path and joins it onto a clone_path
 // that has already passed isSafeClonePath. Rejects absolute paths,
 // any "..", and any backslash (which would let a Windows-trained
-// LLM smuggle a separator past the parser).
-func safeJoin(clonePath, rel string) (string, *packs.PackError) {
-	if !isSafeClonePath(clonePath) {
+// LLM smuggle a separator past the parser). ec is forwarded to the
+// validator so the per-caller ADR 040 persistent prefix can be
+// resolved; pass the same ec the handler received.
+func safeJoin(clonePath, rel string, ec *packs.ExecutionContext) (string, *packs.PackError) {
+	if !isSafeClonePath(clonePath, ec) {
 		return "", &packs.PackError{Code: packs.CodeInvalidInput,
-			Message: "clone_path must be an absolute path under /tmp/helmdeck- or /home/helmdeck/work/"}
+			Message: clonePathRejectMessage(ec)}
 	}
 	if rel == "" {
 		return clonePath, nil
@@ -95,9 +97,9 @@ func runShell(ctx context.Context, ec *packs.ExecutionContext, script string, st
 // hasn't changed under it before issuing a follow-up fs.write.
 func FSRead() *packs.Pack {
 	return &packs.Pack{
-		Name:        "fs.read",
-		Version:     "v1",
-		Description: "Read a file from a session-local clone path.",
+		Name:         "fs.read",
+		Version:      "v1",
+		Description:  "Read a file from a session-local clone path.",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"clone_path", "path"},
@@ -131,7 +133,7 @@ func fsReadHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMes
 	if ec.Exec == nil {
 		return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 	}
-	full, perr := safeJoin(in.ClonePath, in.Path)
+	full, perr := safeJoin(in.ClonePath, in.Path, ec)
 	if perr != nil {
 		return nil, perr
 	}
@@ -174,9 +176,9 @@ func fsReadHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMes
 // payloads up to the executor's stdin limit work without quoting.
 func FSWrite() *packs.Pack {
 	return &packs.Pack{
-		Name:        "fs.write",
-		Version:     "v1",
-		Description: "Write a file to a session-local clone path (creates parents as needed).",
+		Name:         "fs.write",
+		Version:      "v1",
+		Description:  "Write a file to a session-local clone path (creates parents as needed).",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"clone_path", "path", "content"},
@@ -211,7 +213,7 @@ func fsWriteHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMe
 	if ec.Exec == nil {
 		return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 	}
-	full, perr := safeJoin(in.ClonePath, in.Path)
+	full, perr := safeJoin(in.ClonePath, in.Path, ec)
 	if perr != nil {
 		return nil, perr
 	}
@@ -259,9 +261,9 @@ func fsWriteHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMe
 // schema. Backward compatible with existing single-edit callers.
 func FSPatch() *packs.Pack {
 	return &packs.Pack{
-		Name:        "fs.patch",
-		Version:     "v1",
-		Description: "Replace literal strings inside a file at a session-local clone path. Pass {search, replace} for a single edit, OR {edits: [{oldText, newText}, ...]} for a batch.",
+		Name:         "fs.patch",
+		Version:      "v1",
+		Description:  "Replace literal strings inside a file at a session-local clone path. Pass {search, replace} for a single edit, OR {edits: [{oldText, newText}, ...]} for a batch.",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"clone_path", "path"},
@@ -341,7 +343,7 @@ func fsPatchHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMe
 			Message: "must provide either {search, replace} or {edits: [{oldText, newText}, ...]}"}
 	}
 
-	full, perr := safeJoin(in.ClonePath, in.Path)
+	full, perr := safeJoin(in.ClonePath, in.Path, ec)
 	if perr != nil {
 		return nil, perr
 	}
@@ -402,9 +404,9 @@ func fsPatchHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMe
 // starts reading individual files.
 func FSList() *packs.Pack {
 	return &packs.Pack{
-		Name:        "fs.list",
-		Version:     "v1",
-		Description: "List files under a directory in a session-local clone path.",
+		Name:         "fs.list",
+		Version:      "v1",
+		Description:  "List files under a directory in a session-local clone path.",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"clone_path"},
@@ -441,7 +443,7 @@ func fsListHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMes
 	if ec.Exec == nil {
 		return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 	}
-	full, perr := safeJoin(in.ClonePath, in.Path)
+	full, perr := safeJoin(in.ClonePath, in.Path, ec)
 	if perr != nil {
 		return nil, perr
 	}
@@ -507,9 +509,9 @@ func fsListHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMes
 // make, ls, grep, etc. without forcing operators to choose an image.
 func CmdRun() *packs.Pack {
 	return &packs.Pack{
-		Name:        "cmd.run",
-		Version:     "v1",
-		Description: "Run a shell command in a session-local clone path.",
+		Name:         "cmd.run",
+		Version:      "v1",
+		Description:  "Run a shell command in a session-local clone path.",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"clone_path", "command"},
@@ -545,9 +547,9 @@ func cmdRunHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMes
 	if ec.Exec == nil {
 		return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 	}
-	if !isSafeClonePath(in.ClonePath) {
+	if !isSafeClonePath(in.ClonePath, ec) {
 		return nil, &packs.PackError{Code: packs.CodeInvalidInput,
-			Message: "clone_path must be an absolute path under /tmp/helmdeck- or /home/helmdeck/work/"}
+			Message: clonePathRejectMessage(ec)}
 	}
 	if len(in.Command) == 0 {
 		return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "command must not be empty"}
@@ -581,9 +583,9 @@ func cmdRunHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMes
 // future fs.git_add pack (or use cmd.run directly).
 func GitCommit() *packs.Pack {
 	return &packs.Pack{
-		Name:        "git.commit",
-		Version:     "v1",
-		Description: "Stage and commit changes in a session-local clone path.",
+		Name:         "git.commit",
+		Version:      "v1",
+		Description:  "Stage and commit changes in a session-local clone path.",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"clone_path", "message"},
@@ -598,8 +600,8 @@ func GitCommit() *packs.Pack {
 		OutputSchema: packs.BasicSchema{
 			Required: []string{"commit"},
 			Properties: map[string]string{
-				"commit":         "string",
-				"files_changed":  "number",
+				"commit":        "string",
+				"files_changed": "number",
 			},
 		},
 		Handler: gitCommitHandler,
@@ -622,9 +624,9 @@ func gitCommitHandler(ctx context.Context, ec *packs.ExecutionContext) (json.Raw
 	if ec.Exec == nil {
 		return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 	}
-	if !isSafeClonePath(in.ClonePath) {
+	if !isSafeClonePath(in.ClonePath, ec) {
 		return nil, &packs.PackError{Code: packs.CodeInvalidInput,
-			Message: "clone_path must be an absolute path under /tmp/helmdeck- or /home/helmdeck/work/"}
+			Message: clonePathRejectMessage(ec)}
 	}
 	if strings.TrimSpace(in.Message) == "" {
 		return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "message must not be empty"}
@@ -708,9 +710,9 @@ func GitDiff() *packs.Pack {
 			if ec.Exec == nil {
 				return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 			}
-			if !isSafeClonePath(in.ClonePath) {
+			if !isSafeClonePath(in.ClonePath, ec) {
 				return nil, &packs.PackError{Code: packs.CodeInvalidInput,
-					Message: "clone_path must be an absolute path under /tmp/helmdeck- or /home/helmdeck/work/"}
+					Message: clonePathRejectMessage(ec)}
 			}
 			diffFlag := ""
 			if in.Staged {
@@ -763,9 +765,9 @@ func GitLog() *packs.Pack {
 			if ec.Exec == nil {
 				return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 			}
-			if !isSafeClonePath(in.ClonePath) {
+			if !isSafeClonePath(in.ClonePath, ec) {
 				return nil, &packs.PackError{Code: packs.CodeInvalidInput,
-					Message: "clone_path must be an absolute path under /tmp/helmdeck- or /home/helmdeck/work/"}
+					Message: clonePathRejectMessage(ec)}
 			}
 			count := in.Count
 			if count <= 0 {
@@ -816,7 +818,7 @@ func FSDelete() *packs.Pack {
 			if ec.Exec == nil {
 				return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 			}
-			full, pathErr := safeJoin(in.ClonePath, in.Path)
+			full, pathErr := safeJoin(in.ClonePath, in.Path, ec)
 			if pathErr != nil {
 				return nil, pathErr
 			}

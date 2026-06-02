@@ -298,9 +298,19 @@ func routeHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesListe
 		// 3. Dispatch.
 		user := buildRouteUserMessage(in.UserIntent, in.Context, catalog, defaults)
 		mt := maxTokens
+		// ADR 051 PR #3: provider-side strict JSON when the tier
+		// entry advertises support. Tier C suppressed for the same
+		// reason as helmdeck.plan — weak open-weight inference is
+		// crash-prone under constrained decoding per the research
+		// synthesis, so the prompt-engineered path is safer there.
+		resFmt := ""
+		if budget.WantsStrictJSON && budget.Tier != llmcontext.TierC {
+			resFmt = "json_object"
+		}
 		chat, err := d.Dispatch(ctx, gateway.ChatRequest{
-			Model:     in.Model,
-			MaxTokens: &mt,
+			Model:          in.Model,
+			MaxTokens:      &mt,
+			ResponseFormat: resFmt,
 			Messages: []gateway.Message{
 				{Role: "system", Content: gateway.TextContent(routeSystemPrompt)},
 				{Role: "user", Content: gateway.TextContent(user)},

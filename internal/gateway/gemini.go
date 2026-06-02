@@ -118,6 +118,11 @@ type geminiContent struct {
 type geminiGenConfig struct {
 	Temperature     *float64 `json:"temperature,omitempty"`
 	MaxOutputTokens *int     `json:"maxOutputTokens,omitempty"`
+	// ResponseMimeType — Gemini's flavor of provider-side strict JSON
+	// (ADR 051 PR #3). Set to "application/json" when the gateway
+	// caller passes ResponseFormat="json_object". Empty value (omitted)
+	// is the default unconstrained mode.
+	ResponseMimeType string `json:"responseMimeType,omitempty"`
 }
 
 type geminiRequest struct {
@@ -143,10 +148,13 @@ type geminiResponse struct {
 
 func (p *geminiProvider) ChatCompletion(ctx context.Context, req ChatRequest) (ChatResponse, error) {
 	upstream := geminiRequest{}
-	if req.Temperature != nil || req.MaxTokens != nil {
+	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat == "json_object" {
 		upstream.GenerationConfig = &geminiGenConfig{
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
+		}
+		if req.ResponseFormat == "json_object" {
+			upstream.GenerationConfig.ResponseMimeType = "application/json"
 		}
 	}
 	// Tool definitions (T807f). Gemini groups every functionDeclaration

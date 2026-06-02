@@ -276,9 +276,19 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 		started := time.Now()
 		user := buildPlanUserMessage(intent, in.Context, catalog, defaults)
 		mt := maxTokens
+		// ADR 051 PR #3: opt into provider-side strict-JSON mode when
+		// the model's tier entry advertises support AND the tier is
+		// not C (Tier C is mostly weak open-weight inference that the
+		// research synthesis flagged as crash-prone under constrained
+		// decoding — better to keep the prompt-engineered JSON path).
+		resFmt := ""
+		if budget.WantsStrictJSON && budget.Tier != llmcontext.TierC {
+			resFmt = "json_object"
+		}
 		chat, err := d.Dispatch(ctx, gateway.ChatRequest{
-			Model:     in.Model,
-			MaxTokens: &mt,
+			Model:          in.Model,
+			MaxTokens:      &mt,
+			ResponseFormat: resFmt,
 			Messages: []gateway.Message{
 				{Role: "system", Content: gateway.TextContent(planSystemPrompt)},
 				{Role: "user", Content: gateway.TextContent(user)},

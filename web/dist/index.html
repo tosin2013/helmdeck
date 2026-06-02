@@ -2,17 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark light" />
     <title>Helmdeck</title>
-    <script type="module" crossorigin src="/assets/index-Df1ItAgv.js"></script>
-    <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-jpDsebLB.js">
-    <link rel="modulepreload" crossorigin href="/assets/react-BZfzXQPc.js">
-    <link rel="modulepreload" crossorigin href="/assets/query-BB6gyOjC.js">
-    <link rel="stylesheet" crossorigin href="/assets/index-Db_XSGaS.css">
+    <style>
+      body { font-family: system-ui, sans-serif; background: #0b0d12; color: #d8dee6; max-width: 40rem; margin: 4rem auto; padding: 0 1.5rem; line-height: 1.55; }
+      h1 { color: #fff; margin-bottom: 0.5rem; }
+      code { background: #1a1d24; padding: 0.15rem 0.45rem; border-radius: 4px; color: #ffd479; }
+      a { color: #6db1ff; }
+    </style>
   </head>
-  <body class="bg-background text-foreground antialiased">
-    <div id="root"></div>
+  <body>
+    <h1>Helmdeck UI not built</h1>
+    <p>This is the committed placeholder. It exists so <code>go:embed</code> compiles before the React/Vite bundle has been built. Reaching this page in production means the deployed image was built without the web stage.</p>
+    <p><strong>To build the UI locally:</strong></p>
+    <p><code>cd web &amp;&amp; npm ci &amp;&amp; npm run build</code></p>
+    <p><strong>To get a self-consistent production image:</strong> build via the multi-stage Dockerfile (<code>deploy/docker/control-plane.Dockerfile</code>) — the Node stage runs the build inside the image, so the bundle is always in sync.</p>
+    <p>See <a href="https://github.com/tosin2013/helmdeck">github.com/tosin2013/helmdeck</a>.</p>
   </body>
 </html>

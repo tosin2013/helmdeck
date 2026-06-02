@@ -9,17 +9,27 @@
 .git
 .gitignore
 
-# Build outputs (the binary is built fresh by goreleaser; web/dist
-# is gitignored except for the placeholder, which IS included so
-# go:embed compiles even when web-build hasn't run)
+# Build outputs (the Go binary is built fresh by the Docker build /
+# goreleaser; web/dist is produced INSIDE the docker build by the
+# web-build stage — see below).
 bin/
 control-plane
 
-# JavaScript dev dependencies — these are huge and the build copies
-# the pre-built dist directory in via go:embed, not the source tree.
+# JavaScript dev dependencies — these are huge and node_modules is
+# re-installed inside the web-build Docker stage via `npm ci`.
 web/node_modules/
 web/.pnpm-store/
 web/.npm/
+
+# Web bundle — produced INSIDE the docker build by the web-build stage
+# (npm ci + npm run build), never copied from the host. Keeping host-side
+# dist out of the build context prevents the recurring "browser loads
+# HTML referencing stale bundle hashes" bug: the embedded HTML and the
+# embedded assets in the image are now built from the same source tree
+# in the same stage, byte-for-byte consistent. Host devs running
+# `npm run build` outside docker get a local dist for `go build` outside
+# docker — irrelevant to docker images.
+web/dist/
 
 # IDE / editor noise
 .vscode/

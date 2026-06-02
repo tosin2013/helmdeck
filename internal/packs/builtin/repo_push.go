@@ -53,8 +53,8 @@ import (
 // policy that belongs in the vault ACL, not in the pack handler.
 func RepoPush(v *vault.Store, eg *security.EgressGuard) *packs.Pack {
 	return &packs.Pack{
-		Name:        "repo.push",
-		Version:     "v1",
+		Name:         "repo.push",
+		Version:      "v1",
 		Description:  "Push committed changes from a session-local clone back to its git remote using vault-resolved credentials (SSH key or HTTPS token).",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
@@ -98,9 +98,9 @@ func repoPushHandler(v *vault.Store, eg *security.EgressGuard) packs.HandlerFunc
 		if strings.TrimSpace(in.ClonePath) == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "clone_path is required"}
 		}
-		if !isSafeClonePath(in.ClonePath) {
+		if !isSafeClonePath(in.ClonePath, ec) {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
-				Message: "clone_path must be an absolute path under /tmp/ or /home/"}
+				Message: clonePathRejectMessage(ec)}
 		}
 		if ec.Exec == nil {
 			return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
@@ -305,31 +305,62 @@ func buildRepoPushHTTPSScript(clonePath, remote, branch string, force, hasCreden
 }
 
 // isSafeClonePath enforces the "agents can only reference clone paths
-// the helmdeck packs created" rule. Accepts only the two prefixes
-// helmdeck packs ever produce:
+// the helmdeck packs created" rule. Accepts three families:
 //
-//   /tmp/helmdeck-clone-*  — created by repo.fetch via mktemp
-//   /home/helmdeck/work/*  — designated workspace dir for future packs
+//	/tmp/helmdeck-clone-*                     — repo.fetch ephemeral mktemp
+//	/home/helmdeck/work/*                     — designated workspace dir
+//	<ec.PersistentReposPath>/<ec.Caller>/*    — ADR 040 persistent clone
 //
-// The git command path argument is shell-quoted before injection
-// so this isn't a defense-in-depth against command injection —
-// it's a defense against an LLM passing /etc/passwd or
+// The third family is scoped to the calling subject's namespace under
+// the persistent repos volume. ec.Caller is the bare authenticated
+// subject — same value repo.fetch threads into persistentCloneDir when
+// minting the path. When persistence is off (ec is nil, or
+// ec.PersistentReposPath is empty), only the first two families are
+// accepted; pre-ADR-040 behavior is preserved.
+//
+// The git command path argument is shell-quoted before injection so
+// this isn't a defense-in-depth against command injection — it's a
+// defense against an LLM passing /etc/passwd or
 // /home/helmdeck/.ssh/id_rsa as a clone_path and getting back
 // confusing errors or unintended file access.
 //
 // Tightened in Phase 5.5 (fs.* pack set) — the previous version
 // accepted any /tmp/* or /home/* path, which is too loose for
-// fs.read/fs.write since those packs read arbitrary files inside
-// the clone path.
-func isSafeClonePath(p string) bool {
+// fs.read/fs.write since those packs read arbitrary files inside the
+// clone path. Extended for ADR 040 to accept the per-caller
+// persistent prefix so repo.fetch's persistent output flows through
+// repo.map / repo.push / fs.* / cmd.run without rejection.
+// clonePathRejectMessage formats the user-facing rejection message
+// for an unsafe clone_path. Includes the per-caller persistent
+// prefix when ADR 040 persistence is configured, so the error tells
+// the caller exactly which prefixes their pack accepts in THIS
+// deployment instead of a stale hard-coded list.
+func clonePathRejectMessage(ec *packs.ExecutionContext) string {
+	msg := "clone_path must be an absolute path under /tmp/helmdeck- or /home/helmdeck/work/"
+	if ec != nil && ec.PersistentReposPath != "" && ec.Caller != "" {
+		msg += " (or " + strings.TrimSuffix(ec.PersistentReposPath, "/") + "/" + ec.Caller + "/ for ADR 040 persistent clones)"
+	}
+	return msg
+}
+
+func isSafeClonePath(p string, ec *packs.ExecutionContext) bool {
 	if !strings.HasPrefix(p, "/") {
 		return false
 	}
 	if strings.Contains(p, "..") {
 		return false
 	}
-	return strings.HasPrefix(p, "/tmp/helmdeck-") ||
-		strings.HasPrefix(p, "/home/helmdeck/work/")
+	if strings.HasPrefix(p, "/tmp/helmdeck-") ||
+		strings.HasPrefix(p, "/home/helmdeck/work/") {
+		return true
+	}
+	if ec != nil && ec.PersistentReposPath != "" && ec.Caller != "" {
+		allowed := strings.TrimSuffix(ec.PersistentReposPath, "/") + "/" + ec.Caller + "/"
+		if strings.HasPrefix(p, allowed) {
+			return true
+		}
+	}
+	return false
 }
 
 // isNonFastForward sniffs git's stderr for the canonical "rejected

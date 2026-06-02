@@ -13,9 +13,9 @@ import (
 // pushExecutorScript builds a recordingExecutor reply script with
 // the four canned responses repo.push expects in the happy path:
 //
-//	1. git remote get-url origin    → returns the remote URL
-//	2. git rev-parse --abbrev-ref   → returns the current branch
-//	3. sh -c <push script>          → returns the pushed commit
+//  1. git remote get-url origin    → returns the remote URL
+//  2. git rev-parse --abbrev-ref   → returns the current branch
+//  3. sh -c <push script>          → returns the pushed commit
 //
 // Tests that override one of those steps swap in their own reply.
 func pushExecutorScript(remoteURL, branch, commit string, exitCodes ...int) *recordingExecutor {
@@ -225,7 +225,7 @@ func TestRepoPush_HTTPSRemoteAccepted(t *testing.T) {
 	// but importantly it does NOT reject with "only ssh remotes").
 	ex := &recordingExecutor{replies: []session.ExecResult{
 		{Stdout: []byte("https://github.com/foo/bar.git\n")},
-		{Stdout: []byte("main\n")}, // branch detection
+		{Stdout: []byte("main\n")},     // branch detection
 		{Stdout: []byte("deadbeef\n")}, // push + rev-parse
 	}}
 	eng := newRepoEngine(t, ex)
@@ -303,9 +303,80 @@ func TestIsSafeClonePath(t *testing.T) {
 		{"/tmp/../etc/passwd", false},
 	}
 	for _, tc := range cases {
-		got := isSafeClonePath(tc.path)
+		got := isSafeClonePath(tc.path, nil)
 		if got != tc.want {
-			t.Errorf("isSafeClonePath(%q) = %v, want %v", tc.path, got, tc.want)
+			t.Errorf("isSafeClonePath(%q, nil) = %v, want %v", tc.path, got, tc.want)
 		}
+	}
+}
+
+// TestIsSafeClonePath_ADR040Persistent — when ec carries
+// PersistentReposPath + Caller, the per-caller subdir is also
+// accepted. Other callers' subdirs and bare /repos/ are NOT.
+func TestIsSafeClonePath_ADR040Persistent(t *testing.T) {
+	ec := &packs.ExecutionContext{
+		PersistentReposPath: "/repos",
+		Caller:              "admin",
+	}
+	cases := []struct {
+		path string
+		want bool
+	}{
+		// Pre-ADR-040 prefixes still accepted with ec present.
+		{"/tmp/helmdeck-clone-X1", true},
+		{"/home/helmdeck/work/repo", true},
+		// ADR 040 per-caller scope: this caller's namespace.
+		{"/repos/admin/6d3bd03b49986330", true},
+		{"/repos/admin/abc", true},
+		// Other caller's namespace: REJECTED (the per-caller
+		// subdir is an isolation boundary at the pack layer).
+		{"/repos/other-user/abc", false},
+		// Bare /repos/ root without a caller subdir: REJECTED.
+		{"/repos/loose-file", false},
+		// Path traversal attempts that try to escape the
+		// caller subdir: REJECTED by the ".." guard.
+		{"/repos/admin/../other-user/abc", false},
+		{"/repos/admin/../../etc/passwd", false},
+		// Outside the persistent volume: REJECTED.
+		{"/etc/passwd", false},
+		{"/var/lib/garage", false},
+	}
+	for _, tc := range cases {
+		got := isSafeClonePath(tc.path, ec)
+		if got != tc.want {
+			t.Errorf("isSafeClonePath(%q, adr040-ec) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+// TestIsSafeClonePath_PersistenceOff — when ec is non-nil but
+// PersistentReposPath is empty (persistence not configured for this
+// deployment), the per-caller path is NOT accepted. Persistence-off
+// behavior is byte-identical to the nil-ec path.
+func TestIsSafeClonePath_PersistenceOff(t *testing.T) {
+	ec := &packs.ExecutionContext{
+		PersistentReposPath: "",
+		Caller:              "admin",
+	}
+	if isSafeClonePath("/repos/admin/abc", ec) {
+		t.Errorf("/repos/admin/abc must be rejected when PersistentReposPath is empty")
+	}
+	if !isSafeClonePath("/tmp/helmdeck-clone-X", ec) {
+		t.Errorf("/tmp/helmdeck-clone-X must still be accepted")
+	}
+}
+
+// TestIsSafeClonePath_CallerEmpty — when ec carries a persistent
+// path but no Caller (unauthenticated dispatch path), per-caller
+// scoping can't be applied, so the persistent prefix is rejected.
+// Falling through to "unknown" caller would let any caller read any
+// clone — we deliberately don't do that.
+func TestIsSafeClonePath_CallerEmpty(t *testing.T) {
+	ec := &packs.ExecutionContext{
+		PersistentReposPath: "/repos",
+		Caller:              "",
+	}
+	if isSafeClonePath("/repos/admin/abc", ec) {
+		t.Errorf("/repos/admin/abc must be rejected when ec.Caller is empty")
 	}
 }

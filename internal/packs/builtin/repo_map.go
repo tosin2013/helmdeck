@@ -82,26 +82,26 @@ type repoMapInput struct {
 // effort hint, not a hard contract. `--languages=` is the real filter
 // ctags understands; `--include` is not a real flag.
 var globToLanguage = map[string]string{
-	"*.go":   "Go",
-	"*.py":   "Python",
-	"*.js":   "JavaScript",
-	"*.jsx":  "JavaScript",
-	"*.ts":   "TypeScript",
-	"*.tsx":  "TypeScript",
-	"*.rs":   "Rust",
-	"*.java": "Java",
-	"*.c":    "C",
-	"*.cpp":  "C++",
-	"*.cc":   "C++",
-	"*.h":    "C",
-	"*.hpp":  "C++",
-	"*.rb":   "Ruby",
-	"*.php":  "PHP",
-	"*.cs":   "C#",
-	"*.kt":   "Kotlin",
+	"*.go":    "Go",
+	"*.py":    "Python",
+	"*.js":    "JavaScript",
+	"*.jsx":   "JavaScript",
+	"*.ts":    "TypeScript",
+	"*.tsx":   "TypeScript",
+	"*.rs":    "Rust",
+	"*.java":  "Java",
+	"*.c":     "C",
+	"*.cpp":   "C++",
+	"*.cc":    "C++",
+	"*.h":     "C",
+	"*.hpp":   "C++",
+	"*.rb":    "Ruby",
+	"*.php":   "PHP",
+	"*.cs":    "C#",
+	"*.kt":    "Kotlin",
 	"*.swift": "Swift",
-	"*.lua":  "Lua",
-	"*.sh":   "Sh",
+	"*.lua":   "Lua",
+	"*.sh":    "Sh",
 }
 
 // defaultExcludes are patterns ctags will skip regardless of caller
@@ -136,7 +136,7 @@ func repoMapHandler(ctx context.Context, ec *packs.ExecutionContext) (json.RawMe
 	if ec.Exec == nil {
 		return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "engine has no session executor"}
 	}
-	if _, perr := safeJoin(in.ClonePath, ""); perr != nil {
+	if _, perr := safeJoin(in.ClonePath, "", ec); perr != nil {
 		return nil, perr
 	}
 	budget := in.TokenBudget

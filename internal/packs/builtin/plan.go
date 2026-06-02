@@ -274,7 +274,17 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 		ec.Report(20, "calling model for plan decomposition")
 
 		started := time.Now()
-		user := buildPlanUserMessage(intent, in.Context, catalog, defaults)
+		// ADR 051 PR #4: route the catalog block into the system
+		// prompt when the model's tier entry advertises prompt-prefix
+		// caching. The system prompt then stays byte-identical across
+		// every helmdeck.plan call for that model (catalog is global
+		// engine policy, not per-caller), and per-call variation —
+		// defaults projection + intent + optional context — lives in
+		// the user message. Provider caches (Anthropic 50% hit
+		// discount, Gemini 75%, DeepSeek 96.7%) reward the stable
+		// prefix; calls beyond the first within the TTL only pay for
+		// the small user-message tokens.
+		sysPrompt, user := assemblePlanPrompt(budget, catalog, defaults, intent, in.Context)
 		mt := maxTokens
 		// ADR 051 PR #3: opt into provider-side strict-JSON mode when
 		// the model's tier entry advertises support AND the tier is
@@ -290,7 +300,7 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 			MaxTokens:      &mt,
 			ResponseFormat: resFmt,
 			Messages: []gateway.Message{
-				{Role: "system", Content: gateway.TextContent(planSystemPrompt)},
+				{Role: "system", Content: gateway.TextContent(sysPrompt)},
 				{Role: "user", Content: gateway.TextContent(user)},
 			},
 		})
@@ -370,6 +380,45 @@ func buildPlanUserMessage(intent string, contextJSON json.RawMessage, catalog ca
 	b.WriteString("CATALOG (helmdeck routing-guide):\n")
 	b.Write(catBytes)
 	b.WriteString("\n\nCALLER DEFAULTS (helmdeck://my-defaults projection):\n")
+	b.Write(defBytes)
+	b.WriteString("\n\nUSER REQUEST:\n")
+	b.WriteString(intent)
+	if len(contextJSON) > 0 && string(contextJSON) != "null" {
+		b.WriteString("\n\nOPTIONAL CONTEXT:\n")
+		b.Write(contextJSON)
+	}
+	b.WriteString("\n\nReturn the JSON object now.")
+	return b.String()
+}
+
+// assemblePlanPrompt returns the (system, user) message pair for the
+// planning dispatch. When the budget advertises prompt-prefix caching
+// (ADR 051 PR #4), the catalog block is lifted out of the user
+// message and into the system prompt so consecutive calls for the
+// same model share the cached prefix. When caching isn't advertised,
+// the legacy single-user-message path is preserved verbatim — same
+// wire bytes a pre-PR-4 call would have produced, so behavior on
+// non-caching providers is unchanged.
+func assemblePlanPrompt(budget llmcontext.Budget, catalog catalogProjection, defaults packs.Defaults, intent string, contextJSON json.RawMessage) (string, string) {
+	if budget.SupportsPrefixCache {
+		catBytes, _ := json.MarshalIndent(catalog, "", "  ")
+		var sb strings.Builder
+		sb.WriteString(planSystemPrompt)
+		sb.WriteString("\n\nCATALOG (helmdeck routing-guide):\n")
+		sb.Write(catBytes)
+		return sb.String(), buildPlanUserMessageNoCatalog(intent, contextJSON, defaults)
+	}
+	return planSystemPrompt, buildPlanUserMessage(intent, contextJSON, catalog, defaults)
+}
+
+// buildPlanUserMessageNoCatalog is the prefix-cache variant of the
+// user message: caller defaults + intent + optional context only, no
+// CATALOG block. The catalog moves to the system prompt in this path
+// so the prefix stays stable across calls.
+func buildPlanUserMessageNoCatalog(intent string, contextJSON json.RawMessage, defaults packs.Defaults) string {
+	defBytes, _ := json.MarshalIndent(defaults, "", "  ")
+	var b strings.Builder
+	b.WriteString("CALLER DEFAULTS (helmdeck://my-defaults projection):\n")
 	b.Write(defBytes)
 	b.WriteString("\n\nUSER REQUEST:\n")
 	b.WriteString(intent)

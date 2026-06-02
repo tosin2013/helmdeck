@@ -352,6 +352,9 @@ func TestPlan_CompactsCatalogForTierCModels(t *testing.T) {
 // TestPlan_TierAModelGetsFullCatalog — frontier models (Tier A) bypass
 // compaction entirely. The full catalog including intent_keywords,
 // typical_use, and limitations should land in the prompt verbatim.
+// Post-ADR-051-PR-#4 the catalog block lives in the system message
+// for SupportsPrefixCache=true entries (anthropic/claude-haiku is
+// one), so the assertion scans the combined system + user text.
 func TestPlan_TierAModelGetsFullCatalog(t *testing.T) {
 	reply := `{"steps":[{"order":1,"tool":"helmdeck.memory_store","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
 	eng, disp, pack, _ := planFixture(t, reply)
@@ -362,12 +365,98 @@ func TestPlan_TierAModelGetsFullCatalog(t *testing.T) {
 	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"x","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	user := disp.captured[0].Messages[1].Content.Text()
+	combined := disp.captured[0].Messages[0].Content.Text() + "\n" + disp.captured[0].Messages[1].Content.Text()
 	// The fixture's blog.rewrite_for_audience pack declared
 	// IntentKeywords: ["rewrite for audience"]. Tier A pass-through
-	// means it must show up in the prompt.
-	if !strings.Contains(user, "rewrite for audience") {
-		t.Errorf("Tier A model should see full metadata including intent_keywords; user message lacks 'rewrite for audience'")
+	// means it must show up in the prompt (system or user message —
+	// PR #4 routes the catalog into the system prompt when
+	// SupportsPrefixCache is true).
+	if !strings.Contains(combined, "rewrite for audience") {
+		t.Errorf("Tier A model should see full metadata including intent_keywords; prompt lacks 'rewrite for audience'")
+	}
+}
+
+// TestPlan_PrefixCacheRoutesCatalogToSystem — ADR 051 PR #4. When the
+// budget advertises SupportsPrefixCache (Tier A native APIs and a few
+// OpenRouter relays), the catalog block moves out of the user message
+// into the system prompt so consecutive calls share the cached
+// prefix. The system prompt then carries: planSystemPrompt +
+// "\n\nCATALOG..." (catalog JSON). The user message carries only the
+// per-call variable bits (defaults + intent).
+func TestPlan_PrefixCacheRoutesCatalogToSystem(t *testing.T) {
+	reply := `{"steps":[{"order":1,"tool":"helmdeck.memory_store","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
+	eng, disp, pack, _ := planFixture(t, reply)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	// anthropic/claude-haiku-4-5 has SupportsPrefixCache=true per
+	// budgets.go.
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"remember a launch","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	sys := disp.captured[0].Messages[0].Content.Text()
+	user := disp.captured[0].Messages[1].Content.Text()
+	// Catalog must be in system prompt; the CATALOG header is the
+	// witness that the lift happened.
+	if !strings.Contains(sys, "CATALOG (helmdeck routing-guide)") {
+		t.Errorf("SupportsPrefixCache=true: system prompt should carry CATALOG block; got %q", sys)
+	}
+	// Per-call variable bits should still be in the user message.
+	if !strings.Contains(user, "USER REQUEST") || !strings.Contains(user, "remember a launch") {
+		t.Errorf("user message should carry intent; got %q", user)
+	}
+	// And the user message must NOT contain the catalog body — that
+	// was the cache-defeating mutation we're fixing.
+	if strings.Contains(user, "CATALOG (helmdeck routing-guide)") {
+		t.Errorf("PR #4: catalog must NOT appear in user message under SupportsPrefixCache; user=%q", user)
+	}
+}
+
+// TestPlan_PrefixCacheStablePrefixAcrossCalls — the contract for
+// PR #4 is that the system prompt is byte-identical across calls for
+// a given model when SupportsPrefixCache is set. Two sequential
+// dispatches with DIFFERENT intents must produce byte-identical
+// system prompts so the provider cache hits the second call.
+func TestPlan_PrefixCacheStablePrefixAcrossCalls(t *testing.T) {
+	reply := `{"steps":[{"order":1,"tool":"helmdeck.memory_store","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
+	eng, disp, pack, _ := planFixture(t, reply)
+	disp.replies = []string{reply, reply} // two calls, same reply
+	ctx := packs.WithCaller(context.Background(), "alice")
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"remember launch A","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"remember launch B (different)","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+	if len(disp.captured) < 2 {
+		t.Fatalf("expected 2 captured dispatches; got %d", len(disp.captured))
+	}
+	sys1 := disp.captured[0].Messages[0].Content.Text()
+	sys2 := disp.captured[1].Messages[0].Content.Text()
+	if sys1 != sys2 {
+		t.Errorf("system prompt must be stable across calls for prefix-cache hit; diff:\nCALL 1:\n%s\nCALL 2:\n%s", sys1, sys2)
+	}
+}
+
+// TestPlan_NoPrefixCacheKeepsLegacyShape — when the budget does NOT
+// advertise SupportsPrefixCache (unknown model id → Tier C fallback,
+// or any Tier B/C entry without the flag), the catalog stays in the
+// user message exactly as it did before PR #4. Zero-diff dispatch
+// for the conservative path.
+func TestPlan_NoPrefixCacheKeepsLegacyShape(t *testing.T) {
+	reply := `{"steps":[{"order":1,"tool":"helmdeck.memory_store","args":{},"rationale":"x"}],"complexity":"single-action","reasoning":"x"}`
+	eng, disp, pack, _ := planFixture(t, reply)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	// Unknown model id → falls through to Tier C default
+	// (SupportsPrefixCache=false).
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"x","model":"someone/no-such-model"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	sys := disp.captured[0].Messages[0].Content.Text()
+	user := disp.captured[0].Messages[1].Content.Text()
+	if strings.Contains(sys, "CATALOG (helmdeck routing-guide)") {
+		t.Errorf("no SupportsPrefixCache: catalog should stay in user message; got it in system: %q", sys)
+	}
+	if !strings.Contains(user, "CATALOG (helmdeck routing-guide)") {
+		t.Errorf("no SupportsPrefixCache: catalog should be in user message; user=%q", user)
 	}
 }
 

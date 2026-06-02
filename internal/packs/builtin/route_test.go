@@ -77,6 +77,72 @@ func routeFixture(t *testing.T, reply string, seedAudit func(memory.MemoryStore,
 	return eng, disp, pack
 }
 
+// TestRoute_PrefixCacheRoutesCatalogToSystem — ADR 051 PR #4. Same
+// contract as helmdeck.plan: catalog moves to system prompt when the
+// budget advertises SupportsPrefixCache.
+func TestRoute_PrefixCacheRoutesCatalogToSystem(t *testing.T) {
+	reply := `{"recommendation":{"kind":"pack","id":"doc.parse","why":"x"},"alternatives":[],"gap_warning":null,"reasoning":"x"}`
+	eng, disp, pack := routeFixture(t, reply, nil)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"parse this pdf","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	sys := disp.captured[0].Messages[0].Content.Text()
+	user := disp.captured[0].Messages[1].Content.Text()
+	if !strings.Contains(sys, "CATALOG (helmdeck routing-guide)") {
+		t.Errorf("SupportsPrefixCache=true: system prompt should carry CATALOG block; got %q", sys)
+	}
+	if strings.Contains(user, "CATALOG (helmdeck routing-guide)") {
+		t.Errorf("PR #4: catalog must NOT appear in user message under SupportsPrefixCache; user=%q", user)
+	}
+	if !strings.Contains(user, "parse this pdf") {
+		t.Errorf("user message should carry intent; got %q", user)
+	}
+}
+
+// TestRoute_PrefixCacheStablePrefixAcrossCalls — system prompt must
+// be byte-identical across calls for the same model so the provider
+// cache hits the second call.
+func TestRoute_PrefixCacheStablePrefixAcrossCalls(t *testing.T) {
+	reply := `{"recommendation":{"kind":"pack","id":"doc.parse","why":"x"},"alternatives":[],"gap_warning":null,"reasoning":"x"}`
+	eng, disp, pack := routeFixture(t, reply, nil)
+	disp.replies = []string{reply, reply}
+	ctx := packs.WithCaller(context.Background(), "alice")
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"parse A","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"parse B (different)","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+	if len(disp.captured) < 2 {
+		t.Fatalf("expected 2 captured dispatches; got %d", len(disp.captured))
+	}
+	sys1 := disp.captured[0].Messages[0].Content.Text()
+	sys2 := disp.captured[1].Messages[0].Content.Text()
+	if sys1 != sys2 {
+		t.Errorf("system prompt must be stable across calls for prefix-cache hit; diff:\nCALL 1:\n%s\nCALL 2:\n%s", sys1, sys2)
+	}
+}
+
+// TestRoute_NoPrefixCacheKeepsLegacyShape — when SupportsPrefixCache
+// is false (Tier C fallback), legacy single-user-message shape.
+func TestRoute_NoPrefixCacheKeepsLegacyShape(t *testing.T) {
+	reply := `{"recommendation":{"kind":"pack","id":"doc.parse","why":"x"},"alternatives":[],"gap_warning":null,"reasoning":"x"}`
+	eng, disp, pack := routeFixture(t, reply, nil)
+	ctx := packs.WithCaller(context.Background(), "alice")
+	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"x","model":"someone/no-such-model"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	sys := disp.captured[0].Messages[0].Content.Text()
+	user := disp.captured[0].Messages[1].Content.Text()
+	if strings.Contains(sys, "CATALOG (helmdeck routing-guide)") {
+		t.Errorf("no SupportsPrefixCache: catalog should stay in user message; got it in system: %q", sys)
+	}
+	if !strings.Contains(user, "CATALOG (helmdeck routing-guide)") {
+		t.Errorf("no SupportsPrefixCache: catalog should be in user message; user=%q", user)
+	}
+}
+
 // TestRoute_StrictJSONFlipsOnTierA — ADR 051 PR #3. Same as the
 // helmdeck.plan test: route opts into provider-side strict JSON when
 // the model's tier entry advertises WantsStrictJSON AND the tier is
@@ -285,6 +351,9 @@ func TestRoute_InvalidInput(t *testing.T) {
 // llmcontext.CompactCatalog into route.go. Tier A models must pass
 // through with full metadata; the routeFixture's blog pack declared
 // IntentKeywords that should survive in the prompt verbatim.
+// Post-ADR-051-PR-#4 the catalog block lives in the system message
+// for SupportsPrefixCache=true entries (anthropic/claude-haiku is
+// one), so the assertion scans the combined system + user text.
 func TestRoute_TierAModelGetsFullCatalog(t *testing.T) {
 	reply := `{"recommendation":{"kind":"pack","id":"blog.rewrite_for_audience"},"alternatives":[],"gap_warning":null,"reasoning":"ok"}`
 	eng, disp, pack := routeFixture(t, reply, nil)
@@ -292,9 +361,9 @@ func TestRoute_TierAModelGetsFullCatalog(t *testing.T) {
 	if _, err := eng.Execute(ctx, pack, json.RawMessage(`{"user_intent":"rewrite this","model":"anthropic/claude-haiku-4-5"}`)); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	user := disp.captured[0].Messages[1].Content.Text()
-	if !strings.Contains(user, "rewrite for audience") {
-		t.Errorf("Tier A model should see full metadata including intent_keywords; user message lacks 'rewrite for audience'")
+	combined := disp.captured[0].Messages[0].Content.Text() + "\n" + disp.captured[0].Messages[1].Content.Text()
+	if !strings.Contains(combined, "rewrite for audience") {
+		t.Errorf("Tier A model should see full metadata including intent_keywords; prompt lacks 'rewrite for audience'")
 	}
 }
 

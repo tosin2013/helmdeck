@@ -128,6 +128,28 @@ func (rc resolveCtx) lookupExpr(expr string) (any, error) {
 	switch {
 	case strings.HasPrefix(expr, "inputs."):
 		path := strings.TrimPrefix(expr, "inputs.")
+		// Missing top-level pipeline input → empty string. Pipeline
+		// inputs are typically optional (callers omit fields they
+		// don't need), so resolving an absent ${{ inputs.X }} to ""
+		// matches the natural caller expectation. Nested errors
+		// (e.g. inputs.foo.bar where foo exists but bar doesn't)
+		// still surface loud — they indicate the caller did supply
+		// the field but with the wrong shape.
+		//
+		// step.output references stay loud (see the steps.* branch
+		// below): a missing step output indicates a real inter-step
+		// wiring bug we want to catch, not a caller-side omission.
+		if rc.inputs != nil {
+			topKey, _, _ := cutFirst(path, ".")
+			if topKey == "" {
+				topKey = path
+			}
+			if _, present := rc.inputs[topKey]; !present {
+				return "", nil
+			}
+		} else {
+			return "", nil
+		}
 		v, err := lookupPath(rc.inputs, path)
 		if err != nil {
 			return nil, &RefError{Ref: expr, Reason: err.Error()}

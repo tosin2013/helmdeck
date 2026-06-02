@@ -33,6 +33,16 @@ const (
 	CodeArtifactFailed ErrorCode = "artifact_failed"
 	// CodeTimeout — handler exceeded its deadline or the caller cancelled.
 	CodeTimeout ErrorCode = "timeout"
+	// CodeResourceExhausted — the OS killed a child process for
+	// resource reasons, typically the OOM killer (SIGKILL → exit
+	// 137 from a shelled-out tool like ffmpeg/imagemagick/playwright).
+	// Distinct from CodeTimeout (the *deadline* expired) and
+	// CodeSessionUnavailable (couldn't acquire a session at all):
+	// the session ran fine, the workload was too heavy for the
+	// memory/CPU budget. classify.go maps this to FailureTransient
+	// because re-running with a bumped MemoryLimit or a smaller job
+	// often succeeds; the pack is not buggy.
+	CodeResourceExhausted ErrorCode = "resource_exhausted"
 	// CodeInternal — engine bug or invariant violation. Should never
 	// be observable in production.
 	CodeInternal ErrorCode = "internal"

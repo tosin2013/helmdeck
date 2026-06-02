@@ -35,16 +35,23 @@ func Builtins() []*Pipeline {
 			Supersedes:     []string{"content.ground", "slides.outline", "slides.render"},
 		}),
 		pipe("builtin.brief-rewrite-blog", "Brief → rewrite → blog",
-			"Translate a pasted brief / pitch / outline of ideas into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — expands the brief, leads with why-it-matters, de-jargons, connects to the audience's tools, adds perspective; stays grounded in the brief's framing), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: brief, audience, angle?, persona?, title. Use this when the user pastes a brief like \"Title Idea: …\\nThe Hook: …\\nWhat to Cover: …\\nTarget Audience: …\" — NOT for a finished draft. Replaces builtin.grounded-blog, which only added citations to whatever it received (an annotator, not a generator) so a brief came back as ~the brief, not a real blog post.",
+			"Translate a pasted brief / pitch / outline of ideas into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — expands the brief, leads with why-it-matters, de-jargons, connects to the audience's tools, adds perspective; stays grounded in the brief's framing), then cite the new prose against web sources (content.ground, citation-only). Output includes inline [1] citations from content.ground — strip in post-processing for conversational publication targets (dev.to / Medium / company blog). Optionally append a natural-voice call-to-action via blog.append_cta when one of project_url / github_url / source_url is set (no-op otherwise). Then save as a blog-post artifact. Inputs: brief, audience, angle?, persona?, title; optional CTA inputs project_url?, github_url?, source_url?, cta_copy?. Use this when the user pastes a brief like \"Title Idea: …\\nThe Hook: …\\nWhat to Cover: …\\nTarget Audience: …\" — NOT for a finished draft. Replaces builtin.grounded-blog, which only added citations to whatever it received (an annotator, not a generator) so a brief came back as ~the brief, not a real blog post.",
 			step("rewrite", "blog.rewrite_for_audience", `{"source_content":"${{ inputs.brief }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","persona":"${{ inputs.persona }}","title":"${{ inputs.title }}","model":"openrouter/auto"}`),
 			step("ground", "content.ground", `{"text":"${{ steps.rewrite.output.markdown }}","model":"openrouter/auto","rewrite":false}`),
-			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
+			// blog.append_cta is a no-op when no promotional inputs are
+			// passed, so the step slots in unconditionally. When at
+			// least one of project_url / github_url / source_url is
+			// set it LLM-rewrites a closing CTA in the article's voice
+			// using the same audience+persona threaded into the rewrite
+			// step above.
+			step("cta", "blog.append_cta", `{"markdown":"${{ steps.ground.output.grounded_text }}","source_url":"${{ inputs.source_url }}","project_url":"${{ inputs.project_url }}","github_url":"${{ inputs.github_url }}","cta_copy":"${{ inputs.cta_copy }}","audience":"${{ inputs.audience }}","persona":"${{ inputs.persona }}","model":"openrouter/auto"}`),
+			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.cta.output.markdown }}"}`),
 		).withMeta(PipelineMetadata{
 			Accepts:        []string{"brief", "markdown"},
 			Produces:       []string{"blog_markdown"},
 			IntentKeywords: []string{"make blog from brief", "expand pitch into blog post", "write blog from outline notes", "title idea + hook + what to cover"},
 			TypicalUse:     "When the user pastes a brief (Title Idea / Hook / What to Cover / Target Audience) and wants an original blog post.",
-			Limitations:    []string{"not for finished drafts — use content.ground directly for citation-only", "not for documents (use doc-rewrite-blog) or URLs (use scrape-rewrite-blog)"},
+			Limitations:    []string{"not for finished drafts — use content.ground directly for citation-only", "not for documents (use doc-rewrite-blog) or URLs (use scrape-rewrite-blog)", "output includes inline [1] citations from content.ground; strip in post-processing for conversational targets"},
 			Supersedes:     []string{"blog.rewrite_for_audience", "content.ground", "blog.publish"},
 		}),
 		pipe("builtin.grounded-narrate", "Grounded narrated video",
@@ -79,11 +86,15 @@ func Builtins() []*Pipeline {
 			step("podcast", "podcast.generate", `{"source_text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
 		),
 		pipe("builtin.scrape-rewrite-blog", "Scrape → rewrite → blog",
-			"Scrape a URL to markdown, then translate it into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — de-jargons, leads with why-it-matters, connects to the audience's tools, adds perspective; stays grounded in the scraped source), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: url, audience, angle?, persona? (general/technical/marketing/executive/educational/academic), title. Replaces builtin.scrape-ground-blog, which produced a citation-strengthened transcription that read as republishing the scraped page.",
+			"Scrape a URL to markdown, then translate it into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — de-jargons, leads with why-it-matters, connects to the audience's tools, adds perspective; stays grounded in the scraped source), then cite the new prose against web sources (content.ground, citation-only). Output includes inline [1] citations from content.ground — strip in post-processing for conversational publication targets (dev.to / Medium / company blog). Optionally append a natural-voice call-to-action via blog.append_cta when one of project_url / github_url / source_url is set (no-op otherwise). Then save as a blog-post artifact. Inputs: url, audience, angle?, persona? (general/technical/marketing/executive/educational/academic), title; optional CTA inputs project_url?, github_url?, source_url?, cta_copy?. Replaces builtin.scrape-ground-blog, which produced a citation-strengthened transcription that read as republishing the scraped page.",
 			step("scrape", "web.scrape", `{"url":"${{ inputs.url }}"}`),
 			step("rewrite", "blog.rewrite_for_audience", `{"source_content":"${{ steps.scrape.output.markdown }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","persona":"${{ inputs.persona }}","title":"${{ inputs.title }}","model":"openrouter/auto"}`),
 			step("ground", "content.ground", `{"text":"${{ steps.rewrite.output.markdown }}","model":"openrouter/auto","rewrite":false}`),
-			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
+			// blog.append_cta is a no-op when no promotional inputs
+			// are passed (see brief-rewrite-blog above for the design
+			// rationale).
+			step("cta", "blog.append_cta", `{"markdown":"${{ steps.ground.output.grounded_text }}","source_url":"${{ inputs.source_url }}","project_url":"${{ inputs.project_url }}","github_url":"${{ inputs.github_url }}","cta_copy":"${{ inputs.cta_copy }}","audience":"${{ inputs.audience }}","persona":"${{ inputs.persona }}","model":"openrouter/auto"}`),
+			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.cta.output.markdown }}"}`),
 		),
 		pipe("builtin.research-ground-deck", "Research → ground → deck",
 			"Deep-research a topic, cite the synthesis against web sources (content.ground), structure it into a deck (slides.outline), then render. Optional inputs: persona?, audience?, angle?, title?, author?, export_outline?, include_image_prompts? — same set as builtin.grounded-deck.",
@@ -95,7 +106,7 @@ func Builtins() []*Pipeline {
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.doc-rewrite-blog", "Document → rewrite → blog",
-			"Parse a document (PDF/DOCX/…), then translate it into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — de-jargons, leads with why-it-matters, connects to the audience's tools, adds perspective; stays grounded in the source), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: source_url, audience, angle?, persona? (general/technical/marketing/executive/educational/academic), title. Replaces builtin.doc-ground-blog, which produced a citation-strengthened transcription that read as republishing rather than as an original post.",
+			"Parse a document (PDF/DOCX/…), then translate it into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience — de-jargons, leads with why-it-matters, connects to the audience's tools, adds perspective; stays grounded in the source), then cite the new prose against web sources (content.ground, citation-only). Output includes inline [1] citations from content.ground — strip in post-processing for conversational publication targets (dev.to / Medium / company blog). Optionally append a natural-voice call-to-action via blog.append_cta when one of project_url / github_url / cta_source_url is set (no-op otherwise; cta_source_url is separate from source_url so the CTA stays opt-in). Then save as a blog-post artifact. Inputs: source_url (doc URL), audience, angle?, persona? (general/technical/marketing/executive/educational/academic), title; optional CTA inputs project_url?, github_url?, cta_source_url?, cta_copy?. Replaces builtin.doc-ground-blog, which produced a citation-strengthened transcription that read as republishing rather than as an original post.",
 			step("parse", "doc.parse", `{"source_url":"${{ inputs.source_url }}"}`),
 			// rewrite is the new step — turns the source into an
 			// original post for the audience+angle the caller supplied.
@@ -104,7 +115,15 @@ func Builtins() []*Pipeline {
 			// already restructured the prose; this pass verifies it
 			// against web sources and inserts inline citations.
 			step("ground", "content.ground", `{"text":"${{ steps.rewrite.output.markdown }}","model":"openrouter/auto","rewrite":false}`),
-			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
+			// CTA append — the CTA's source URL is a SEPARATE input
+			// (cta_source_url) to keep it OPT-IN. inputs.source_url
+			// is the doc URL being parsed and is always set; threading
+			// that into the CTA would fire the LLM call on every
+			// doc-rewrite-blog run regardless of whether the caller
+			// wanted promotion. Callers who do want the doc URL
+			// surfaced in the CTA pass it explicitly as cta_source_url.
+			step("cta", "blog.append_cta", `{"markdown":"${{ steps.ground.output.grounded_text }}","source_url":"${{ inputs.cta_source_url }}","project_url":"${{ inputs.project_url }}","github_url":"${{ inputs.github_url }}","cta_copy":"${{ inputs.cta_copy }}","audience":"${{ inputs.audience }}","persona":"${{ inputs.persona }}","model":"openrouter/auto"}`),
+			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.cta.output.markdown }}"}`),
 		).withMeta(PipelineMetadata{
 			Accepts:        []string{"pdf", "docx", "source_url"},
 			Produces:       []string{"blog_markdown"},
@@ -120,11 +139,12 @@ func Builtins() []*Pipeline {
 			step("render", "slides.render", `{"markdown":"${{ steps.outline.output.markdown }}","format":"pdf"}`),
 		),
 		pipe("builtin.research-rewrite-blog", "Research → rewrite → blog",
-			"Deep-research a topic (research.deep), then translate the synthesis into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience), then cite the new prose against web sources (content.ground, citation-only) and save as a blog-post artifact. Inputs: query, audience, angle?, persona? (general/technical/marketing/executive/educational/academic), title. Replaces builtin.research-blog, which saved the raw synthesis without tailoring it to an audience — useful as research notes but generic as a blog post.",
+			"Deep-research a topic (research.deep — multi-source synthesis via Firecrawl search + scrape, deeper than a single web.scrape), then translate the synthesis into an ORIGINAL blog post for a stated audience (blog.rewrite_for_audience), then cite the new prose against web sources (content.ground, citation-only). Output includes inline [1] citations from content.ground — strip in post-processing for conversational publication targets (dev.to / Medium / company blog). Optionally append a natural-voice call-to-action via blog.append_cta when one of project_url / github_url / cta_source_url is set (no-op otherwise). Then save as a blog-post artifact. Inputs: query, audience, angle?, persona? (general/technical/marketing/executive/educational/academic), title; optional CTA inputs project_url?, github_url?, cta_source_url?, cta_copy?. Picks the deeper synthesis path when the topic warrants multi-source research rather than a single-URL scrape (compare with builtin.scrape-rewrite-blog). Replaces builtin.research-blog, which saved the raw synthesis without tailoring it to an audience — useful as research notes but generic as a blog post.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
 			step("rewrite", "blog.rewrite_for_audience", `{"source_content":"${{ steps.research.output.synthesis }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","persona":"${{ inputs.persona }}","title":"${{ inputs.title }}","model":"openrouter/auto"}`),
 			step("ground", "content.ground", `{"text":"${{ steps.rewrite.output.markdown }}","model":"openrouter/auto","rewrite":false}`),
-			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.ground.output.grounded_text }}"}`),
+			step("cta", "blog.append_cta", `{"markdown":"${{ steps.ground.output.grounded_text }}","source_url":"${{ inputs.cta_source_url }}","project_url":"${{ inputs.project_url }}","github_url":"${{ inputs.github_url }}","cta_copy":"${{ inputs.cta_copy }}","audience":"${{ inputs.audience }}","persona":"${{ inputs.persona }}","model":"openrouter/auto"}`),
+			step("publish", "blog.publish", `{"format":"markdown","title":"${{ inputs.title }}","body":"${{ steps.cta.output.markdown }}"}`),
 		),
 		pipe("builtin.repo-presentation", "Repo → presentation video",
 			"Clone a repo, map its code structure (repo.map) and gather its docs, outline a deck from the README + docs + structure (slides.outline), then render a narrated video — a fuller picture than the README alone. Optional inputs: persona?, audience?, angle?, title?, author?, export_outline?, include_image_prompts? — same set as builtin.grounded-deck.",

@@ -59,6 +59,11 @@ var builtinPackStubs = map[string]stubSpec{
 	// content.ground citation pass, so the stub returns markdown the
 	// pre-existing ground stub can consume.
 	"blog.rewrite_for_audience": {output: `{"markdown":"# Original post for the audience\n\nbody…","model":"openrouter/auto"}`},
+	// blog.append_cta sits between content.ground and blog.publish in
+	// the *-rewrite-blog pipelines. The stub returns markdown shaped
+	// like the no-op pass-through path — the e2e harness doesn't
+	// thread CTA inputs so the real pack would no-op too.
+	"blog.append_cta": {output: `{"markdown":"# Grounded [source](https://example.com)\n\n---\n\n## Two","cta_added":false}`},
 	// hyperframes.compose produces the composition_html the render step consumes.
 	"hyperframes.compose": {output: `{"composition_html":"<!doctype html><html><body><div id=\"root\" data-composition-id=\"main\" data-width=\"1920\" data-height=\"1080\"></div></body></html>","model":"openrouter/auto","width":1920,"height":1080,"duration_seconds":8,"has_audio":false,"duration_source":"timeline"}`},
 	// Artifact producers (the terminal step of every built-in pipeline).
@@ -132,7 +137,11 @@ const builtinRunInputs = `{
   "persona": "technical",
   "author": "A. Maintainer",
   "export_outline": true,
-  "include_image_prompts": true
+  "include_image_prompts": true,
+  "project_url": "",
+  "github_url": "",
+  "cta_source_url": "",
+  "cta_copy": ""
 }`
 
 // TestBuiltins_RunEndToEnd runs every built-in pipeline through the runner

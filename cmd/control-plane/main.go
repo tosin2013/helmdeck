@@ -678,6 +678,12 @@ func main() {
 			// it rides this block. The doc-rewrite-blog pipeline
 			// (seed.go) chains it after doc.parse.
 			builtin.BlogRewriteForAudience(visionDispatcher),
+			// blog.append_cta — append a natural-voice call-to-action
+			// section to a blog markdown. No-op when no link inputs
+			// are passed, so the step can slot into every blog
+			// pipeline unconditionally. LLM-backed when a link is set
+			// so the CTA matches the article's voice.
+			builtin.BlogAppendCTA(visionDispatcher),
 			// hyperframes.compose — generate a HyperFrames HTML/CSS/JS video
 			// composition from a description so callers don't hand-author the
 			// data-*/window.__timelines scaffolding. LLM-backed; the prompt→video

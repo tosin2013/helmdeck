@@ -175,11 +175,34 @@ func (s *Store) CreateRun(ctx context.Context, r *Run) error {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO pipeline_runs (id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO pipeline_runs (id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at, caller, fingerprint)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, r.PipelineID, string(r.Status), nullJSON(r.Inputs), string(stepsJSON),
-		nullStr(r.Error), r.StartedAt.Format(ts), nullTime(r.EndedAt))
+		nullStr(r.Error), r.StartedAt.Format(ts), nullTime(r.EndedAt),
+		r.Caller, r.Fingerprint)
 	return err
+}
+
+// FindInFlightByFingerprint returns the pending/running run, if any, whose
+// fingerprint matches. Used by StartRun to coalesce duplicate concurrent
+// pipeline-run requests onto the original in-flight run instead of
+// spawning a second identical execution. Empty fingerprint never matches
+// (legacy rows). Returns (nil, nil) when no in-flight match exists.
+func (s *Store) FindInFlightByFingerprint(ctx context.Context, fingerprint string) (*Run, error) {
+	if fingerprint == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at, caller, fingerprint
+		FROM pipeline_runs
+		WHERE fingerprint = ? AND status IN ('pending','running')
+		ORDER BY started_at ASC
+		LIMIT 1`, fingerprint)
+	run, err := scanRunWithFingerprint(row)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	return run, err
 }
 
 // SaveRun persists the current run state (status, steps, error, ended_at).
@@ -197,9 +220,9 @@ func (s *Store) SaveRun(ctx context.Context, r *Run) error {
 // GetRun returns a single run by id.
 func (s *Store) GetRun(ctx context.Context, runID string) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at
+		SELECT id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at, caller, fingerprint
 		FROM pipeline_runs WHERE id=?`, runID)
-	return scanRun(row)
+	return scanRunWithFingerprint(row)
 }
 
 // ListRuns returns recent runs for a pipeline, newest first.
@@ -208,7 +231,7 @@ func (s *Store) ListRuns(ctx context.Context, pipelineID string, limit int) ([]*
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at
+		SELECT id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at, caller, fingerprint
 		FROM pipeline_runs WHERE pipeline_id=? ORDER BY started_at DESC LIMIT ?`, pipelineID, limit)
 	if err != nil {
 		return nil, err
@@ -216,7 +239,7 @@ func (s *Store) ListRuns(ctx context.Context, pipelineID string, limit int) ([]*
 	defer rows.Close()
 	var out []*Run
 	for rows.Next() {
-		r, err := scanRun(rows)
+		r, err := scanRunWithFingerprint(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -234,7 +257,7 @@ func (s *Store) ListAllRuns(ctx context.Context, limit int) ([]*Run, error) {
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at
+		SELECT id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at, caller, fingerprint
 		FROM pipeline_runs ORDER BY started_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -242,7 +265,7 @@ func (s *Store) ListAllRuns(ctx context.Context, limit int) ([]*Run, error) {
 	defer rows.Close()
 	var out []*Run
 	for rows.Next() {
-		r, err := scanRun(rows)
+		r, err := scanRunWithFingerprint(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -256,7 +279,7 @@ func (s *Store) ListAllRuns(ctx context.Context, limit int) ([]*Run, error) {
 // Ordered oldest-first so log output reads chronologically.
 func (s *Store) ListInFlightRuns(ctx context.Context) ([]*Run, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at
+		SELECT id, pipeline_id, status, inputs_json, steps_json, error, started_at, ended_at, caller, fingerprint
 		FROM pipeline_runs
 		WHERE status IN ('pending','running')
 		ORDER BY started_at ASC`)
@@ -266,7 +289,7 @@ func (s *Store) ListInFlightRuns(ctx context.Context) ([]*Run, error) {
 	defer rows.Close()
 	var out []*Run
 	for rows.Next() {
-		r, err := scanRun(rows)
+		r, err := scanRunWithFingerprint(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -326,6 +349,37 @@ func scanRun(row scanner) (*Run, error) {
 	if ended.Valid {
 		r.EndedAt, _ = time.Parse(ts, ended.String)
 	}
+	return &r, nil
+}
+
+// scanRunWithFingerprint is scanRun + the caller/fingerprint columns added
+// in migration 0008. Kept separate from scanRun so callers that don't yet
+// need the fingerprint (none in-tree right now, but the symbol is
+// preserved for external consumers / future use) keep working.
+func scanRunWithFingerprint(row scanner) (*Run, error) {
+	var r Run
+	var inputs, errStr, ended sql.NullString
+	var steps, started, status, caller, fingerprint string
+	if err := row.Scan(&r.ID, &r.PipelineID, &status, &inputs, &steps, &errStr, &started, &ended, &caller, &fingerprint); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	r.Status = RunStatus(status)
+	if inputs.Valid {
+		r.Inputs = json.RawMessage(inputs.String)
+	}
+	if errStr.Valid {
+		r.Error = errStr.String
+	}
+	_ = json.Unmarshal([]byte(steps), &r.Steps)
+	r.StartedAt, _ = time.Parse(ts, started)
+	if ended.Valid {
+		r.EndedAt, _ = time.Parse(ts, ended.String)
+	}
+	r.Caller = caller
+	r.Fingerprint = fingerprint
 	return &r, nil
 }
 

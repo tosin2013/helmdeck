@@ -209,7 +209,7 @@ func handlePipelineRun(w http.ResponseWriter, r *http.Request, runner *pipelines
 	if raw, _ := io.ReadAll(r.Body); len(raw) > 0 {
 		_ = json.Unmarshal(raw, &body)
 	}
-	runID, err := runner.StartRun(r.Context(), id, body.Inputs, pipelineCaller(r))
+	runID, coalesced, err := runner.StartRun(r.Context(), id, body.Inputs, pipelineCaller(r))
 	if err != nil {
 		if errors.Is(err, pipelines.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "pipeline not found")
@@ -220,13 +220,16 @@ func handlePipelineRun(w http.ResponseWriter, r *http.Request, runner *pipelines
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"run_id": runID, "pipeline_id": id, "status": string(pipelines.RunPending),
+		"coalesced": coalesced,
 	})
 }
 
 // handlePipelineRerun starts a fresh run from an existing run (same
 // pipeline + inputs). Distinct from a resume — every step runs again.
+// Also coalesces onto an identical in-flight run (same single-flight
+// guarantee as POST /run).
 func handlePipelineRerun(w http.ResponseWriter, r *http.Request, runner *pipelines.Runner, runID string) {
-	newRunID, err := runner.Rerun(r.Context(), runID, pipelineCaller(r))
+	newRunID, coalesced, err := runner.Rerun(r.Context(), runID, pipelineCaller(r))
 	if err != nil {
 		if errors.Is(err, pipelines.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "run or pipeline not found")
@@ -237,6 +240,7 @@ func handlePipelineRerun(w http.ResponseWriter, r *http.Request, runner *pipelin
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"run_id": newRunID, "status": string(pipelines.RunPending),
+		"coalesced": coalesced,
 	})
 }
 

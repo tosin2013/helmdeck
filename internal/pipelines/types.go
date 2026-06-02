@@ -147,6 +147,14 @@ type Run struct {
 	FailureReason string    `json:"failure_reason,omitempty"`
 	StartedAt     time.Time `json:"started_at"`
 	EndedAt       time.Time `json:"ended_at,omitempty"`
+	// Caller is the authenticated subject (JWT "sub") that started the
+	// run, persisted so identical inputs from different callers don't
+	// coalesce together. "" for unauthenticated/auth-disabled.
+	Caller string `json:"caller,omitempty"`
+	// Fingerprint is sha256(caller || pipeline_id || canonical_json(inputs))
+	// — the single-flight key the runner uses to dedupe duplicate
+	// concurrent StartRun calls (migration 0008). Empty on legacy rows.
+	Fingerprint string `json:"-"`
 }
 
 // Validate checks a pipeline definition for structural soundness:

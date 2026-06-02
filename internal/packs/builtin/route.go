@@ -296,7 +296,9 @@ func routeHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesListe
 		ec.Report(20, "calling model for routing decision")
 
 		// 3. Dispatch.
-		user := buildRouteUserMessage(in.UserIntent, in.Context, catalog, defaults)
+		// ADR 051 PR #4: prefix-cache routing for the catalog block.
+		// Same logic helmdeck.plan applies — see assemblePlanPrompt.
+		sysPrompt, user := assembleRoutePrompt(budget, catalog, defaults, in.UserIntent, in.Context)
 		mt := maxTokens
 		// ADR 051 PR #3: provider-side strict JSON when the tier
 		// entry advertises support. Tier C suppressed for the same
@@ -312,7 +314,7 @@ func routeHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesListe
 			MaxTokens:      &mt,
 			ResponseFormat: resFmt,
 			Messages: []gateway.Message{
-				{Role: "system", Content: gateway.TextContent(routeSystemPrompt)},
+				{Role: "system", Content: gateway.TextContent(sysPrompt)},
 				{Role: "user", Content: gateway.TextContent(user)},
 			},
 		})
@@ -437,6 +439,41 @@ func buildRouteUserMessage(intent string, contextJSON json.RawMessage, catalog c
 	b.WriteString("CATALOG (helmdeck routing-guide):\n")
 	b.Write(catBytes)
 	b.WriteString("\n\nCALLER DEFAULTS (helmdeck://my-defaults projection):\n")
+	b.Write(defBytes)
+	b.WriteString("\n\nUSER REQUEST:\n")
+	b.WriteString(intent)
+	if len(contextJSON) > 0 && string(contextJSON) != "null" {
+		b.WriteString("\n\nOPTIONAL CONTEXT:\n")
+		b.Write(contextJSON)
+	}
+	b.WriteString("\n\nReturn the JSON object now.")
+	return b.String()
+}
+
+// assembleRoutePrompt is the route.go twin of assemblePlanPrompt
+// (ADR 051 PR #4). When the budget advertises prompt-prefix caching,
+// the catalog moves to the system prompt so subsequent calls hit the
+// provider cache; user message keeps only per-call variation
+// (defaults + intent + optional context).
+func assembleRoutePrompt(budget llmcontext.Budget, catalog catalogProjection, defaults packs.Defaults, intent string, contextJSON json.RawMessage) (string, string) {
+	if budget.SupportsPrefixCache {
+		catBytes, _ := json.MarshalIndent(catalog, "", "  ")
+		var sb strings.Builder
+		sb.WriteString(routeSystemPrompt)
+		sb.WriteString("\n\nCATALOG (helmdeck routing-guide):\n")
+		sb.Write(catBytes)
+		return sb.String(), buildRouteUserMessageNoCatalog(intent, contextJSON, defaults)
+	}
+	return routeSystemPrompt, buildRouteUserMessage(intent, contextJSON, catalog, defaults)
+}
+
+// buildRouteUserMessageNoCatalog is the prefix-cache variant — same
+// shape as buildRouteUserMessage but the CATALOG block is omitted
+// (it's in the system prompt in this path).
+func buildRouteUserMessageNoCatalog(intent string, contextJSON json.RawMessage, defaults packs.Defaults) string {
+	defBytes, _ := json.MarshalIndent(defaults, "", "  ")
+	var b strings.Builder
+	b.WriteString("CALLER DEFAULTS (helmdeck://my-defaults projection):\n")
 	b.Write(defBytes)
 	b.WriteString("\n\nUSER REQUEST:\n")
 	b.WriteString(intent)

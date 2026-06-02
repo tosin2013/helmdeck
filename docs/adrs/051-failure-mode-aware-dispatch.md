@@ -64,13 +64,13 @@ Most provider APIs now support a `response_format` field constraining the model 
 - Per-provider translation: OpenAI sends `response_format.json_object` (Mistral / Groq / Fireworks / OpenRouter inherit it for free via `NewOpenAIProvider`); Gemini sets `generationConfig.responseMimeType`; Anthropic ignores it (uses tool-call structure); Ollama passes through unconstrained. Unknown ResponseFormat values fall through unconstrained at every adapter.
 - `helmdeck.plan` and `helmdeck.route` opt in by passing `ResponseFormat: "json_object"` when `Budget.WantsStrictJSON` is true AND `Budget.Tier != TierC` — the tier guard is the safety belt for crash-prone quantized inference on weak open-weights.
 
-### PR #4 — Prefix-cache-aware two-pass cascade
+### PR #4 — Prefix-cache routing for the catalog block (shipped 2026-06-02)
 
-Restructure the PR #4 (ADR 050) cascade to preserve the catalog prefix verbatim across both LLM calls, enabling near-100% cache hit rate on the static catalog tokens.
+Move the catalog block from the user message into the system prompt when the model's tier entry advertises `SupportsPrefixCache`. The system prompt then stays byte-identical across every helmdeck.plan / helmdeck.route call for that model — catalog is global engine policy, not per-caller — so provider prompt-prefix caches (Anthropic 50% hit discount, Gemini 75%, DeepSeek 96.7%) reward the stable prefix. Per-call variation (defaults projection + intent + optional context) lives in the user message tail.
 
-- Today's flow: full catalog → compact (Tier C trims aggressively) → if lexical low-confidence → filter pass with TRIMMED catalog → planning pass with RESTRICTED catalog. Three different catalog projections in the two LLM calls; no cache reuse.
-- New flow when `Budget.SupportsPrefixCache` is true: filter pass sees the FULL catalog (the small filter prompt makes catalog size irrelevant — the system prompt + names-only catalog listing is ~3KB regardless); planning pass sees the FULL catalog as system prompt, with the filter's id list communicated in the USER message as a "prefer these tools" hint. Both passes hit the same system-prompt cache.
-- Document the contract: catalog projection is now a STABLE prefix; user-variable content (intent, filter hints, defaults projection) lives in the user message tail.
+- Default (`SupportsPrefixCache=false`, e.g. Tier C fallback): zero diff from PR #3. Single user message carries catalog + defaults + intent. Wire-shape parity with pre-PR-4 calls.
+- Cache path (`SupportsPrefixCache=true`, ~15 Tier A entries + the DeepSeek V4 Pro Tier B entry): system prompt = `planSystemPrompt + "\n\nCATALOG (helmdeck routing-guide):\n<full catalog>"`. User message = defaults + intent + optional context only. Catalog is the largest chunk by token count (~3–30KB depending on tier), so caching it saves the bulk of input-token spend on repeat calls within the provider's TTL.
+- Cascade-with-cache interaction: when the ADR 050 PR #4 filter cascade fires on a `SupportsPrefixCache` model (only `openrouter/deepseek/deepseek-v4-pro` today carries both flags), the restricted catalog goes into the system prompt for that call. The filter pass keeps its own system prompt — we do not consolidate the two system prompts in this PR (deferred; the filter system prompt and planning system prompt have different role instructions). The cascade restructuring sketched in the original ADR plan is therefore narrower in scope: PR #4 ships the cache routing only.
 
 ## Consequences
 

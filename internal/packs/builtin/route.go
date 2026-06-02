@@ -312,12 +312,17 @@ func routeHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesListe
 		if len(chat.Choices) == 0 {
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: "gateway returned no choices"}
 		}
-		// ADR 051 PR #1: defensive parse uniform with plan.go. The
-		// helper handles reasoning-token blocks (hybrid models),
-		// code fences, trailing prose, and the balanced-brace
-		// substring fallback.
+		// ADR 051 PR #1 + #2: defensive parse uniform with plan.go,
+		// with PR #2's finish_reason threading so failures get
+		// classified by cause (safety filter / length truncation /
+		// constrained deadlock / likely timeout).
 		var out routeOutput
-		if perr := DecodeStructuredResponse(chat.Choices[0].Message.Content.Text(), "routing", &out); perr != nil {
+		if perr := DecodeStructuredResponseWithCause(
+			chat.Choices[0].Message.Content.Text(),
+			chat.Choices[0].FinishReason,
+			"routing",
+			&out,
+		); perr != nil {
 			return nil, perr
 		}
 		// Defensive: id MUST exist in the catalog. If the model

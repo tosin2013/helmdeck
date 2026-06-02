@@ -1148,3 +1148,55 @@ func TestResources_ContextBudgets_Read_Shape(t *testing.T) {
 		t.Errorf("budgets[] should include at least one Tier C entry")
 	}
 }
+
+// TestResources_ContextBudgets_CapabilityFlagsSurface — ADR 051 PR
+// #2 added IsHybridReasoning / WantsStrictJSON / SupportsPrefixCache
+// / CachedInputCostUSDPerMTok to Budget. The MCP resource must
+// surface them so operators reading the resource can audit per-model
+// capabilities. Tests look up specific known-shape entries from the
+// budgets table and assert their flags.
+func TestResources_ContextBudgets_CapabilityFlagsSurface(t *testing.T) {
+	write, read, stop := startServerWithOpts(t)
+	defer stop()
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"helmdeck://context-budgets"}}`)
+	resp := read()
+
+	var rpc struct {
+		Result struct {
+			Contents []ResourceContent `json:"contents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(resp), &rpc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var cb ContextBudgets
+	if err := json.Unmarshal([]byte(rpc.Result.Contents[0].Text), &cb); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Find the openai/o3-mini entry — should be hybrid reasoning,
+	// wants strict JSON, supports prefix cache, has a cached cost.
+	var o3Mini *ContextBudgetEntry
+	for i := range cb.Budgets {
+		if cb.Budgets[i].Model == "openai/o3-mini" {
+			o3Mini = &cb.Budgets[i]
+			break
+		}
+	}
+	if o3Mini == nil {
+		t.Fatal("openai/o3-mini entry missing from resource projection")
+	}
+	if !o3Mini.IsHybridReasoning {
+		t.Errorf("o3-mini should surface is_hybrid_reasoning=true on the wire; got %+v", o3Mini)
+	}
+	if !o3Mini.WantsStrictJSON {
+		t.Errorf("o3-mini should surface wants_strict_json=true; got %+v", o3Mini)
+	}
+	if !o3Mini.SupportsPrefixCache {
+		t.Errorf("o3-mini should surface supports_prefix_cache=true; got %+v", o3Mini)
+	}
+	if o3Mini.CachedInputCostUSDPerMTok <= 0 {
+		t.Errorf("o3-mini should surface a non-zero cached_input_cost_usd_per_mtok; got %v", o3Mini.CachedInputCostUSDPerMTok)
+	}
+}

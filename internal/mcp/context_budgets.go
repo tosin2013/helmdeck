@@ -57,6 +57,15 @@ type ContextBudgetEntry struct {
 	Tier            string `json:"tier"`
 	AllowsLLMFilter bool   `json:"allows_llm_filter,omitempty"`
 	FilterModel     string `json:"filter_model,omitempty"`
+
+	// ADR 051 PR #2 capability flags. omitempty on the booleans
+	// means a "false" flag drops off the wire — keeps the resource
+	// compact for the common case of all-false legacy entries while
+	// still surfacing the new flags on entries that carry them.
+	IsHybridReasoning         bool    `json:"is_hybrid_reasoning,omitempty"`
+	WantsStrictJSON           bool    `json:"wants_strict_json,omitempty"`
+	SupportsPrefixCache       bool    `json:"supports_prefix_cache,omitempty"`
+	CachedInputCostUSDPerMTok float64 `json:"cached_input_cost_usd_per_mtok,omitempty"`
 }
 
 // buildContextBudgets projects the llmcontext budgets table into the
@@ -81,12 +90,16 @@ func (s *PackServer) buildContextBudgets(_ context.Context) (ContextBudgets, *rp
 
 func toBudgetEntry(b llmcontext.Budget) ContextBudgetEntry {
 	return ContextBudgetEntry{
-		Model:           b.Model,
-		InputTokens:     b.InputTokens,
-		OutputTokens:    b.OutputTokens,
-		MaxCatalogBytes: b.MaxCatalogBytes,
-		Tier:            string(b.Tier),
-		AllowsLLMFilter: b.AllowsLLMFilter,
-		FilterModel:     b.FilterModel,
+		Model:                     b.Model,
+		InputTokens:               b.InputTokens,
+		OutputTokens:              b.OutputTokens,
+		MaxCatalogBytes:           b.MaxCatalogBytes,
+		Tier:                      string(b.Tier),
+		AllowsLLMFilter:           b.AllowsLLMFilter,
+		FilterModel:               b.FilterModel,
+		IsHybridReasoning:         b.IsHybridReasoning,
+		WantsStrictJSON:           b.WantsStrictJSON,
+		SupportsPrefixCache:       b.SupportsPrefixCache,
+		CachedInputCostUSDPerMTok: b.CachedInputCostUSDPerMTok,
 	}
 }

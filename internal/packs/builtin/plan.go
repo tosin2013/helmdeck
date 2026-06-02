@@ -293,15 +293,23 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 		// ADR 051 PR #1: defensive parse handles reasoning-token
 		// blocks (hybrid models), code fences, trailing prose, and
 		// the balanced-brace substring fallback all in one shared
-		// helper. Replaces the inline pattern this handler used to
-		// carry. Same error contract: CodeHandlerFailed on any
-		// failure with a descriptive Message.
+		// helper. PR #2 threads the response's finish_reason so the
+		// helper can classify empty completions / unparseable bodies
+		// by cause (safety filter / length truncation / constrained
+		// deadlock / likely timeout). Cause is exposed via the
+		// returned PackError's Cause field; callers can errors.Is
+		// against the sentinels in json_response.go.
 		var raw struct {
 			Steps      []planStep `json:"steps"`
 			Complexity string     `json:"complexity"`
 			Reasoning  string     `json:"reasoning"`
 		}
-		if perr := DecodeStructuredResponse(chat.Choices[0].Message.Content.Text(), "plan", &raw); perr != nil {
+		if perr := DecodeStructuredResponseWithCause(
+			chat.Choices[0].Message.Content.Text(),
+			chat.Choices[0].FinishReason,
+			"plan",
+			&raw,
+		); perr != nil {
 			return nil, perr
 		}
 		steps := normalizePlanSteps(raw.Steps, validIDs)

@@ -4,9 +4,23 @@
 // Package web exposes the React/Vite build output as an embedded
 // io/fs.FS so the control plane can serve the Management UI from
 // inside the single-binary distribution. The build output lives in
-// web/dist/ which is gitignored except for a placeholder
-// index.html that lets the Go build succeed before `make web-build`
-// has ever run.
+// web/dist/ which is gitignored except for a tiny stub
+// index.html that lets the Go build succeed before the Vite bundle
+// has been produced.
+//
+// Build sources:
+//   - Production docker images: web/dist is generated INSIDE the
+//     docker build by the web-build Node stage (see
+//     deploy/docker/control-plane.Dockerfile). The host's web/dist
+//     is .dockerignore'd out of the build context, so the embedded
+//     HTML and embedded assets are always produced from the same
+//     source tree in the same stage — byte-for-byte consistent.
+//   - Host-side `go build` (IDE, `go test`, etc.): the committed
+//     stub web/dist/index.html keeps go:embed satisfied. Running
+//     `npm run build` in web/ replaces the stub with a real bundle
+//     for local UI dev. The stub itself is byte-stable, so accidentally
+//     committing it back from a host that had not built does not
+//     introduce drift.
 //
 // Mixing Go and JavaScript source in the same directory is
 // intentional: it lets //go:embed reach the dist files without a

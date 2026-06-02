@@ -1,10 +1,32 @@
 # Helmdeck control plane image. Multi-stage so the runtime image is the
 # bare static binary on distroless/static — see ADR 002.
 #
-# Built locally by `docker compose build` or by a future GH Actions job
-# that publishes ghcr.io/tosin2013/helmdeck:vX.Y.Z. The Compose tier
-# (deploy/compose/compose.yaml) builds from this file at the repo root
-# context.
+# Two build stages produce the final image:
+#   1. web-build   — Node runs `npm ci && npm run build` to produce
+#                    web/dist/{index.html,assets/*} with content-hashed
+#                    bundles. Self-contained: the host's web/dist is
+#                    .dockerignore'd out of the build context, so this
+#                    stage cannot pick up stale local bundles.
+#   2. build       — Go compiles the control-plane binary with
+#                    //go:embed all:dist (web/embed.go) pulling the
+#                    bundle the web-build stage produced.
+#
+# Self-consistent by construction: there is no path in this Dockerfile
+# that lets the embedded HTML reference asset hashes the image doesn't
+# also contain. That class of "page loads HTML but blanks on hash
+# mismatch" bug is impossible against an image built from this file.
+
+FROM node:20-alpine AS web-build
+WORKDIR /web
+
+# Stage dependencies first so changes to src/ don't bust the npm cache.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund --prefer-offline
+
+# Then the source. .dockerignore keeps web/dist and web/node_modules
+# out of the build context, so this COPY only brings source files.
+COPY web ./
+RUN npm run build
 
 FROM golang:1.26-alpine AS build
 WORKDIR /src
@@ -18,12 +40,14 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 # web/embed.go is imported by internal/api/web.go to serve the
-# Management UI bundle via go:embed. Must be present in the build
-# context even if web/dist/ contains only the placeholder index.html
-# (the embed compiles fine against the placeholder; the real bundle
-# lands at make web-build time on the host or via a separate
-# multi-stage when CI builds the image).
+# Management UI bundle via go:embed. The host's web/dist is .dockerignore'd
+# (it is a build artifact, not source — see fix/dockerfile-web-build-stage
+# rationale in CHANGELOG), so we COPY the web/ source files here for the
+# Go embed pattern matchers + embed.go itself, then overlay the freshly
+# built dist from the web-build stage. The embed compiles against the
+# Node-produced bundle, not whatever happened to be on the host.
 COPY web ./web
+COPY --from=web-build /web/dist ./web/dist
 
 RUN CGO_ENABLED=0 go build \
       -trimpath \

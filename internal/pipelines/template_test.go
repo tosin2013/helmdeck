@@ -161,24 +161,100 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-// TestResolve_MissingInputDefaultsToEmpty — pipeline inputs are
-// frequently optional; resolving an absent ${{ inputs.X }} to "" lets
-// callers omit fields they don't need without the runner failing the
-// step. Inter-step references (${{ steps.* }}) keep failing loud —
+// TestResolve_MissingInput_WholeValueDropsField — when a top-level
+// inputs.X reference is the WHOLE value of a JSON field, a missing
+// input drops the field from the output JSON entirely (so the
+// receiving pack uses its declared zero-value default). This is what
+// closes the typed-input gap: typed bool/number fields receive their
+// natural default instead of an empty string that fails type
+// validation.
+//
+// TestResolve_MissingInput_EmbeddedKeepsField — embedded references
+// in a surrounding string keep the field and substitute "" for the
+// missing piece. Dropping the field would unhelpfully truncate the
+// caller's literal context.
+//
+// Inter-step references (${{ steps.* }}) keep failing loud —
 // covered by TestResolve_MissingStepStillFails below.
-func TestResolve_MissingInputDefaultsToEmpty(t *testing.T) {
-	out, err := Resolve(json.RawMessage(`{"a":"${{ inputs.missing }}","b":"prefix-${{ inputs.also_missing }}-suffix"}`),
-		map[string]any{"present": "v"}, nil)
+func TestResolve_MissingInput_WholeValueDropsField(t *testing.T) {
+	out, err := Resolve(json.RawMessage(`{"a":"${{ inputs.missing }}","present":"keep","also":"${{ inputs.also_missing }}"}`),
+		map[string]any{"present_input": "v"}, nil)
 	if err != nil {
 		t.Fatalf("missing input should not error; got: %v", err)
 	}
 	var got map[string]any
 	_ = json.Unmarshal(out, &got)
-	if got["a"] != "" {
-		t.Errorf("whole-value missing ref should resolve to empty string; got %q", got["a"])
+	if _, has := got["a"]; has {
+		t.Errorf("whole-value missing ref should DROP the field; got %q", got["a"])
 	}
+	if _, has := got["also"]; has {
+		t.Errorf("whole-value missing ref should DROP the field; got %q", got["also"])
+	}
+	if got["present"] != "keep" {
+		t.Errorf("non-ref fields must pass through untouched; got %q", got["present"])
+	}
+}
+
+func TestResolve_MissingInput_EmbeddedKeepsField(t *testing.T) {
+	out, err := Resolve(json.RawMessage(`{"b":"prefix-${{ inputs.missing }}-suffix"}`),
+		nil, nil)
+	if err != nil {
+		t.Fatalf("missing input should not error; got: %v", err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
 	if got["b"] != "prefix--suffix" {
-		t.Errorf("embedded missing ref should coerce to empty; got %q", got["b"])
+		t.Errorf("embedded missing ref should splice as empty (preserve surrounding text); got %q", got["b"])
+	}
+}
+
+// TestResolve_MissingInput_DropAcrossTypes — the motivating case
+// for the typed-field fix. helmdeck pipelines pass bool / number
+// fields as whole-value templates ("export_outline":"${{ inputs.export_outline }}").
+// PR #377 made these resolve to "" which slides.outline rejected as
+// "expected boolean, got string". This test pins that the new
+// behavior — drop the field entirely — lets the receiving pack use
+// its declared zero-value for bool (false), number (0), and array
+// ([]) targets without runtime intervention.
+func TestResolve_MissingInput_DropAcrossTypes(t *testing.T) {
+	out, err := Resolve(json.RawMessage(`{
+		"export_outline":"${{ inputs.export_outline }}",
+		"include_image_prompts":"${{ inputs.include_image_prompts }}",
+		"fade_ms":"${{ inputs.fade_ms }}",
+		"voice_ids":"${{ inputs.voice_ids }}"
+	}`), map[string]any{}, nil)
+	if err != nil {
+		t.Fatalf("missing inputs should not error; got: %v", err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	for _, k := range []string{"export_outline", "include_image_prompts", "fade_ms", "voice_ids"} {
+		if _, has := got[k]; has {
+			t.Errorf("field %q should be dropped on whole-value miss; got %v", k, got[k])
+		}
+	}
+}
+
+// TestResolve_MissingInput_ArrayBecomesNull — arrays can't drop an
+// element without re-indexing the surrounding positions. Substitute
+// JSON null so caller-meaningful index positions stay stable.
+func TestResolve_MissingInput_ArrayBecomesNull(t *testing.T) {
+	out, err := Resolve(json.RawMessage(`{"tags":["fixed","${{ inputs.t1 }}","also fixed","${{ inputs.t2 }}"]}`),
+		map[string]any{}, nil)
+	if err != nil {
+		t.Fatalf("missing inputs should not error; got: %v", err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	tags, ok := got["tags"].([]any)
+	if !ok || len(tags) != 4 {
+		t.Fatalf("expected 4-element array; got %v", got["tags"])
+	}
+	if tags[0] != "fixed" || tags[2] != "also fixed" {
+		t.Errorf("fixed entries should pass through: %v", tags)
+	}
+	if tags[1] != nil || tags[3] != nil {
+		t.Errorf("missing-ref entries should resolve to JSON null: %v", tags)
 	}
 }
 

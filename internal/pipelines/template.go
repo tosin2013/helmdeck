@@ -37,6 +37,25 @@ type resolveCtx struct {
 	steps  map[string]json.RawMessage // stepID -> that step's Result.Output
 }
 
+// missingRef is the sentinel lookupExpr returns when a whole-value
+// inputs.* reference points at a top-level field the caller didn't
+// supply. The walk() map-case checks for it and DROPS the key
+// entirely, so the receiving pack sees an absent field and uses its
+// own zero-value default (false for bool, 0 for number, "" for
+// string, etc.). That's what closes the typed-input gap PR #377 left
+// open: substituting "" for a missing input works for string fields
+// but breaks bool/number fields that 7 *-deck/*-narrate pipelines
+// reference as whole-value templates (e.g.
+// "export_outline": "${{ inputs.export_outline }}"). Embedded
+// references stay on the substitute-"" path — dropping would unhelpfully
+// truncate the surrounding string.
+//
+// The sentinel is package-private and never marshaled to JSON. walk()
+// converts a stray sentinel inside an array to JSON null (the safest
+// neutral value that preserves array indices), and at the top level
+// Resolve() converts a sentinel root to JSON null too.
+type missingRef struct{}
+
 // Resolve walks a step's input JSON, replaces every ${{ ... }} reference
 // with the corresponding value, and returns the resolved input. A string
 // that is EXACTLY one reference takes the referent's native JSON type
@@ -58,6 +77,13 @@ func Resolve(input json.RawMessage, inputs map[string]any, steps map[string]json
 	if err != nil {
 		return nil, err
 	}
+	// Defensive: if the entire step input was a single missing
+	// reference (e.g. the whole input is `"${{ inputs.x }}"` with x
+	// absent), render as JSON null. Caller packs validate at the
+	// JSON-decode boundary; null is the safest non-string sentinel.
+	if _, isMissing := out.(missingRef); isMissing {
+		out = nil
+	}
 	return json.Marshal(out)
 }
 
@@ -74,6 +100,16 @@ func (rc resolveCtx) walk(node any, depth int) (any, error) {
 			if err != nil {
 				return nil, err
 			}
+			// missingRef sentinel: the value was a whole-value
+			// "${{ inputs.X }}" reference where X wasn't supplied
+			// by the caller. Drop the key from the output JSON so
+			// the receiving pack uses its own zero-value default —
+			// for typed fields (bool/number) that's the difference
+			// between the pack accepting the input and rejecting it
+			// with "expected boolean, got string".
+			if _, isMissing := r.(missingRef); isMissing {
+				continue
+			}
 			out[k] = r
 		}
 		return out, nil
@@ -84,7 +120,15 @@ func (rc resolveCtx) walk(node any, depth int) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			out[i] = r
+			// In arrays we can't drop without re-indexing the
+			// remaining elements (which would silently shift
+			// caller-meaningful positions). Substitute JSON null
+			// — neutral and preserves length.
+			if _, isMissing := r.(missingRef); isMissing {
+				out[i] = nil
+			} else {
+				out[i] = r
+			}
 		}
 		return out, nil
 	case string:
@@ -106,12 +150,19 @@ func (rc resolveCtx) resolveString(s string) (any, error) {
 		return rc.lookupExpr(expr)
 	}
 	// Embedded case: replace each reference with its string coercion.
+	// A missingRef sentinel inside an embedded context becomes "" —
+	// dropping would unhelpfully truncate the surrounding string
+	// (e.g. "Report: ${{ inputs.topic }}" with topic missing becomes
+	// "Report: " not "").
 	var outErr error
 	res := refRe.ReplaceAllStringFunc(s, func(match string) string {
 		m := refRe.FindStringSubmatch(match)
 		val, err := rc.lookupExpr(m[1])
 		if err != nil {
 			outErr = err
+			return ""
+		}
+		if _, isMissing := val.(missingRef); isMissing {
 			return ""
 		}
 		return coerceString(val)
@@ -128,13 +179,16 @@ func (rc resolveCtx) lookupExpr(expr string) (any, error) {
 	switch {
 	case strings.HasPrefix(expr, "inputs."):
 		path := strings.TrimPrefix(expr, "inputs.")
-		// Missing top-level pipeline input → empty string. Pipeline
-		// inputs are typically optional (callers omit fields they
-		// don't need), so resolving an absent ${{ inputs.X }} to ""
-		// matches the natural caller expectation. Nested errors
-		// (e.g. inputs.foo.bar where foo exists but bar doesn't)
-		// still surface loud — they indicate the caller did supply
-		// the field but with the wrong shape.
+		// Missing top-level pipeline input → missingRef sentinel.
+		// The walk()/resolveString boundary handles it:
+		//   - whole-value map field → key dropped, pack uses its
+		//     declared zero-value default (the typed-field fix)
+		//   - embedded reference → "" splice (preserves surrounding
+		//     text)
+		//   - array element → JSON null (preserves indices)
+		// Nested errors (e.g. inputs.foo.bar where foo exists but bar
+		// doesn't) still surface loud — they indicate the caller did
+		// supply the field but with the wrong shape.
 		//
 		// step.output references stay loud (see the steps.* branch
 		// below): a missing step output indicates a real inter-step
@@ -145,10 +199,10 @@ func (rc resolveCtx) lookupExpr(expr string) (any, error) {
 				topKey = path
 			}
 			if _, present := rc.inputs[topKey]; !present {
-				return "", nil
+				return missingRef{}, nil
 			}
 		} else {
-			return "", nil
+			return missingRef{}, nil
 		}
 		v, err := lookupPath(rc.inputs, path)
 		if err != nil {

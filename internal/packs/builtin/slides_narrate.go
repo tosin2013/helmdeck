@@ -108,6 +108,7 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				"slide_count":           "number",
 				"total_duration_s":      "number",
 				"has_narration":         "boolean",
+				"tts_failure_count":     "number",
 				"voice_used":            "string",
 				"metadata_artifact_key": "string",
 				"metadata":              "object",
@@ -298,7 +299,55 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 		} else {
 			ec.Logger.Info("slides.narrate: resolved ElevenLabs key", "source", keySrc)
 		}
-		hasNarration := apiKey != ""
+		// narrationRequested captures intent: does the caller (or its
+		// pipeline) plan to narrate this deck? It's true when a key
+		// was resolved AND the caller didn't pass allow_silent_output
+		// — which would mean they explicitly want silence and there's
+		// no need to validate or call ElevenLabs at all. The final
+		// "has_narration" output is computed at return time from the
+		// per-slide TTS success counter (see narratedCount /
+		// ttsSuccessCount below), so a deck where the precheck
+		// passed but every TTS call later silently fell back to
+		// silence will correctly emit has_narration=false. Honest
+		// output > convenient lie.
+		narrationRequested := apiKey != ""
+
+		// ADR: paid-API credential precheck. Hit a cheap "who am I"
+		// endpoint BEFORE doing expensive work (voice listing, Marp
+		// render, gateway LLM call for YouTube metadata). A 401/403/
+		// quota-exhausted key surfaces as CodeCredentialInvalid here
+		// instead of as a string of "TTS failed, falling back to
+		// silence" warnings 30 seconds into the run. Maps to
+		// FailureCallerFixable with a "update the vault" reason via
+		// classify.go.
+		//
+		// Skipped when the caller explicitly opted into silent output
+		// (no narration → no need to check the credential) or when no
+		// key was resolved (the missing-key branch above already
+		// fired or the allow_silent_output path took over).
+		if narrationRequested {
+			validateClient := &http.Client{Timeout: 10 * time.Second}
+			if err := vault.ValidateElevenLabs(ctx, validateClient, apiKey); err != nil {
+				if perr, ok := err.(*packs.PackError); ok && perr.Code == packs.CodeCredentialInvalid {
+					return nil, perr
+				}
+				// Transient (network blip, 5xx, rate-limited on
+				// the precheck endpoint). Don't block — the
+				// per-slide TTS calls each carry their own
+				// fallback-to-silence safety net. Log so an
+				// operator reading the run log can correlate.
+				ec.Logger.Warn("slides.narrate: ElevenLabs precheck transient error; proceeding",
+					"err", err)
+			}
+		}
+
+		// hasNarration tracks intent through the rest of the handler;
+		// the final output's has_narration field reflects measured
+		// outcome (see below). They start equal — if the precheck
+		// just passed, we expect to narrate every slide that has
+		// notes — and diverge only when per-slide TTS calls fail
+		// silently to fallback.
+		hasNarration := narrationRequested
 
 		// 3. Pick voice (random from top 5 if not specified).
 		voiceID := in.VoiceID
@@ -350,10 +399,21 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			minTurnSec = defaultMinTurnDurationS
 		}
 		durations := make([]float64, len(slides))
+		// narratableSlideCount = slides with non-empty notes that we
+		// EXPECTED to narrate. ttsSuccessCount = of those, how many
+		// actually got real TTS audio (didn't fall back to silence).
+		// Final has_narration is (narrationRequested && success ==
+		// expected). A deck where the precheck passed but every TTS
+		// call fell back to silence (e.g. an intermittent ElevenLabs
+		// outage during the run) will correctly emit
+		// has_narration=false and tts_failure_count=N — the output
+		// matches the bytes.
+		var narratableSlideCount, ttsSuccessCount int
 		for i, s := range slides {
 			ec.Report(10+float64(i)*40/float64(len(slides)),
 				fmt.Sprintf("audio %d/%d", i+1, len(slides)))
 			if hasNarration && s.Notes != "" {
+				narratableSlideCount++
 				audio, err := elevenLabsTTS(ctx, apiKey, voiceID, modelID, s.Notes)
 				if err != nil {
 					ec.Logger.Warn("TTS failed, falling back to silence",
@@ -365,6 +425,7 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 					durations[i] = slideDur
 					continue
 				}
+				ttsSuccessCount++
 				// Transfer audio into sidecar.
 				if _, err := execWithStdin(ctx, ec, fmt.Sprintf("/tmp/audio-%03d.mp3", i), audio); err != nil {
 					return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
@@ -525,12 +586,22 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 		}
 
 		// 11. Return.
+		// has_narration reflects MEASURED OUTCOME, not just intent:
+		// true iff we wanted to narrate AND every slide that had
+		// notes ended up with real TTS audio (no silence
+		// fallback). Lying here — emitting has_narration=true on a
+		// deck that silently fell back across the board — was the
+		// concrete operator complaint that motivated this fix.
+		ttsFailureCount := narratableSlideCount - ttsSuccessCount
+		honestHasNarration := hasNarration && voiceID != "" &&
+			narratableSlideCount > 0 && ttsFailureCount == 0
 		out := map[string]any{
 			"video_artifact_key":    videoArt.Key,
 			"video_size":            len(videoBytes),
 			"slide_count":           len(slides),
 			"total_duration_s":      totalDuration,
-			"has_narration":         hasNarration && voiceID != "",
+			"has_narration":         honestHasNarration,
+			"tts_failure_count":     ttsFailureCount,
 			"voice_used":            voiceID,
 			"metadata_artifact_key": metadataKey,
 			// #145: cost transparency on real runs too. Mirrors the

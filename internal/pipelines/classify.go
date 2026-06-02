@@ -53,6 +53,9 @@ func classify(err error, pack string) (code packs.ErrorCode, class, reason strin
 	case packs.CodeInvalidInput:
 		class = FailureCallerFixable
 		reason = "The inputs given to this step were invalid. Fix them and re-run — the step's error message says what was wrong."
+	case packs.CodeCredentialInvalid:
+		class = FailureCallerFixable
+		reason = "The vault-stored API credential this pack needed was rejected by the upstream provider (401/403/quota). The pack itself ran correctly; the credential is dead. Update it via /api/v1/vault/credentials/{id} (PUT) or re-hydrate from your .env.local, then re-run. Retrying with the same key would burn more provider quota for no benefit."
 	case packs.CodeSchemaMismatch:
 		class = FailureStateChanged
 		reason = "The target changed under this step (e.g. the branch moved). Refresh and re-run."

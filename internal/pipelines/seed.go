@@ -14,8 +14,13 @@ import "encoding/json"
 // clone-then-edit (built-ins are read-only).
 //
 // Defaults: model "openrouter/auto"; ElevenLabs premade voices
-// (Rachel/Domi) so podcast/narrate run on any account, with
-// allow_silent_output so a keyless deployment still produces output.
+// (Rachel/Domi) so podcast/narrate run on any account. allow_silent_output
+// is threaded from the caller's inputs (NOT defaulted true) — a caller
+// asking for "grounded-narrate" or "repo-presentation" wants audio,
+// and a missing/rejected ElevenLabs credential should fail-fast with
+// credential_invalid instead of silently producing a soundless video.
+// Pass allow_silent_output:true on the run input to opt into the
+// silence fallback (CI smoke / demo placeholder).
 func Builtins() []*Pipeline {
 	return []*Pipeline{
 		pipe("builtin.grounded-deck", "Grounded slide deck",
@@ -61,7 +66,14 @@ func Builtins() []*Pipeline {
 			// wasted work.
 			step("ground", "content.ground", `{"text":"${{ inputs.markdown }}","model":"openrouter/auto","rewrite":false}`),
 			step("outline", "slides.outline", `{"text":"${{ steps.ground.output.grounded_text }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
-			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":true}`),
+			// allow_silent_output deliberately omitted (changed
+			// behavior). Callers asking for "grounded NARRATE" want
+			// audio; if the ElevenLabs credential is missing or
+			// rejected, fail-fast with credential_invalid instead
+			// of silently producing a video without audio. The
+			// caller can still opt into silence explicitly:
+			// pass "allow_silent_output":true in their input.
+			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":"${{ inputs.allow_silent_output }}"}`),
 		),
 		pipe("builtin.grounded-podcast", "Grounded podcast",
 			"Cite markdown's factual claims against web sources (content.ground), then generate a multi-speaker podcast (podcast.generate).",
@@ -78,7 +90,10 @@ func Builtins() []*Pipeline {
 			"Deep-research a topic, structure the synthesis into a deck (slides.outline), then render a narrated video. Optional inputs: persona?, audience?, angle?, title?, author?, export_outline?, include_image_prompts? — same set as builtin.grounded-deck.",
 			step("research", "research.deep", `{"query":"${{ inputs.query }}","model":"openrouter/auto"}`),
 			step("outline", "slides.outline", `{"text":"${{ steps.research.output.synthesis }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
-			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":true}`),
+			// allow_silent_output deliberately omitted — caller can
+			// opt in by passing it explicitly. See grounded-narrate
+			// for the rationale.
+			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":"${{ inputs.allow_silent_output }}"}`),
 		),
 		pipe("builtin.research-podcast", "Research → podcast",
 			"Deep-research a topic, then generate a multi-speaker podcast.",
@@ -157,7 +172,10 @@ func Builtins() []*Pipeline {
 			// built — not a paraphrase of the front page. docs.content is "" when
 			// the repo has none (repo.fetch always emits it), so this resolves.
 			step("outline", "slides.outline", `{"text":"# README\n${{ steps.fetch.output.readme.content }}\n\n# Project docs\n${{ steps.fetch.output.docs.content }}\n\n# Code structure (symbol map)\n${{ steps.map.output.map }}","model":"openrouter/auto","persona":"${{ inputs.persona }}","audience":"${{ inputs.audience }}","angle":"${{ inputs.angle }}","title":"${{ inputs.title }}","author":"${{ inputs.author }}","export_outline":"${{ inputs.export_outline }}","include_image_prompts":"${{ inputs.include_image_prompts }}"}`),
-			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":true}`),
+			// allow_silent_output deliberately omitted — caller can
+			// opt in by passing it explicitly. See grounded-narrate
+			// for the rationale.
+			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":"${{ inputs.allow_silent_output }}"}`),
 		).withMeta(PipelineMetadata{
 			Accepts:        []string{"repo_url"},
 			Produces:       []string{"mp4", "narrated_video"},

@@ -25,6 +25,7 @@ func TestClassify(t *testing.T) {
 		{"timeout is transient", &packs.PackError{Code: packs.CodeTimeout}, packs.CodeTimeout, FailureTransient},
 		{"session unavailable is transient", &packs.PackError{Code: packs.CodeSessionUnavailable}, packs.CodeSessionUnavailable, FailureTransient},
 		{"resource exhausted (OOM kill) is transient, NOT a pack bug", &packs.PackError{Code: packs.CodeResourceExhausted, Message: "ffmpeg segment 9 killed by the OS on exit 137"}, packs.CodeResourceExhausted, FailureTransient},
+		{"credential rejected by provider is caller_fixable, NOT a pack bug", &packs.PackError{Code: packs.CodeCredentialInvalid, Message: "ElevenLabs rejected the stored API key (401)"}, packs.CodeCredentialInvalid, FailureCallerFixable},
 		{"schema mismatch is state-changed", &packs.PackError{Code: packs.CodeSchemaMismatch}, packs.CodeSchemaMismatch, FailureStateChanged},
 		{"non-PackError is a pipeline definition problem", errors.New("unresolved reference"), "", FailureCallerFixable},
 	}
@@ -69,7 +70,7 @@ func TestIsRetryable(t *testing.T) {
 			t.Errorf("%s should be retryable", c)
 		}
 	}
-	for _, c := range []packs.ErrorCode{packs.CodeInvalidInput, packs.CodeHandlerFailed, packs.CodeSchemaMismatch, packs.CodeInternal} {
+	for _, c := range []packs.ErrorCode{packs.CodeInvalidInput, packs.CodeHandlerFailed, packs.CodeSchemaMismatch, packs.CodeInternal, packs.CodeCredentialInvalid} {
 		if isRetryable(c) {
 			t.Errorf("%s should NOT be retryable", c)
 		}

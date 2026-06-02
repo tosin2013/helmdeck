@@ -237,7 +237,14 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 		}
 
 		// Defaults.
-		resolution := in.Resolution
+		// Resolution accepts BOTH named presets ("720p", "1080p",
+		// "2160p"/"4k") AND pre-formatted "WIDTHxHEIGHT" strings.
+		// hyperframes.render takes named presets too, so an operator
+		// can use the same "1080p" value across both packs — but
+		// slides.narrate passes its value verbatim to ffmpeg's
+		// `scale=` filter, which rejects "1080p" with "Invalid size".
+		// Normalize before ffmpeg ever sees it.
+		resolution := normalizeSlidesNarrateResolution(in.Resolution)
 		if resolution == "" {
 			resolution = "1920x1080"
 		}
@@ -872,4 +879,35 @@ func artifactSuffix(key string) string {
 		return ""
 	}
 	return " (full stderr: " + key + ")"
+}
+
+// normalizeSlidesNarrateResolution maps the named-resolution presets
+// hyperframes.render and other packs accept ("720p", "1080p",
+// "2160p", "4k") onto the ffmpeg-shaped "WIDTHxHEIGHT" syntax the
+// per-segment ffmpeg `scale=` filter requires. Pre-formatted
+// "WIDTHxHEIGHT" strings pass through; empty input returns empty (the
+// caller applies its own default downstream); anything else also
+// passes through and lets ffmpeg surface its own "Invalid size"
+// error so an operator who passed garbage still sees a useful
+// message rather than a silent rewrite.
+//
+// The motivating case was a real run that failed `handler_failed:
+// ffmpeg: Invalid size '1080p'` when the caller passed
+// `resolution: "1080p"` — the value was structurally fine for
+// hyperframes.render but garbage for ffmpeg. Normalizing here lets
+// operators use the same vocabulary across both packs.
+func normalizeSlidesNarrateResolution(r string) string {
+	switch strings.ToLower(strings.TrimSpace(r)) {
+	case "":
+		return ""
+	case "720p":
+		return "1280x720"
+	case "1080p":
+		return "1920x1080"
+	case "1440p":
+		return "2560x1440"
+	case "2160p", "4k":
+		return "3840x2160"
+	}
+	return r
 }

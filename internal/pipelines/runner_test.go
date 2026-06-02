@@ -180,7 +180,7 @@ func TestRunner_StartRunAsync(t *testing.T) {
 	if err := r.store.Create(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	runID, err := r.StartRun(ctx, "p", json.RawMessage(`{"url":"u"}`), "")
+	runID, _, err := r.StartRun(ctx, "p", json.RawMessage(`{"url":"u"}`), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestRunner_Rerun(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Re-run it → new run id, same pipeline + inputs replayed.
-	newID, err := r.Rerun(context.Background(), "run-1", "")
+	newID, _, err := r.Rerun(context.Background(), "run-1", "")
 	if err != nil {
 		t.Fatalf("Rerun: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestRunner_StartRunThreadsCaller(t *testing.T) {
 	if err := r.store.Create(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	runID, err := r.StartRun(ctx, "p", nil, "alice")
+	runID, _, err := r.StartRun(ctx, "p", nil, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestRunner_CancelRun_RaceGuard(t *testing.T) {
 	if err := r.store.Create(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
-	runID, err := r.StartRun(context.Background(), "p", nil, "")
+	runID, _, err := r.StartRun(context.Background(), "p", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,4 +565,277 @@ func TestRunner_ReconcileOrphans(t *testing.T) {
 	if n2 != 0 {
 		t.Errorf("second pass reaped %d, want 0 (idempotent)", n2)
 	}
+}
+
+// --- single-flight coalescing (migration 0008) ---
+
+// TestComputeRunFingerprint_StableAndDistinct confirms the fingerprint is
+// (a) deterministic, (b) insensitive to JSON whitespace and key ordering,
+// and (c) genuinely distinguishes different callers/pipelines/inputs.
+// Without these properties, coalescing either misses real duplicates or
+// over-coalesces unrelated calls.
+func TestComputeRunFingerprint_StableAndDistinct(t *testing.T) {
+	cases := []struct {
+		name     string
+		a        struct{ caller, pid, in string }
+		b        struct{ caller, pid, in string }
+		wantSame bool
+	}{
+		{
+			name:     "identical (caller, pid, inputs) → same fingerprint",
+			a:        struct{ caller, pid, in string }{"alice", "p1", `{"url":"u","title":"t"}`},
+			b:        struct{ caller, pid, in string }{"alice", "p1", `{"url":"u","title":"t"}`},
+			wantSame: true,
+		},
+		{
+			name:     "reordered object keys → same fingerprint",
+			a:        struct{ caller, pid, in string }{"alice", "p1", `{"url":"u","title":"t"}`},
+			b:        struct{ caller, pid, in string }{"alice", "p1", `{"title":"t","url":"u"}`},
+			wantSame: true,
+		},
+		{
+			name:     "whitespace differences → same fingerprint",
+			a:        struct{ caller, pid, in string }{"alice", "p1", `{"url":"u"}`},
+			b:        struct{ caller, pid, in string }{"alice", "p1", `{ "url" :  "u" }`},
+			wantSame: true,
+		},
+		{
+			name:     "nested object reordered → same fingerprint",
+			a:        struct{ caller, pid, in string }{"alice", "p1", `{"a":{"x":1,"y":2}}`},
+			b:        struct{ caller, pid, in string }{"alice", "p1", `{"a":{"y":2,"x":1}}`},
+			wantSame: true,
+		},
+		{
+			name:     "different caller → different fingerprint",
+			a:        struct{ caller, pid, in string }{"alice", "p1", `{"url":"u"}`},
+			b:        struct{ caller, pid, in string }{"bob", "p1", `{"url":"u"}`},
+			wantSame: false,
+		},
+		{
+			name:     "different pipeline id → different fingerprint",
+			a:        struct{ caller, pid, in string }{"alice", "p1", `{"url":"u"}`},
+			b:        struct{ caller, pid, in string }{"alice", "p2", `{"url":"u"}`},
+			wantSame: false,
+		},
+		{
+			name:     "different input value → different fingerprint",
+			a:        struct{ caller, pid, in string }{"alice", "p1", `{"url":"u"}`},
+			b:        struct{ caller, pid, in string }{"alice", "p1", `{"url":"v"}`},
+			wantSame: false,
+		},
+		{
+			name:     "empty inputs normalize to null and coalesce with each other",
+			a:        struct{ caller, pid, in string }{"alice", "p1", ``},
+			b:        struct{ caller, pid, in string }{"alice", "p1", ``},
+			wantSame: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fpA := computeRunFingerprint(tc.a.caller, tc.a.pid, json.RawMessage(tc.a.in))
+			fpB := computeRunFingerprint(tc.b.caller, tc.b.pid, json.RawMessage(tc.b.in))
+			got := fpA == fpB
+			if got != tc.wantSame {
+				t.Errorf("fpA=%s fpB=%s same=%v, want same=%v", fpA, fpB, got, tc.wantSame)
+			}
+		})
+	}
+}
+
+// blockingChannelExec blocks each Execute on a release channel — lets us
+// hold a run in the running state while a second StartRun fires for the
+// coalesce test. Mirrors how a real long-running pack (slides.narrate's
+// ffmpeg loop) would still be encoding when the retry hits.
+type blockingChannelExec struct {
+	release chan struct{}
+	started chan struct{}
+}
+
+func (b *blockingChannelExec) Execute(ctx context.Context, _ *packs.Pack, _ json.RawMessage) (*packs.Result, error) {
+	select {
+	case b.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &packs.Result{Output: json.RawMessage(`{}`)}, nil
+}
+
+// TestRunner_StartRun_CoalescesIdenticalInFlight — the duplicate-pipeline-run
+// failure mode (LLM retries on tool-call timeout while the first run is still
+// going). Two identical StartRun calls must return the SAME run id with the
+// second one flagged coalesced=true; only ONE underlying execution starts.
+func TestRunner_StartRun_CoalescesIdenticalInFlight(t *testing.T) {
+	ex := &blockingChannelExec{release: make(chan struct{}), started: make(chan struct{}, 1)}
+	r := newTestRunner(t, ex)
+	ctx := context.Background()
+	p := &Pipeline{ID: "p", Name: "n", Steps: []Step{
+		{ID: "s1", Pack: "long.pack", Input: json.RawMessage(`{}`)},
+	}}
+	if err := r.store.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	inputs := json.RawMessage(`{"url":"u","title":"t"}`)
+
+	id1, coalesced1, err := r.StartRun(ctx, "p", inputs, "alice")
+	if err != nil {
+		t.Fatalf("first StartRun: %v", err)
+	}
+	if coalesced1 {
+		t.Errorf("first call coalesced=true, want false (no prior in-flight run)")
+	}
+	<-ex.started // ensure the first run reached Execute and is blocked
+
+	// Same caller, same pipeline, same inputs (different whitespace) →
+	// must coalesce onto id1.
+	id2, coalesced2, err := r.StartRun(ctx, "p", json.RawMessage(`{ "title" : "t", "url" : "u" }`), "alice")
+	if err != nil {
+		t.Fatalf("second StartRun: %v", err)
+	}
+	if id2 != id1 {
+		t.Errorf("coalesced run id = %q, want first run %q", id2, id1)
+	}
+	if !coalesced2 {
+		t.Errorf("second call coalesced=false, want true")
+	}
+
+	// Different caller with identical inputs → must NOT coalesce.
+	id3, coalesced3, err := r.StartRun(ctx, "p", inputs, "bob")
+	if err != nil {
+		t.Fatalf("third StartRun: %v", err)
+	}
+	if id3 == id1 {
+		t.Errorf("different caller got same run id (over-coalesce): %q", id3)
+	}
+	if coalesced3 {
+		t.Errorf("different-caller call coalesced=true, want false")
+	}
+
+	// Different inputs from the same caller → must NOT coalesce.
+	id4, coalesced4, err := r.StartRun(ctx, "p", json.RawMessage(`{"url":"DIFFERENT"}`), "alice")
+	if err != nil {
+		t.Fatalf("fourth StartRun: %v", err)
+	}
+	if id4 == id1 {
+		t.Errorf("different inputs got same run id (over-coalesce): %q", id4)
+	}
+	if coalesced4 {
+		t.Errorf("different-inputs call coalesced=true, want false")
+	}
+
+	close(ex.release) // let the runs finish
+}
+
+// TestRunner_StartRun_DoesNotCoalesceOntoTerminalRun — once a run is
+// terminal, a fresh identical StartRun must produce a NEW run id (not
+// dredge up the completed run). Otherwise an operator who Reruns a
+// finished pipeline would silently get the prior result back forever.
+func TestRunner_StartRun_DoesNotCoalesceOntoTerminalRun(t *testing.T) {
+	ex := &recordingExec{outputs: map[string]string{"a.pack": `{}`}}
+	r := newTestRunner(t, ex)
+	ctx := context.Background()
+	p := &Pipeline{ID: "p", Name: "n", Steps: []Step{
+		{ID: "s1", Pack: "a.pack", Input: json.RawMessage(`{}`)},
+	}}
+	if err := r.store.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	inputs := json.RawMessage(`{"url":"u"}`)
+	id1, _, err := r.StartRun(ctx, "p", inputs, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wait for the first run to reach a terminal state.
+	for i := 0; i < 200; i++ {
+		got, _ := r.GetRun(ctx, id1)
+		if got != nil && got.Status.IsTerminal() {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Second call with the SAME caller/pipeline/inputs after the first ran to
+	// completion → must produce a new run id, NOT coalesce.
+	id2, coalesced2, err := r.StartRun(ctx, "p", inputs, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id2 == id1 {
+		t.Errorf("StartRun coalesced onto terminal run %q — must spawn a fresh run", id1)
+	}
+	if coalesced2 {
+		t.Errorf("second call after terminal coalesced=true, want false")
+	}
+}
+
+// TestRunner_StartRun_ConcurrentIdenticalCalls — the race-window guard.
+// N goroutines fire identical StartRun calls simultaneously; exactly ONE
+// run row must exist in the store afterward, and all callers must observe
+// the same run id. The startMu + partial unique index together guarantee
+// this even when goroutines interleave past the lookup before any insert.
+func TestRunner_StartRun_ConcurrentIdenticalCalls(t *testing.T) {
+	ex := &blockingChannelExec{release: make(chan struct{}), started: make(chan struct{}, 16)}
+	r := newTestRunner(t, ex)
+	ctx := context.Background()
+	p := &Pipeline{ID: "p", Name: "n", Steps: []Step{
+		{ID: "s1", Pack: "long.pack", Input: json.RawMessage(`{}`)},
+	}}
+	if err := r.store.Create(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	inputs := json.RawMessage(`{"url":"u"}`)
+
+	const N = 8
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	gotIDs := make([]string, 0, N)
+	coalescedCount := 0
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			id, c, err := r.StartRun(ctx, "p", inputs, "alice")
+			if err != nil {
+				t.Errorf("StartRun: %v", err)
+				return
+			}
+			mu.Lock()
+			gotIDs = append(gotIDs, id)
+			if c {
+				coalescedCount++
+			}
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	// All goroutines must have seen the same run id.
+	first := gotIDs[0]
+	for _, id := range gotIDs {
+		if id != first {
+			t.Fatalf("got distinct run ids under concurrency: %v", gotIDs)
+		}
+	}
+	if coalescedCount != N-1 {
+		t.Errorf("coalesced count = %d, want %d (N-1: one initiator + N-1 coalesced)", coalescedCount, N-1)
+	}
+	// And the store must contain exactly one in-flight run for this fingerprint.
+	inFlight, err := r.store.ListInFlightRuns(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched := 0
+	for _, run := range inFlight {
+		if run.PipelineID == "p" && run.Caller == "alice" {
+			matched++
+		}
+	}
+	if matched != 1 {
+		t.Errorf("in-flight run count = %d, want 1", matched)
+	}
+
+	close(ex.release)
 }

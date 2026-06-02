@@ -57,7 +57,7 @@ func (a pipelineServiceAdapter) Create(ctx context.Context, def json.RawMessage)
 	return json.Marshal(&p)
 }
 
-func (a pipelineServiceAdapter) StartRun(ctx context.Context, id string, inputs json.RawMessage) (string, error) {
+func (a pipelineServiceAdapter) StartRun(ctx context.Context, id string, inputs json.RawMessage) (string, bool, error) {
 	return a.runner.StartRun(ctx, id, inputs, mcpCaller(ctx))
 }
 
@@ -69,7 +69,7 @@ func (a pipelineServiceAdapter) RunStatus(ctx context.Context, runID string) (js
 	return json.Marshal(run)
 }
 
-func (a pipelineServiceAdapter) Rerun(ctx context.Context, runID string) (string, error) {
+func (a pipelineServiceAdapter) Rerun(ctx context.Context, runID string) (string, bool, error) {
 	return a.runner.Rerun(ctx, runID, mcpCaller(ctx))
 }
 

@@ -22,9 +22,13 @@ type PipelineService interface {
 	List(ctx context.Context) (json.RawMessage, error)
 	Get(ctx context.Context, id string) (json.RawMessage, error)
 	Create(ctx context.Context, def json.RawMessage) (json.RawMessage, error)
-	StartRun(ctx context.Context, id string, inputs json.RawMessage) (runID string, err error)
+	// StartRun returns the run id, plus coalesced=true when the request was
+	// deduped onto an already in-flight identical run instead of starting
+	// a new one. Callers polling pipeline-run-status see the same status
+	// progression either way.
+	StartRun(ctx context.Context, id string, inputs json.RawMessage) (runID string, coalesced bool, err error)
 	RunStatus(ctx context.Context, runID string) (json.RawMessage, error)
-	Rerun(ctx context.Context, runID string) (newRunID string, err error)
+	Rerun(ctx context.Context, runID string) (newRunID string, coalesced bool, err error)
 	Cancel(ctx context.Context, runID string) error
 }
 
@@ -80,7 +84,7 @@ func (s *PackServer) pipelineTools() []Tool {
 		},
 		{
 			Name:        "pipeline-run",
-			Description: "Start a pipeline run (async) and return a run_id immediately. Pass `inputs` for the pipeline's ${{ inputs.* }} references. Then poll helmdeck__pipeline-run-status.",
+			Description: "Start a pipeline run (async) and return a run_id immediately. Pass `inputs` for the pipeline's ${{ inputs.* }} references. Then poll helmdeck__pipeline-run-status. SINGLE-FLIGHT: if an identical run is already in-flight (same caller, pipeline id, and inputs), the response returns that existing run_id with `coalesced: true` instead of starting a duplicate — this prevents the failure mode where a tool-call timeout causes the LLM to re-fire the same long-running pipeline and OOM both. Don't treat `coalesced: true` as an error; just poll the returned run_id as usual.",
 			InputSchema: mustJSON(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -101,7 +105,7 @@ func (s *PackServer) pipelineTools() []Tool {
 		},
 		{
 			Name:        "pipeline-rerun",
-			Description: "Re-run an existing run from the top with the same pipeline + inputs (the CI/CD 'retry this job' affordance). Use after fixing a caller_fixable failure, or to retry a transient one. Returns a new run_id.",
+			Description: "Re-run an existing run from the top with the same pipeline + inputs (the CI/CD 'retry this job' affordance). Use after fixing a caller_fixable failure, or to retry a transient one. Returns a new run_id, OR — if an identical run is already in-flight — that existing run_id with `coalesced: true` (same single-flight guarantee as pipeline-run).",
 			InputSchema: mustJSON(map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"run_id": map[string]any{"type": "string"}},
@@ -151,11 +155,11 @@ func (s *PackServer) dispatchPipelineTool(ctx context.Context, name string, argu
 		if err := json.Unmarshal(arguments, &a); err != nil || a.ID == "" {
 			return errorToolResult("invalid_input", "helmdeck__pipeline-run: id is required"), true
 		}
-		runID, err := s.pipelines.StartRun(ctx, a.ID, a.Inputs)
+		runID, coalesced, err := s.pipelines.StartRun(ctx, a.ID, a.Inputs)
 		if err != nil {
 			return errorToolResult("pipeline_run_failed", err.Error()), true
 		}
-		body, _ := json.Marshal(map[string]string{"run_id": runID, "pipeline_id": a.ID, "status": "pending"})
+		body, _ := json.Marshal(map[string]any{"run_id": runID, "pipeline_id": a.ID, "status": "pending", "coalesced": coalesced})
 		return okToolResult(body), true
 	case "pipeline-run-status":
 		var a struct {
@@ -173,11 +177,11 @@ func (s *PackServer) dispatchPipelineTool(ctx context.Context, name string, argu
 		if err := json.Unmarshal(arguments, &a); err != nil || a.RunID == "" {
 			return errorToolResult("invalid_input", "helmdeck__pipeline-rerun: run_id is required"), true
 		}
-		runID, err := s.pipelines.Rerun(ctx, a.RunID)
+		runID, coalesced, err := s.pipelines.Rerun(ctx, a.RunID)
 		if err != nil {
 			return errorToolResult("pipeline_run_failed", err.Error()), true
 		}
-		body, _ := json.Marshal(map[string]string{"run_id": runID, "status": "pending"})
+		body, _ := json.Marshal(map[string]any{"run_id": runID, "status": "pending", "coalesced": coalesced})
 		return okToolResult(body), true
 	case "pipeline-cancel":
 		var a struct {

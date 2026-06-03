@@ -1,32 +1,34 @@
 ---
 name: helmdeck
-description: Use helmdeck's 52 capability packs (browser, web scraping, content grounding, podcast/slide/blog/video production, image generation, stock photo search, repo orientation, filesystem, git, GitHub, HTTP, vision, document OCR/parse, Python/Node execution) plus four orchestration meta-packs (helmdeck.route, helmdeck.plan, helmdeck.memory_store, helmdeck.memory_forget) via MCP — all prefixed `helmdeck__*` in the tool catalog.
+description: Use helmdeck's 53 capability packs (browser, web scraping, content grounding, podcast/slide/blog/video production, image generation, stock photo search, repo orientation, filesystem, git, GitHub, HTTP, vision, document OCR/parse, Python/Node execution) plus four orchestration meta-packs (helmdeck.route, helmdeck.plan, helmdeck.memory_store, helmdeck.memory_forget) via MCP — all prefixed `helmdeck__*` in the tool catalog.
 metadata:
   openclaw:
     skillKey: helmdeck
-    helmdeckVersion: "v0.22.0"
+    helmdeckVersion: "v0.23.0"
     source: https://github.com/tosin2013/helmdeck/blob/main/skills/helmdeck/SKILL.md
 ---
 
 <!-- This SKILL.md is the canonical helmdeck agent skill. Stamped at
-     helmdeck v0.22.0 — major-feature release that ships ADR 047
-     (catalog metadata + memory-driven routing), ADR 048 (memory
-     write surface + OpenClaw memory-corpus bridge), ADR 049 (the
-     helmdeck.plan intent decomposer), and ADR 050 (retrieval-
-     augmented tool selection with two-pass LLM filter). In-tree
-     catalog now sits at 52 packs (added: helmdeck.route,
-     helmdeck.plan, helmdeck.memory_store, helmdeck.memory_forget,
-     hyperframes.compose, github.get_issue, plus the rewrite-blog
-     pipeline matrix). Re-run scripts/configure-openclaw.sh after
-     this release so your OpenClaw agent picks up the new packs,
-     the routing-guide + my-defaults + my-memory + my-plans +
-     context-budgets resources, and the cascading Select() engine
-     that makes free models (openrouter/openrouter/free, Nemotron,
-     GLM-air) usable for multi-action plans. -->
+     helmdeck v0.23.0 — reliability + consolidation release that
+     closes the slides.narrate failure surface end-to-end (Mermaid
+     blank renders, audio dropouts at concat boundaries, silent
+     ffmpeg failures, misclassified OOMs, sessions reaped mid-encode
+     by an inherited 5-minute watchdog, transport errors masquerading
+     as exit 0) AND moves every audio/video pattern PRs #379-#405
+     paid for into a shared internal/avenc/ package with 99.3% test
+     coverage. Also ships pipeline-run single-flight coalescing
+     (PR #397), pinned-session timeout extension (PR #401), the
+     5-PR ADR 051 routing-reliability arc (reasoning-token
+     stripping, calibration tooling, cause-typed errors, strict
+     JSON, prefix cache), and the new blog.append_cta pack (53rd
+     pack). In-tree catalog now sits at 53 packs + 4 meta-packs.
+     Re-run scripts/configure-openclaw.sh after this release so your
+     OpenClaw agent picks up blog.append_cta and the avenc-backed
+     reliability work. -->
 
 ## You are connected to helmdeck
 
-Helmdeck is a browser automation and AI capability platform. You have access to 52 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
+Helmdeck is a browser automation and AI capability platform. You have access to 53 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
 
 > **Routing tip (ADR 047):** for any multi-step request, prefer calling **`helmdeck__route`** first — it's the LLM-backed meta-pack that fuses the catalog (`helmdeck://routing-guide`), the caller's learned defaults (`helmdeck://my-defaults`), and reasoning about gaps. Inputs: `user_intent` (the user's request in their own words) + `model`. Returns a recommendation (with pre-filled `suggested_inputs` from learned defaults), up to three alternatives, and — when nothing in the catalog fits — a `gap_warning` containing a proposed new pack (name, input/output schema, integration pattern, why it's useful). Confirm the recommendation with the user, then run it. When `helmdeck__route` is unavailable (no gateway) or for trivial single-step requests, fall back to reading `helmdeck://routing-guide` directly: it returns the structured catalog plus a `policy` block on how to score by `accepts` / `produces` / `intent_keywords`. Prefer a pipeline over chaining packs when the pipeline's `metadata.supersedes` lists those packs. The picker tables and decision trees below in THIS skill are the offline fallback — the resource is canonical.
 

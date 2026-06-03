@@ -45,32 +45,32 @@ linters:
       # with capital letter — clashes with the convention in many of
       # our typed error messages.
       checks: ["all", "-SA9003", "-ST1005"]
+  # Paths the linters MUST NOT inspect. v2 schema requires this block
+  # to live under `linters:` (not at the document root as in v1). The
+  # website/ tree contains Docusaurus-bundled .go files that exist as
+  # asset artefacts, not source — they reference symbols from
+  # internal/api but aren't part of the build module (go.mod scopes
+  # them out). Linting them would produce reams of false positives.
+  exclusions:
+    generated: lax
+    rules:
+      - path: website/build/.*
+        linters:
+          - errcheck
+          - govet
+          - staticcheck
+          - unused
+          - ineffassign
+      - path: \.claude/worktrees/.*
+        linters:
+          - errcheck
+          - govet
+          - staticcheck
+          - unused
+          - ineffassign
 
 issues:
   # Don't flag the same line twice across linters; pick the most
   # specific one.
   max-issues-per-linter: 0
   max-same-issues: 0
-
-# Paths the linters MUST NOT inspect. The website/ tree contains
-# Docusaurus-bundled .go files that exist as asset artefacts, not
-# source — they reference symbols from internal/api but aren't part
-# of the build module (go.mod scopes them out). Linting them would
-# produce reams of false positives for missing imports.
-exclusions:
-  generated: lax
-  rules:
-    - path: website/build/.*
-      linters:
-        - errcheck
-        - govet
-        - staticcheck
-        - unused
-        - ineffassign
-    - path: \.claude/worktrees/.*
-      linters:
-        - errcheck
-        - govet
-        - staticcheck
-        - unused
-        - ineffassign

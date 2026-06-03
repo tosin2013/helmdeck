@@ -30,7 +30,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"math/rand"
 	"net/http"
 	"os"
@@ -38,6 +37,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tosin2013/helmdeck/internal/avenc"
 	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/podcast"
@@ -89,19 +89,6 @@ const (
 	// the threshold is safe in both directions.
 	minRenderedSlidePngBytes = 1024
 
-	// minEncodedSegmentBytes is the smallest per-segment .mp4 (and the
-	// final concatenated .mp4) we accept from ffmpeg before treating it
-	// as a successful encode. ffmpeg can exit 0 yet produce a 0-byte
-	// or truncated output when the input image is malformed in a way
-	// libavformat can't surface as a non-zero exit — that broken file
-	// then flows into concat and surfaces as a misleading
-	// "ffmpeg concat failed" error. A valid h264 .mp4 with even a
-	// single frame is at minimum a few KB (the mdat box + a sane
-	// moov header). 1 KB is comfortably below that floor and well
-	// above zero, so empty/truncated output trips reliably without
-	// false-positiving on legitimately short segments.
-	minEncodedSegmentBytes = 1024
-
 	// pngMagicHex is the 8-byte PNG file signature in lowercase hex.
 	// validateMarpPngs uses `head -c 8 | od -An -tx1` to read these
 	// bytes off marp's output; a mismatch (or a shorter read) means
@@ -113,22 +100,6 @@ const (
 	// a corrupt or truncated file. Source:
 	// https://www.w3.org/TR/png-3/#5DataRep
 	pngMagicHex = "89504e470d0a1a0a"
-
-	// minSilenceMp3Bytes is the smallest silence MP3 file we accept
-	// from generateSilence. libmp3lame's overhead per file (ID3v2 + a
-	// single MPEG frame) is at least a few hundred bytes even for very
-	// short durations. 256 is well above zero and well below any real
-	// silence track for typical slide durations.
-	minSilenceMp3Bytes = 256
-
-	// minTTSResponseBytes is the smallest body we accept from a
-	// successful ElevenLabs TTS response. A 1-second of MP3 audio is
-	// at minimum ~2 KB; a body smaller than minTTSResponseBytes is
-	// almost certainly an error wrapped in HTTP 200 (which ElevenLabs
-	// does occasionally — JSON error envelope with `{"error":"..."}`
-	// returned as 200, not 4xx). Floor is well below any real audio
-	// payload.
-	minTTSResponseBytes = 512
 
 	narrateYouTubePrompt = `You are a YouTube metadata writer. Given the content and durations of a slide presentation, produce ONE JSON object with exactly these fields:
 
@@ -541,13 +512,14 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 		for i, s := range slides {
 			ec.Report(10+float64(i)*40/float64(len(slides)),
 				fmt.Sprintf("audio %d/%d", i+1, len(slides)))
+			audioPath := fmt.Sprintf("/tmp/audio-%03d.mp3", i)
 			if hasNarration && s.Notes != "" {
 				narratableSlideCount++
 				audio, err := elevenLabsTTS(ctx, apiKey, voiceID, modelID, s.Notes)
 				if err != nil {
 					ec.Logger.Warn("TTS failed, falling back to silence",
 						"slide", i, "err", err)
-					if err := generateSilence(ctx, ec, i, slideDur); err != nil {
+					if err := avenc.GenerateSilence(ctx, ec.Exec, slideDur, audioPath, fmt.Sprintf("slide %d", i)); err != nil {
 						return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 							Message: fmt.Sprintf("silence gen for slide %d: %v", i, err)}
 					}
@@ -556,12 +528,12 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 				}
 				ttsSuccessCount++
 				// Transfer audio into sidecar.
-				if _, err := execWithStdin(ctx, ec, fmt.Sprintf("/tmp/audio-%03d.mp3", i), audio); err != nil {
+				if _, err := execWithStdin(ctx, ec, audioPath, audio); err != nil {
 					return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 						Message: fmt.Sprintf("transfer audio slide %d: %v", i, err)}
 				}
-				// Probe duration.
-				dur, err := probeAudioDuration(ctx, ec, i)
+				// Probe duration via avenc (LC_ALL=C + NaN/Inf rejection).
+				dur, err := avenc.ProbeAudioDuration(ctx, ec.Exec, audioPath)
 				if err != nil {
 					ec.Logger.Warn("ffprobe failed, using default duration", "slide", i, "err", err)
 					dur = slideDur
@@ -572,7 +544,7 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 				// minTurnSec — keeps downstream pipelines (YouTube
 				// cuts, slide-sync) from feeling rushed.
 				if minTurnSec > 0 && dur < minTurnSec {
-					if perr := padSlideAudioToMin(ctx, ec, i, dur, minTurnSec); perr != nil {
+					if perr := avenc.PadAudioToMin(ctx, ec.Exec, audioPath, "/tmp", fmt.Sprintf("slide-%03d", i), dur, minTurnSec, fmt.Sprintf("slide %d", i)); perr != nil {
 						ec.Logger.Warn("pad audio failed, using raw duration", "slide", i, "err", perr)
 					} else {
 						dur = minTurnSec
@@ -580,7 +552,7 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 				}
 				durations[i] = dur
 			} else {
-				if err := generateSilence(ctx, ec, i, slideDur); err != nil {
+				if err := avenc.GenerateSilence(ctx, ec.Exec, slideDur, audioPath, fmt.Sprintf("slide %d", i)); err != nil {
 					return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 						Message: fmt.Sprintf("silence gen for slide %d: %v", i, err)}
 				}
@@ -686,31 +658,24 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			// operators at the wrong step. Stat the produced file via
 			// the same wc-c pattern fs.read uses; sub-1KB output is
 			// genuinely never a valid h264 segment.
-			if perr := requireNonEmptyOutput(ctx, ec, segFile, minEncodedSegmentBytes,
+			if perr := avenc.RequireNonEmptyOutput(ctx, ec.Exec, segFile, avenc.MinEncodedSegmentBytes,
 				fmt.Sprintf("ffmpeg segment %d", i)); perr != nil {
 				return nil, perr
 			}
 		}
 
-		// 7. Concatenate all segments.
-		//
-		// Audio is RE-ENCODED (`-c:a aac -b:a 192k`) at concat time;
-		// video is stream-copied (`-c:v copy`). Reason: per-segment
-		// AAC frames don't align with segment boundaries (AAC's
-		// 1024-sample frame size rarely divides cleanly into a
-		// segment's TTS-driven duration). With `-c copy` on both
-		// streams, the concat demuxer splices at the wrong-boundary
-		// audio frames and produces audible mid-segment dropouts —
-		// the operator-reported "audio goes in and out within slides"
-		// failure mode. Re-encoding audio re-aligns the frames at
-		// concat time, eliminating the dropouts at the cost of a
-		// single AAC re-encode pass over the whole audio track (cheap
-		// — total audio length is typically 5-15 min, which AAC
-		// encodes in seconds, vs. the 5-15 minutes the per-segment
-		// h264 encodes already spent on video). Video stays
-		// stream-copy because per-segment h264 IS identical across
-		// segments (same libx264 invocation, same params) and the GOP
-		// structure aligns to keyframes at each segment start.
+		// 7. Concatenate all segments via avenc.ConcatVideoMP4s, which
+		// owns the PR #404 byte-stable shape: video stream-copy
+		// (`-c:v copy`) + audio re-encode (`-c:a aac -b:a 192k`) so
+		// AAC frame boundaries re-align at concat time and eliminate
+		// the mid-segment dropouts that `-c copy` on both streams
+		// produced. The helper also handles the honest transport-error
+		// message + OOM-code lift + post-encode size check; the only
+		// behavior we lose is the per-failure stderr-artifact dump (the
+		// inline 4 KB stderr is still in the surfaced error message —
+		// sufficient for diagnosis, and concat failures are vanishingly
+		// rare vs. per-segment encode failures which still get the
+		// artifact persistence in slides.narrate's encodeSegment path).
 		ec.Report(90, "concatenating final video")
 		var concatList strings.Builder
 		for i := range slides {
@@ -720,42 +685,8 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 				Message: fmt.Sprintf("write concat list: %v", err)}
 		}
-		const concatCmd = "ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt -c:v copy -c:a aac -b:a 192k /tmp/final.mp4"
-		concatRes, err := ec.Exec(ctx, session.ExecRequest{
-			Cmd: []string{"sh", "-c", concatCmd},
-		})
-		if err != nil || concatRes.ExitCode != 0 {
-			stderr := strings.TrimSpace(string(concatRes.Stderr))
-			artKey := persistFfmpegStderr(ctx, ec, "ffmpeg-stderr-concat.txt",
-				concatCmd, concatRes.Stderr)
-			// Same honest-message fix as the segment path: a transport
-			// error (err != nil) zero-initializes concatRes.ExitCode, so
-			// the old message printed a misleading "exit 0".
-			if err != nil {
-				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-					Message: fmt.Sprintf("ffmpeg concat: docker-exec transport error (ffmpeg did NOT return a real exit code): %v. stderr (if any): %s%s",
-						err, truncStr(stderr, 4096), artifactSuffix(artKey)),
-					Cause: err}
-			}
-			code := packs.CodeHandlerFailed
-			msg := fmt.Sprintf("ffmpeg concat failed (exit %d): %s%s",
-				concatRes.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))
-			if rc, ok := classifyShellExitCode(concatRes.ExitCode); ok {
-				code = rc
-				msg = fmt.Sprintf("ffmpeg concat killed by the OS on exit %d (likely OOM — concat is usually cheap, but tight memory limits + large per-segment files can still trip the OOM killer). stderr: %s%s",
-					concatRes.ExitCode, truncStr(stderr, 4096), artifactSuffix(artKey))
-			}
-			return nil, &packs.PackError{Code: code, Message: msg}
-		}
-		// Post-concat existence check: ffmpeg concat can exit 0 yet
-		// produce a 0-byte /tmp/final.mp4 when individual segment files
-		// are present but malformed in a way -c copy cannot replay. The
-		// downstream "cat /tmp/final.mp4" then returns empty Stdout and
-		// the existing size check at line 635 only catches >maxVideoSize,
-		// not 0 bytes. Validate up front so the failure surfaces as the
-		// concat step (the actual cause), not a generic "no video".
-		if perr := requireNonEmptyOutput(ctx, ec, "/tmp/final.mp4", minEncodedSegmentBytes,
-			"ffmpeg concat"); perr != nil {
+		if perr := avenc.ConcatVideoMP4s(ctx, ec.Exec, "/tmp/concat.txt", "/tmp/final.mp4",
+			avenc.ConcatVideoMP4sOpts{}, "ffmpeg concat"); perr != nil {
 			return nil, perr
 		}
 
@@ -896,51 +827,16 @@ func elevenLabsTTS(ctx context.Context, apiKey, voiceID, modelID, text string) (
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("elevenlabs %d: %s", resp.StatusCode, truncStr(string(body), 256))
 	}
-	// Post-200 body validation. ElevenLabs occasionally wraps an
-	// error as `{"error":"..."}` in an HTTP 200 — the caller would
-	// otherwise hand that JSON to ffmpeg as "audio bytes", which then
-	// silently produces no audio. Delegate the actual checks to
-	// validateElevenLabsBody (testable in isolation).
-	if err := validateElevenLabsBody(body); err != nil {
+	// Post-200 body validation via avenc.ValidateMP3Body. ElevenLabs
+	// occasionally wraps an error as `{"error":"..."}` in an HTTP 200
+	// — the caller would otherwise hand that JSON to ffmpeg as "audio
+	// bytes" which silently produces no audio. The avenc helper
+	// applies the same minTTSResponseBytes + MPEG-sync sniff PR #400
+	// introduced here; this is a pure consolidation, behaviour-identical.
+	if err := avenc.ValidateMP3Body(body); err != nil {
 		return nil, err
 	}
 	return body, nil
-}
-
-// validateElevenLabsBody rejects HTTP-200 bodies that are too small or
-// don't start with an MP3 sync word / ID3v2 tag. Extracted so the
-// validation logic is unit-testable without an HTTP stub. Returns nil
-// for a body that looks like real MP3 audio.
-func validateElevenLabsBody(body []byte) error {
-	if len(body) < minTTSResponseBytes || !looksLikeMP3(body) {
-		return fmt.Errorf("elevenlabs returned HTTP 200 but body is not valid MP3 audio (%d bytes, prefix=%q) — likely an error envelope wrapped as 200",
-			len(body), truncStr(string(body), 64))
-	}
-	return nil
-}
-
-// looksLikeMP3 reports whether b starts with a valid MP3 file signature
-// — either an MPEG frame sync (first 11 bits all set, encoded as
-// 0xFF 0xE0..0xFF) or an ID3v2 tag header. The MPEG-1 Layer 3 sync
-// uses 0xFB / 0xFA; MPEG-2 Layer 3 uses 0xF3 / 0xF2. ElevenLabs
-// emits MPEG-1 Layer 3 at the format we request (mp3_44100_128) so
-// 0xFB is the common case, but we accept the full Layer 3 family
-// to stay forward-compatible with format-string changes.
-func looksLikeMP3(b []byte) bool {
-	if len(b) < 3 {
-		return false
-	}
-	if string(b[:3]) == "ID3" {
-		return true
-	}
-	if b[0] != 0xFF {
-		return false
-	}
-	switch b[1] {
-	case 0xFB, 0xFA, 0xF3, 0xF2:
-		return true
-	}
-	return false
 }
 
 // pickRandomVoice fetches the operator's voice catalog via
@@ -964,97 +860,19 @@ func pickRandomVoice(ctx context.Context, apiKey string) (string, error) {
 }
 
 // --- ffmpeg helpers ------------------------------------------------------
-
-// generateSilence creates a silent MP3 of the given duration in the
-// sidecar. Post-success check: stat the produced file and require it
-// be at least minSilenceMp3Bytes. ffmpeg can exit 0 yet leave a 0-byte
-// MP3 on disk (mid-write SIGPIPE, temp-disk full, …); without this
-// check the empty file would flow into the segment encode and ffmpeg
-// would itself exit 0 again with a broken audio stream, defeating
-// the post-encode size check we'd otherwise expect to catch it.
-func generateSilence(ctx context.Context, ec *packs.ExecutionContext, slideIdx int, seconds float64) error {
-	out := fmt.Sprintf("/tmp/audio-%03d.mp3", slideIdx)
-	cmd := fmt.Sprintf(
-		"ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=mono -t %.3f -acodec libmp3lame %s",
-		seconds, out,
-	)
-	res, err := ec.Exec(ctx, session.ExecRequest{Cmd: []string{"sh", "-c", cmd}})
-	if err != nil {
-		return err
-	}
-	if res.ExitCode != 0 {
-		return fmt.Errorf("exit %d: %s", res.ExitCode, strings.TrimSpace(string(res.Stderr)))
-	}
-	if perr := requireNonEmptyOutput(ctx, ec, out, minSilenceMp3Bytes,
-		fmt.Sprintf("silence-gen slide %d", slideIdx)); perr != nil {
-		return perr
-	}
-	return nil
-}
-
-// probeAudioDuration uses ffprobe to measure an audio file's duration.
-// ParseFloat accepts "NaN", "Inf", and "-Inf" as valid floats — and on
-// locale-affected ffprobe builds, garbage stdout can also yield 0. None
-// of those are valid audio durations; we reject them explicitly so the
-// caller's "if dur < slideDur fallback" path fires instead of silently
-// using a poisoned value for downstream pad/fade math.
-func probeAudioDuration(ctx context.Context, ec *packs.ExecutionContext, slideIdx int) (float64, error) {
-	cmd := fmt.Sprintf(
-		"ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/audio-%03d.mp3",
-		slideIdx,
-	)
-	res, err := ec.Exec(ctx, session.ExecRequest{Cmd: []string{"sh", "-c", cmd}})
-	if err != nil {
-		return 0, err
-	}
-	if res.ExitCode != 0 {
-		return 0, fmt.Errorf("ffprobe exit %d", res.ExitCode)
-	}
-	raw := strings.TrimSpace(string(res.Stdout))
-	dur, err := strconv.ParseFloat(raw, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse duration %q: %w", raw, err)
-	}
-	if math.IsNaN(dur) || math.IsInf(dur, 0) || dur <= 0 {
-		return 0, fmt.Errorf("ffprobe returned non-positive/NaN/Inf duration %q (parsed=%v) — treating as probe failure so the caller falls back to the default slide duration", raw, dur)
-	}
-	return dur, nil
-}
-
-// padSlideAudioToMin (#141) appends silence to /tmp/audio-NNN.mp3 so its
-// total duration is at least minSec. Same padding strategy as the
-// podcast.generate concat path: generate a silence segment of the
-// deficit, concat-demuxer the original + silence, replace the
-// original. Re-encoding (libmp3lame) handles frame-size differences
-// between ElevenLabs MP3s and our anullsrc-generated ones.
-func padSlideAudioToMin(ctx context.Context, ec *packs.ExecutionContext, slideIdx int, currentDur, minSec float64) error {
-	deficit := minSec - currentDur
-	if deficit <= 0.001 {
-		return nil
-	}
-	turnPath := fmt.Sprintf("/tmp/audio-%03d.mp3", slideIdx)
-	padPath := fmt.Sprintf("/tmp/audio-%03d-pad.mp3", slideIdx)
-	mergedPath := fmt.Sprintf("/tmp/audio-%03d-padded.mp3", slideIdx)
-	listPath := fmt.Sprintf("/tmp/audio-%03d-pad.txt", slideIdx)
-	cmds := []string{
-		fmt.Sprintf("ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=mono -t %.3f -acodec libmp3lame %s",
-			deficit, padPath),
-		fmt.Sprintf("printf \"file '%s'\\nfile '%s'\\n\" > %s", turnPath, padPath, listPath),
-		fmt.Sprintf("ffmpeg -y -f concat -safe 0 -i %s -acodec libmp3lame -b:a 128k %s",
-			listPath, mergedPath),
-		fmt.Sprintf("mv %s %s", mergedPath, turnPath),
-	}
-	for _, cmd := range cmds {
-		res, err := ec.Exec(ctx, session.ExecRequest{Cmd: []string{"sh", "-c", cmd}})
-		if err != nil {
-			return err
-		}
-		if res.ExitCode != 0 {
-			return fmt.Errorf("pad exit %d: %s", res.ExitCode, strings.TrimSpace(string(res.Stderr)))
-		}
-	}
-	return nil
-}
+//
+// The ffmpeg/ffprobe/TTS-validation helpers that used to live here
+// (generateSilence, probeAudioDuration, padSlideAudioToMin,
+// requireNonEmptyOutput, looksLikeMP3, validateElevenLabsBody) have
+// moved to internal/avenc/ where they are shared with internal/podcast
+// (PR C will adopt them there) and any future audio/video pack. The
+// per-segment encodeSegment helper STAYS local — it relies on
+// persistFfmpegStderr to capture the full unredacted stderr to the
+// artifact store on the most-common production failure path, a
+// capability avenc.EncodeVideoSegment intentionally does not expose
+// (avenc surfaces stderr only inline, truncated at 4 KB). When/if a
+// shared stderr-tap shape lands in avenc the per-segment encode can
+// migrate too.
 
 // execWithStdin writes content to a file in the sidecar via stdin.
 func execWithStdin(ctx context.Context, ec *packs.ExecutionContext, path string, content []byte) (session.ExecResult, error) {
@@ -1255,36 +1073,6 @@ func validateMarpPngs(ctx context.Context, ec *packs.ExecutionContext, numSlides
 				Message: fmt.Sprintf("slide %d's rendered file passed the %d-byte size check but its first 8 bytes (%q) do not match the PNG signature (%q) — marp produced a corrupt/non-PNG output, typically because an embedded block (Mermaid `flowchart`, custom HTML, fenced YAML) failed mid-render and left placeholder content. Edit slide %d's markdown to remove or simplify the offending block, then re-run.",
 					i+1, minRenderedSlidePngBytes, gotMagic, pngMagicHex, i+1)}
 		}
-	}
-	return nil
-}
-
-// requireNonEmptyOutput stats a file via `wc -c < FILE` and returns a
-// CodeHandlerFailed error if the file is missing, the stat call fails
-// at the transport layer, or the file is below minBytes. Used by the
-// post-encode checks for the per-segment and concat ffmpeg steps to
-// catch the "exit 0 but no output" silent-failure mode: ffmpeg returns
-// success on certain malformed inputs without producing a real video
-// file. label is a human-readable identifier ("ffmpeg segment 4",
-// "ffmpeg concat") so the error names the actual step. The wc-c
-// pattern matches validateMarpPngs above — no new exec shape.
-func requireNonEmptyOutput(ctx context.Context, ec *packs.ExecutionContext, path string, minBytes int64, label string) error {
-	sizeRes, sizeErr := runShell(ctx, ec, "wc -c < "+shellQuote(path), nil)
-	if sizeErr != nil {
-		return &packs.PackError{Code: packs.CodeHandlerFailed,
-			Message: fmt.Sprintf("%s: stat output %s (transport error): %v", label, path, sizeErr),
-			Cause:   sizeErr}
-	}
-	if sizeRes.ExitCode != 0 {
-		return &packs.PackError{Code: packs.CodeHandlerFailed,
-			Message: fmt.Sprintf("%s: produced no output (expected %s; wc-c stat exited %d: %s). ffmpeg returned exit 0 but the output file is missing — typically the upstream PNG was malformed in a way libavformat could not surface as a non-zero exit. Check the slide PNG that fed this step.",
-				label, path, sizeRes.ExitCode, strings.TrimSpace(string(sizeRes.Stderr)))}
-	}
-	size, _ := strconv.ParseInt(strings.TrimSpace(string(sizeRes.Stdout)), 10, 64)
-	if size < minBytes {
-		return &packs.PackError{Code: packs.CodeHandlerFailed,
-			Message: fmt.Sprintf("%s: produced only %d bytes (below the %d-byte floor) at %s. ffmpeg returned exit 0 but the output is too small to be a valid encoded segment — typically a silent libavformat failure on a malformed input PNG.",
-				label, size, minBytes, path)}
 	}
 	return nil
 }

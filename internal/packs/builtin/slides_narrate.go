@@ -71,6 +71,23 @@ const (
 	slidesNarrateDefaultFfmpegThreads = "4"
 	slidesNarrateFfmpegThreadsEnv     = "HELMDECK_SLIDES_NARRATE_FFMPEG_THREADS"
 
+	// minRenderedSlidePngBytes is the smallest PNG size we accept from
+	// marp before handing a slide to ffmpeg. Marp can silently emit a
+	// near-empty PNG when a slide contains content its headless
+	// Chromium can't render — most commonly an embedded Mermaid block
+	// (`flowchart`, `sequenceDiagram`, etc.), custom HTML with broken
+	// CSS, or a fenced YAML that confuses the renderer. In that case
+	// marp's process still exits 0; the broken file flows into the
+	// per-segment ffmpeg encode and produces a misleading
+	// "ffmpeg segment N failed" error that classify.go routes to
+	// FailurePackBug — pointing operators at a non-existent helmdeck
+	// bug instead of the slide they need to edit. 1 KB is well below
+	// any real rendered slide (the smallest sensible solid-color
+	// 1920x1080 PNG is several KB after deflate overhead) and well
+	// above the few hundred bytes a marp-blank-output produces, so
+	// the threshold is safe in both directions.
+	minRenderedSlidePngBytes = 1024
+
 	narrateYouTubePrompt = `You are a YouTube metadata writer. Given the content and durations of a slide presentation, produce ONE JSON object with exactly these fields:
 
 {
@@ -406,6 +423,22 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			}
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 				Message: fmt.Sprintf("marp --images failed (exit %d): %s", marpRes.ExitCode, stderr)}
+		}
+
+		// 4a. Validate marp's per-slide PNGs BEFORE handing them to
+		// ffmpeg. marp returns exit 0 even when its headless Chromium
+		// silently fails to render embedded content (Mermaid blocks,
+		// custom HTML, fenced YAML), producing either no PNG for that
+		// slide or a tiny near-empty one. Without this check the
+		// broken file flows into the per-segment ffmpeg encode and
+		// surfaces as "ffmpeg segment N failed (exit 0)" — which
+		// classify.go routes to FailurePackBug with a
+		// "file a helmdeck issue" URL, pointing operators away from
+		// the slide they actually need to edit. Returning
+		// CodeInvalidInput here routes to FailureCallerFixable with
+		// the exact slide index + a concrete recovery hint.
+		if perr := validateMarpPngs(ctx, ec, len(slides)); perr != nil {
+			return nil, perr
 		}
 
 		// 5. Generate audio per slide (TTS or silence). Progress
@@ -955,6 +988,40 @@ func normalizeSlidesNarrateResolution(r string) string {
 		return "3840x2160"
 	}
 	return r
+}
+
+// validateMarpPngs confirms marp produced a non-trivial PNG for every
+// expected slide BEFORE the per-segment ffmpeg encode runs. Each PNG
+// is statted via `wc -c < /tmp/slides/deck.NNN.png`; a missing file or
+// one under minRenderedSlidePngBytes returns a CodeInvalidInput error
+// naming the 1-based slide index and pointing at the most likely
+// culprit (embedded Mermaid blocks, custom HTML, broken fenced YAML).
+// numSlides is the count parseSlidesAndNotes returned — the function
+// assumes marp wrote files at the 1-based deck.001.png … deck.NNN.png
+// path convention the rest of the handler already relies on. The wc-c
+// shell pattern matches the same pattern fs.read uses (see
+// fs_packs.go:140-151) so the validation reuses the existing exec path.
+func validateMarpPngs(ctx context.Context, ec *packs.ExecutionContext, numSlides int) error {
+	for i := 0; i < numSlides; i++ {
+		slideFile := fmt.Sprintf("/tmp/slides/deck.%03d.png", i+1) // marp uses 1-based
+		sizeRes, sizeErr := runShell(ctx, ec, "wc -c < "+shellQuote(slideFile), nil)
+		if sizeErr != nil {
+			return &packs.PackError{Code: packs.CodeHandlerFailed,
+				Message: fmt.Sprintf("validate slide %d PNG: %v", i+1, sizeErr)}
+		}
+		if sizeRes.ExitCode != 0 {
+			return &packs.PackError{Code: packs.CodeInvalidInput,
+				Message: fmt.Sprintf("slide %d produced no rendered PNG (marp exited 0 but the expected output file is missing). Most common cause: an embedded block marp's headless Chromium can't render — a Mermaid diagram (`flowchart`, `sequenceDiagram`), custom HTML with broken CSS, or a fenced YAML that confuses the parser. Edit slide %d's markdown to remove or simplify the offending block, then re-run.",
+					i+1, i+1)}
+		}
+		size, _ := strconv.ParseInt(strings.TrimSpace(string(sizeRes.Stdout)), 10, 64)
+		if size < minRenderedSlidePngBytes {
+			return &packs.PackError{Code: packs.CodeInvalidInput,
+				Message: fmt.Sprintf("slide %d's rendered PNG is only %d bytes (below the %d-byte floor), which is the signature of a silent marp render failure — marp produced an empty/near-empty image because an embedded block (Mermaid `flowchart`, custom HTML, fenced YAML) failed inside its headless Chromium. Edit slide %d's markdown to remove or simplify the offending block, then re-run.",
+					i+1, size, minRenderedSlidePngBytes, i+1)}
+		}
+	}
+	return nil
 }
 
 // slidesNarrateFfmpegThreads picks the per-segment libx264 thread cap

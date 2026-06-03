@@ -15,6 +15,7 @@ require (
 	github.com/resend/resend-go/v3 v3.6.0
 	github.com/yuin/goldmark v1.8.2
 	go.abhg.dev/goldmark/mermaid v0.6.0
+	pgregory.net/rapid v1.3.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0

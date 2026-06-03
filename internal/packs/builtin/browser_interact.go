@@ -117,7 +117,11 @@ func browserInteractHandler(ctx context.Context, ec *packs.ExecutionContext) (js
 			Message: fmt.Sprintf("navigate to %s: %v", in.URL, err)}
 	}
 
-	var screenshots []string
+	// Initialize as empty slices/maps so JSON marshals them as `[]` /
+	// `{}` rather than `null` when no screenshot/extract/execute
+	// action ran — the OutputSchema declares them as array/object,
+	// and `null` violates the array type check in Engine.Execute.
+	screenshots := []string{}
 	extractions := make(map[string]string)
 	assertionsPassed := true
 	stepsCompleted := 0

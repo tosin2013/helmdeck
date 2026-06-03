@@ -174,6 +174,7 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				"plan":                   "string",
 				"hero_image_prompt":      "string",
 				"hero_image_model":       "string",
+				"mermaid":                "boolean",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -263,6 +264,15 @@ type slidesNarrateInput struct {
 	// blank intro slide would break the audio pipeline.
 	HeroImagePrompt string `json:"hero_image_prompt"`
 	HeroImageModel  string `json:"hero_image_model"`
+	// Mermaid controls whether ```mermaid fenced blocks are
+	// pre-rendered to inline SVG via mmdc before Marp sees the deck.
+	// Default true (nil ⇒ on). Mirrors slides.render's same field —
+	// without this, Marp's headless Chromium leaves Mermaid blocks
+	// blank in the per-slide PNGs and the narrated video has missing
+	// diagrams. Pointer so the JSON shape is identical to slides.render
+	// and explicit `false` opts out for decks that don't need Mermaid
+	// (saves ~500ms of mmdc startup per diagram).
+	Mermaid *bool `json:"mermaid,omitempty"`
 }
 
 func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuard) packs.HandlerFunc {
@@ -310,6 +320,26 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			} else {
 				markdown = heroBlock + markdown
 			}
+		}
+
+		// Mermaid pre-processing — substitute ```mermaid fenced blocks
+		// with inline-SVG <img> data-URIs so Marp's headless Chromium
+		// (which has no built-in Mermaid renderer) produces per-slide
+		// PNGs with diagrams visible. Without this, Mermaid blocks land
+		// in the deck as raw code or render blank, and the narrated
+		// video has missing diagrams. Default on (`Mermaid == nil` ⇒ on);
+		// explicit `false` opts out for decks without diagrams (saves
+		// ~500ms of mmdc startup per diagram). Mirrors slides.render's
+		// same field — the actual rewriter (preprocessMermaidFences) is
+		// the same helper, package-level visible because both packs
+		// live in the same `builtin` package.
+		mermaidOn := in.Mermaid == nil || *in.Mermaid
+		if mermaidOn && !in.DryRun {
+			rewritten, perr := preprocessMermaidFences(ctx, ec.Exec, markdown)
+			if perr != nil {
+				return nil, perr
+			}
+			markdown = rewritten
 		}
 
 		// Defaults.

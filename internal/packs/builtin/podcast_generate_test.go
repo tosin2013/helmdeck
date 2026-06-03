@@ -32,8 +32,16 @@ func (e *podcastTestExecutor) Exec(_ context.Context, _ string, req session.Exec
 	if len(req.Cmd) >= 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" {
 		script := req.Cmd[2]
 		switch {
-		case strings.HasPrefix(script, "ffprobe"):
+		// avenc.ProbeAudioDuration prefixes "LC_ALL=C " so the
+		// HasPrefix check matched the un-prefixed shape pre-PR-C.
+		// Use Contains so both shapes match.
+		case strings.Contains(script, "ffprobe"):
 			return session.ExecResult{Stdout: []byte("5.123\n")}, nil
+		// avenc's post-encode checks (GenerateSilence + ConcatAudio)
+		// stat the output via `wc -c < FILE`; return a healthy size
+		// so the validation passes.
+		case strings.Contains(script, "wc -c < "):
+			return session.ExecResult{Stdout: []byte("65536\n")}, nil
 		case strings.HasPrefix(script, "dd if=") && strings.Contains(script, "final.mp3"):
 			return session.ExecResult{Stdout: e.mp3Bytes}, nil
 		case strings.HasPrefix(script, "cat ") && strings.Contains(script, "silent-turn.mp3"):

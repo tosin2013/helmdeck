@@ -47,10 +47,17 @@ func (f *fakeExecutor) commandsContaining(sub string) []string {
 
 // TestPadTurnToMin_BelowFloor_TriggersPadPipeline asserts the pad
 // pipeline (anullsrc generation + concat-list write + ffmpeg concat
-// + mv) fires when the probed duration is under the floor.
+// + mv) fires when the probed duration is under the floor. After the
+// PR C migration to internal/avenc, the underlying commands are
+// dispatched by avenc helpers — the externally-visible script shapes
+// (anullsrc, printf, ffmpeg concat, mv) are unchanged. The fake
+// executor also needs to respond to the post-encode `wc -c` size
+// checks avenc's GenerateSilence and ConcatAudio now run; without
+// healthy responses the avenc post-validation rejects the encode.
 func TestPadTurnToMin_BelowFloor_TriggersPadPipeline(t *testing.T) {
 	ex := &fakeExecutor{responses: map[string]session.ExecResult{
-		"ffprobe": {Stdout: []byte("1.500\n")}, // turn is 1.5s, below 5s floor
+		"ffprobe":  {Stdout: []byte("1.500\n")}, // turn is 1.5s, below 5s floor
+		"wc -c < ": {Stdout: []byte("65536\n")}, // avenc post-encode size check
 	}}
 	if err := padTurnToMin(context.Background(), ex, "sess", 0, 5.0); err != nil {
 		t.Fatalf("padTurnToMin: %v", err)

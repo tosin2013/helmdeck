@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"net/http"
 	"os"
@@ -112,6 +113,22 @@ const (
 	// a corrupt or truncated file. Source:
 	// https://www.w3.org/TR/png-3/#5DataRep
 	pngMagicHex = "89504e470d0a1a0a"
+
+	// minSilenceMp3Bytes is the smallest silence MP3 file we accept
+	// from generateSilence. libmp3lame's overhead per file (ID3v2 + a
+	// single MPEG frame) is at least a few hundred bytes even for very
+	// short durations. 256 is well above zero and well below any real
+	// silence track for typical slide durations.
+	minSilenceMp3Bytes = 256
+
+	// minTTSResponseBytes is the smallest body we accept from a
+	// successful ElevenLabs TTS response. A 1-second of MP3 audio is
+	// at minimum ~2 KB; a body smaller than minTTSResponseBytes is
+	// almost certainly an error wrapped in HTTP 200 (which ElevenLabs
+	// does occasionally — JSON error envelope with `{"error":"..."}`
+	// returned as 200, not 4xx). Floor is well below any real audio
+	// payload.
+	minTTSResponseBytes = 512
 
 	narrateYouTubePrompt = `You are a YouTube metadata writer. Given the content and durations of a slide presentation, produce ONE JSON object with exactly these fields:
 
@@ -830,7 +847,51 @@ func elevenLabsTTS(ctx context.Context, apiKey, voiceID, modelID, text string) (
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("elevenlabs %d: %s", resp.StatusCode, truncStr(string(body), 256))
 	}
+	// Post-200 body validation. ElevenLabs occasionally wraps an
+	// error as `{"error":"..."}` in an HTTP 200 — the caller would
+	// otherwise hand that JSON to ffmpeg as "audio bytes", which then
+	// silently produces no audio. Delegate the actual checks to
+	// validateElevenLabsBody (testable in isolation).
+	if err := validateElevenLabsBody(body); err != nil {
+		return nil, err
+	}
 	return body, nil
+}
+
+// validateElevenLabsBody rejects HTTP-200 bodies that are too small or
+// don't start with an MP3 sync word / ID3v2 tag. Extracted so the
+// validation logic is unit-testable without an HTTP stub. Returns nil
+// for a body that looks like real MP3 audio.
+func validateElevenLabsBody(body []byte) error {
+	if len(body) < minTTSResponseBytes || !looksLikeMP3(body) {
+		return fmt.Errorf("elevenlabs returned HTTP 200 but body is not valid MP3 audio (%d bytes, prefix=%q) — likely an error envelope wrapped as 200",
+			len(body), truncStr(string(body), 64))
+	}
+	return nil
+}
+
+// looksLikeMP3 reports whether b starts with a valid MP3 file signature
+// — either an MPEG frame sync (first 11 bits all set, encoded as
+// 0xFF 0xE0..0xFF) or an ID3v2 tag header. The MPEG-1 Layer 3 sync
+// uses 0xFB / 0xFA; MPEG-2 Layer 3 uses 0xF3 / 0xF2. ElevenLabs
+// emits MPEG-1 Layer 3 at the format we request (mp3_44100_128) so
+// 0xFB is the common case, but we accept the full Layer 3 family
+// to stay forward-compatible with format-string changes.
+func looksLikeMP3(b []byte) bool {
+	if len(b) < 3 {
+		return false
+	}
+	if string(b[:3]) == "ID3" {
+		return true
+	}
+	if b[0] != 0xFF {
+		return false
+	}
+	switch b[1] {
+	case 0xFB, 0xFA, 0xF3, 0xF2:
+		return true
+	}
+	return false
 }
 
 // pickRandomVoice fetches the operator's voice catalog via
@@ -855,11 +916,18 @@ func pickRandomVoice(ctx context.Context, apiKey string) (string, error) {
 
 // --- ffmpeg helpers ------------------------------------------------------
 
-// generateSilence creates a silent MP3 of the given duration in the sidecar.
+// generateSilence creates a silent MP3 of the given duration in the
+// sidecar. Post-success check: stat the produced file and require it
+// be at least minSilenceMp3Bytes. ffmpeg can exit 0 yet leave a 0-byte
+// MP3 on disk (mid-write SIGPIPE, temp-disk full, …); without this
+// check the empty file would flow into the segment encode and ffmpeg
+// would itself exit 0 again with a broken audio stream, defeating
+// the post-encode size check we'd otherwise expect to catch it.
 func generateSilence(ctx context.Context, ec *packs.ExecutionContext, slideIdx int, seconds float64) error {
+	out := fmt.Sprintf("/tmp/audio-%03d.mp3", slideIdx)
 	cmd := fmt.Sprintf(
-		"ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=mono -t %.3f -acodec libmp3lame /tmp/audio-%03d.mp3",
-		seconds, slideIdx,
+		"ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=mono -t %.3f -acodec libmp3lame %s",
+		seconds, out,
 	)
 	res, err := ec.Exec(ctx, session.ExecRequest{Cmd: []string{"sh", "-c", cmd}})
 	if err != nil {
@@ -868,10 +936,19 @@ func generateSilence(ctx context.Context, ec *packs.ExecutionContext, slideIdx i
 	if res.ExitCode != 0 {
 		return fmt.Errorf("exit %d: %s", res.ExitCode, strings.TrimSpace(string(res.Stderr)))
 	}
+	if perr := requireNonEmptyOutput(ctx, ec, out, minSilenceMp3Bytes,
+		fmt.Sprintf("silence-gen slide %d", slideIdx)); perr != nil {
+		return perr
+	}
 	return nil
 }
 
 // probeAudioDuration uses ffprobe to measure an audio file's duration.
+// ParseFloat accepts "NaN", "Inf", and "-Inf" as valid floats — and on
+// locale-affected ffprobe builds, garbage stdout can also yield 0. None
+// of those are valid audio durations; we reject them explicitly so the
+// caller's "if dur < slideDur fallback" path fires instead of silently
+// using a poisoned value for downstream pad/fade math.
 func probeAudioDuration(ctx context.Context, ec *packs.ExecutionContext, slideIdx int) (float64, error) {
 	cmd := fmt.Sprintf(
 		"ffprobe -v error -show_entries format=duration -of csv=p=0 /tmp/audio-%03d.mp3",
@@ -884,9 +961,13 @@ func probeAudioDuration(ctx context.Context, ec *packs.ExecutionContext, slideId
 	if res.ExitCode != 0 {
 		return 0, fmt.Errorf("ffprobe exit %d", res.ExitCode)
 	}
-	dur, err := strconv.ParseFloat(strings.TrimSpace(string(res.Stdout)), 64)
+	raw := strings.TrimSpace(string(res.Stdout))
+	dur, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
-		return 0, fmt.Errorf("parse duration %q: %w", string(res.Stdout), err)
+		return 0, fmt.Errorf("parse duration %q: %w", raw, err)
+	}
+	if math.IsNaN(dur) || math.IsInf(dur, 0) || dur <= 0 {
+		return 0, fmt.Errorf("ffprobe returned non-positive/NaN/Inf duration %q (parsed=%v) — treating as probe failure so the caller falls back to the default slide duration", raw, dur)
 	}
 	return dur, nil
 }

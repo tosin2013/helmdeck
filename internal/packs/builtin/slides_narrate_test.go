@@ -22,9 +22,19 @@ import (
 
 // --- test doubles for slides.narrate ------------------------------------
 
-// fakeMP3 is a tiny valid-ish MP3 header stub so tests that transfer
-// "audio" bytes into the sidecar have non-empty content.
-var fakeMP3 = []byte{0xFF, 0xFB, 0x90, 0x00, 0x00, 0x00}
+// fakeMP3 is a valid-ish MP3 frame: MPEG-1 Layer III sync word
+// (0xFF 0xFB) followed by 1024 bytes of zero padding. The sync word
+// satisfies looksLikeMP3 (slides_narrate.go) and the length
+// comfortably clears minTTSResponseBytes (512). Tests that mock
+// ElevenLabs replies need both — the post-200 validation rejects
+// short bodies AND bodies without an MP3 sync, so fakeMP3 covers
+// both axes.
+var fakeMP3 = func() []byte {
+	b := make([]byte, 1024+2)
+	b[0] = 0xFF
+	b[1] = 0xFB
+	return b
+}()
 
 // fakeMP4 is a tiny stub returned by the final "cat /tmp/final.mp4".
 var fakeMP4 = []byte("fake-mp4-video-bytes")
@@ -1249,5 +1259,252 @@ func TestRequireNonEmptyOutput_BelowFloor_HandlerFailed(t *testing.T) {
 	}
 	if !strings.Contains(pe.Message, "ffmpeg concat") {
 		t.Errorf("must name the step label; got %q", pe.Message)
+	}
+}
+
+// --- Commit B: defense-in-depth tests ---
+
+// TestProbeAudioDuration_RejectsNaN — ffprobe stdout "NaN" is a valid
+// float per strconv but a poisoned duration. Must surface as an error
+// so the caller's fallback path fires.
+func TestProbeAudioDuration_RejectsNaN(t *testing.T) {
+	exec := func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		return session.ExecResult{Stdout: []byte("NaN\n")}, nil
+	}
+	ec := &packs.ExecutionContext{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:   exec,
+	}
+	_, err := probeAudioDuration(context.Background(), ec, 0)
+	if err == nil {
+		t.Fatal("expected error on NaN; got nil")
+	}
+	if !strings.Contains(err.Error(), "NaN") && !strings.Contains(err.Error(), "non-positive") {
+		t.Errorf("error must explain the NaN/non-positive rejection; got %q", err.Error())
+	}
+}
+
+// TestProbeAudioDuration_RejectsInfinity — same shape, +Inf input.
+func TestProbeAudioDuration_RejectsInfinity(t *testing.T) {
+	exec := func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		return session.ExecResult{Stdout: []byte("+Inf\n")}, nil
+	}
+	ec := &packs.ExecutionContext{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:   exec,
+	}
+	_, err := probeAudioDuration(context.Background(), ec, 0)
+	if err == nil {
+		t.Fatal("expected error on +Inf; got nil")
+	}
+}
+
+// TestProbeAudioDuration_RejectsNonPositive — 0 and negative durations
+// are not valid audio durations.
+func TestProbeAudioDuration_RejectsNonPositive(t *testing.T) {
+	for _, raw := range []string{"0\n", "-1.5\n", "0.0\n"} {
+		raw := raw
+		t.Run(strings.TrimSpace(raw), func(t *testing.T) {
+			exec := func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+				return session.ExecResult{Stdout: []byte(raw)}, nil
+			}
+			ec := &packs.ExecutionContext{
+				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				Exec:   exec,
+			}
+			_, err := probeAudioDuration(context.Background(), ec, 0)
+			if err == nil {
+				t.Fatalf("expected error on %q; got nil", strings.TrimSpace(raw))
+			}
+		})
+	}
+}
+
+// TestProbeAudioDuration_AcceptsPositiveFloat — happy-path baseline.
+func TestProbeAudioDuration_AcceptsPositiveFloat(t *testing.T) {
+	exec := func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		return session.ExecResult{Stdout: []byte("3.14\n")}, nil
+	}
+	ec := &packs.ExecutionContext{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:   exec,
+	}
+	dur, err := probeAudioDuration(context.Background(), ec, 0)
+	if err != nil {
+		t.Fatalf("expected nil; got %v", err)
+	}
+	if dur != 3.14 {
+		t.Errorf("expected dur=3.14; got %v", dur)
+	}
+}
+
+// TestGenerateSilence_PostCheckCatches0Byte — ffmpeg exit 0 but no
+// output file must surface as an error so the caller doesn't proceed
+// with an empty audio track that breaks downstream segment encode.
+func TestGenerateSilence_PostCheckCatches0Byte(t *testing.T) {
+	exec := func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		script := ""
+		if len(req.Cmd) >= 3 {
+			script = req.Cmd[2]
+		}
+		switch {
+		case strings.Contains(script, "anullsrc"):
+			return session.ExecResult{}, nil // exit 0, no file written
+		case strings.Contains(script, "wc -c < "):
+			return session.ExecResult{Stdout: []byte("0\n")}, nil // file is empty
+		default:
+			return session.ExecResult{}, nil
+		}
+	}
+	ec := &packs.ExecutionContext{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:   exec,
+	}
+	err := generateSilence(context.Background(), ec, 0, 5.0)
+	if err == nil {
+		t.Fatal("expected error on 0-byte silence file; got nil")
+	}
+	if !strings.Contains(err.Error(), "silence-gen slide 0") {
+		t.Errorf("error must name the step + slide; got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "0 bytes") {
+		t.Errorf("error must surface the actual size; got %q", err.Error())
+	}
+}
+
+// TestLooksLikeMP3_Identifies tests the byte-level MP3 sniffer used by
+// the ElevenLabs TTS response validator.
+func TestLooksLikeMP3_Identifies(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []byte
+		want bool
+	}{
+		{"MPEG-1 Layer III sync 0xFB", []byte{0xFF, 0xFB, 0x90, 0x00}, true},
+		{"MPEG-1 Layer III sync 0xFA", []byte{0xFF, 0xFA, 0x90, 0x00}, true},
+		{"MPEG-2 Layer III sync 0xF3", []byte{0xFF, 0xF3, 0x90, 0x00}, true},
+		{"MPEG-2 Layer III sync 0xF2", []byte{0xFF, 0xF2, 0x90, 0x00}, true},
+		{"ID3v2 tag prefix", []byte("ID3\x03\x00"), true},
+		{"JSON error envelope (the actual bug)", []byte(`{"error":"quota exceeded"}`), false},
+		{"empty body", []byte{}, false},
+		{"random garbage", []byte{0x00, 0x00, 0x00}, false},
+		{"wrong second-byte mask", []byte{0xFF, 0xE0, 0x00, 0x00}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := looksLikeMP3(tc.in); got != tc.want {
+				t.Errorf("looksLikeMP3(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateElevenLabsBody covers the post-HTTP-200 body validation
+// extracted from elevenLabsTTS. The cases pin the two failure shapes the
+// audit called out (HTTP 200 + JSON error envelope; HTTP 200 + truncated
+// body) and the happy-path baseline.
+func TestValidateElevenLabsBody(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    []byte
+		wantErr bool
+	}{
+		{"healthy MP3 (fakeMP3, >512 bytes, MP3 sync)", fakeMP3, false},
+		{"JSON error envelope wrapped in HTTP 200", []byte(`{"error":"quota exceeded","detail":"ElevenLabs sometimes does this"}`), true},
+		{"empty body", []byte{}, true},
+		{"under floor (256 bytes of valid MP3 sync)", append([]byte{0xFF, 0xFB}, make([]byte, 256)...), true},
+		{"≥floor but not MP3 (HTML error page)", append([]byte("<html><body>Service Unavailable"), make([]byte, 600)...), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateElevenLabsBody(tc.body)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("wantErr=%v, got err=%v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestPadSlideAudioToMin_HappyPath — exercises the 4-step ffmpeg
+// pipeline with a healthy mock and confirms all four commands ran.
+// Closes the audit-reported gap "padSlideAudioToMin has zero test
+// coverage at all."
+func TestPadSlideAudioToMin_HappyPath(t *testing.T) {
+	var calls []string
+	exec := func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		script := ""
+		if len(req.Cmd) >= 3 {
+			script = req.Cmd[2]
+		}
+		calls = append(calls, script)
+		return session.ExecResult{}, nil // exit 0 on every step
+	}
+	ec := &packs.ExecutionContext{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:   exec,
+	}
+	// Current=2.0, min=5.0 -> deficit=3.0 -> path is exercised.
+	if err := padSlideAudioToMin(context.Background(), ec, 0, 2.0, 5.0); err != nil {
+		t.Fatalf("happy path returned %v", err)
+	}
+	if len(calls) != 4 {
+		t.Errorf("expected 4 sub-commands (silence-gen, printf concat list, ffmpeg concat, mv); got %d (%v)",
+			len(calls), calls)
+	}
+}
+
+// TestPadSlideAudioToMin_NoOpWhenDeficitNegligible — when current >=
+// min, the function must return nil without running anything.
+func TestPadSlideAudioToMin_NoOpWhenDeficitNegligible(t *testing.T) {
+	var calls int
+	exec := func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		calls++
+		return session.ExecResult{}, nil
+	}
+	ec := &packs.ExecutionContext{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:   exec,
+	}
+	if err := padSlideAudioToMin(context.Background(), ec, 0, 5.5, 5.0); err != nil {
+		t.Errorf("no-op path returned %v", err)
+	}
+	if calls != 0 {
+		t.Errorf("no-op path must not exec anything; got %d calls", calls)
+	}
+}
+
+// TestPadSlideAudioToMin_StopsOnMidStepFailure — when one of the 4
+// sub-commands fails, the remaining commands must NOT run and the
+// failure surfaces to the caller.
+func TestPadSlideAudioToMin_StopsOnMidStepFailure(t *testing.T) {
+	var calls []string
+	exec := func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		script := ""
+		if len(req.Cmd) >= 3 {
+			script = req.Cmd[2]
+		}
+		calls = append(calls, script)
+		// Fail on the second step (the printf that writes the concat list).
+		if strings.Contains(script, "printf ") {
+			return session.ExecResult{ExitCode: 1, Stderr: []byte("disk full")}, nil
+		}
+		return session.ExecResult{}, nil
+	}
+	ec := &packs.ExecutionContext{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:   exec,
+	}
+	err := padSlideAudioToMin(context.Background(), ec, 0, 2.0, 5.0)
+	if err == nil {
+		t.Fatal("expected error on mid-step failure; got nil")
+	}
+	// Step 1 (silence-gen) + step 2 (printf, which fails) = 2 calls.
+	// Step 3 (concat) and step 4 (mv) must NOT run.
+	if len(calls) != 2 {
+		t.Errorf("expected 2 calls before short-circuit (silence + printf-fails); got %d (%v)",
+			len(calls), calls)
+	}
+	if !strings.Contains(err.Error(), "pad exit") {
+		t.Errorf("error must surface the pad failure; got %q", err.Error())
 	}
 }

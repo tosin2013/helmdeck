@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -60,6 +61,12 @@ func (n *narrateExecScript) fn(_ context.Context, req session.ExecRequest) (sess
 		return session.ExecResult{Stdout: []byte("5.000\n")}, nil
 	case strings.Contains(script, "anullsrc"):
 		return session.ExecResult{}, nil
+	case strings.Contains(script, "wc -c < "):
+		// validateMarpPngs stats each rendered PNG. Return a size that
+		// passes minRenderedSlidePngBytes so the happy-path tests
+		// proceed to the per-segment encode without being stopped at
+		// the validation gate.
+		return session.ExecResult{Stdout: []byte("65536\n")}, nil
 	case strings.Contains(script, "-loop"):
 		return session.ExecResult{}, nil
 	case strings.Contains(script, "concat"):
@@ -409,6 +416,11 @@ func TestSlidesNarrate_FfmpegConcatFailure(t *testing.T) {
 			if strings.Contains(script, "ffprobe") {
 				return session.ExecResult{Stdout: []byte("5.0\n")}, nil
 			}
+			// validateMarpPngs stats each rendered PNG via `wc -c`;
+			// return a healthy size so the test reaches the concat path.
+			if strings.Contains(script, "wc -c < ") {
+				return session.ExecResult{Stdout: []byte("65536\n")}, nil
+			}
 			return session.ExecResult{}, nil
 		},
 		Artifacts: artifacts,
@@ -457,6 +469,11 @@ func TestSlidesNarrate_FfmpegSegmentFailure_FullStderrSurfaced(t *testing.T) {
 				return session.ExecResult{ExitCode: 1, Stderr: []byte(longStderr)}, nil
 			case strings.Contains(script, "ffprobe"):
 				return session.ExecResult{Stdout: []byte("5.0\n")}, nil
+			case strings.Contains(script, "wc -c < "):
+				// validateMarpPngs runs before the segment encode;
+				// return a healthy size so the test reaches the ffmpeg
+				// segment path it is targeting.
+				return session.ExecResult{Stdout: []byte("65536\n")}, nil
 			default:
 				return session.ExecResult{}, nil
 			}
@@ -786,5 +803,141 @@ func TestSlidesNarrate_DoubleOOMSurfacesCodeResourceExhausted(t *testing.T) {
 	// handler must NOT escalate to a third attempt.
 	if len(ffmpegEncodeCalls) != 2 {
 		t.Errorf("expected exactly 2 ffmpeg encode calls (primary + 1 retry, no more); got %d", len(ffmpegEncodeCalls))
+	}
+}
+
+// --- validateMarpPngs (Mermaid-render-failure guard) ---
+
+// pngStatExec is a minimal Executor stub that returns scripted
+// (stdout, exitCode) values per slide for the `wc -c < file` calls
+// validateMarpPngs makes. The slide indexes are 1-based in the file
+// path; the stub records what it sees and returns the i-th entry of
+// the script (0-based) for the matching `wc -c` call.
+type pngStatExec struct {
+	sizes      []int64 // size in bytes for slide i+1; <0 means "file missing"
+	t          *testing.T
+	calls      []string
+	transports error // if non-nil, every call returns this error
+}
+
+func (p *pngStatExec) fn(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+	if p.transports != nil {
+		return session.ExecResult{}, p.transports
+	}
+	script := ""
+	if len(req.Cmd) >= 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" {
+		script = req.Cmd[2]
+	}
+	p.calls = append(p.calls, script)
+	// Extract the 1-based slide index from `wc -c < '/tmp/slides/deck.NNN.png'`.
+	idx := -1
+	for i := 1; i <= len(p.sizes); i++ {
+		needle := "deck." + fmt.Sprintf("%03d", i) + ".png"
+		if strings.Contains(script, needle) {
+			idx = i
+			break
+		}
+	}
+	if idx <= 0 || idx > len(p.sizes) {
+		return session.ExecResult{}, fmt.Errorf("pngStatExec: unmatched script %q", script)
+	}
+	size := p.sizes[idx-1]
+	if size < 0 {
+		// "File missing" — wc exits non-zero, stderr says so.
+		return session.ExecResult{ExitCode: 1, Stderr: []byte("wc: deck.png: No such file or directory")}, nil
+	}
+	return session.ExecResult{Stdout: []byte(fmt.Sprintf("%d\n", size))}, nil
+}
+
+func newPngValidateEC(exec *pngStatExec) *packs.ExecutionContext {
+	return &packs.ExecutionContext{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:   exec.fn,
+	}
+}
+
+func TestValidateMarpPngs_AllHealthy_NoError(t *testing.T) {
+	exec := &pngStatExec{t: t, sizes: []int64{50000, 60000, 75000}}
+	if err := validateMarpPngs(context.Background(), newPngValidateEC(exec), 3); err != nil {
+		t.Fatalf("expected nil; got %v", err)
+	}
+	if len(exec.calls) != 3 {
+		t.Errorf("expected 3 wc-c calls (one per slide); got %d", len(exec.calls))
+	}
+}
+
+func TestValidateMarpPngs_MissingFile_ReturnsInvalidInputNamingSlide(t *testing.T) {
+	// Slide 3 missing — the Mermaid-failure shape from the user report.
+	exec := &pngStatExec{t: t, sizes: []int64{50000, 50000, -1, 50000}}
+	err := validateMarpPngs(context.Background(), newPngValidateEC(exec), 4)
+	if err == nil {
+		t.Fatal("expected error; got nil")
+	}
+	var pe *packs.PackError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *packs.PackError; got %T", err)
+	}
+	if pe.Code != packs.CodeInvalidInput {
+		t.Errorf("expected CodeInvalidInput (routes to FailureCallerFixable); got %s", pe.Code)
+	}
+	if !strings.Contains(pe.Message, "slide 3") {
+		t.Errorf("error must name the failing 1-based slide index; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "Mermaid") {
+		t.Errorf("error must hint at the common cause (Mermaid) so operators have a starting point; got %q", pe.Message)
+	}
+	// Must stop at the first failure — no need to stat slide 4.
+	if len(exec.calls) != 3 {
+		t.Errorf("expected 3 stat calls (1, 2, 3-fails); got %d", len(exec.calls))
+	}
+}
+
+func TestValidateMarpPngs_TinyFile_ReturnsInvalidInputWithSize(t *testing.T) {
+	// Slide 2 rendered 256 bytes — well below minRenderedSlidePngBytes (1024).
+	exec := &pngStatExec{t: t, sizes: []int64{50000, 256, 50000}}
+	err := validateMarpPngs(context.Background(), newPngValidateEC(exec), 3)
+	if err == nil {
+		t.Fatal("expected error; got nil")
+	}
+	var pe *packs.PackError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *packs.PackError; got %T", err)
+	}
+	if pe.Code != packs.CodeInvalidInput {
+		t.Errorf("expected CodeInvalidInput; got %s", pe.Code)
+	}
+	if !strings.Contains(pe.Message, "slide 2") {
+		t.Errorf("error must name slide 2; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "256 bytes") {
+		t.Errorf("error must surface the actual size so operators can sanity-check; got %q", pe.Message)
+	}
+}
+
+func TestValidateMarpPngs_AtFloor_Passes(t *testing.T) {
+	// Boundary test — exactly minRenderedSlidePngBytes must pass.
+	// Catches off-by-one regressions in the < vs <= comparison.
+	exec := &pngStatExec{t: t, sizes: []int64{minRenderedSlidePngBytes}}
+	if err := validateMarpPngs(context.Background(), newPngValidateEC(exec), 1); err != nil {
+		t.Errorf("size == floor should pass (< comparison, not <=); got %v", err)
+	}
+}
+
+func TestValidateMarpPngs_TransportError_ReturnsHandlerFailed(t *testing.T) {
+	// Underlying Exec error (docker disconnect, session timeout) — must
+	// surface as CodeHandlerFailed, NOT CodeInvalidInput, since the
+	// caller's input may be perfectly fine and the failure is
+	// infrastructural.
+	exec := &pngStatExec{t: t, sizes: []int64{50000}, transports: errors.New("session disconnected")}
+	err := validateMarpPngs(context.Background(), newPngValidateEC(exec), 1)
+	if err == nil {
+		t.Fatal("expected error; got nil")
+	}
+	var pe *packs.PackError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *packs.PackError; got %T", err)
+	}
+	if pe.Code != packs.CodeHandlerFailed {
+		t.Errorf("transport error must surface as CodeHandlerFailed (not CodeInvalidInput — caller's input is fine); got %s", pe.Code)
 	}
 }

@@ -62,11 +62,15 @@ func (n *narrateExecScript) fn(_ context.Context, req session.ExecRequest) (sess
 	case strings.Contains(script, "anullsrc"):
 		return session.ExecResult{}, nil
 	case strings.Contains(script, "wc -c < "):
-		// validateMarpPngs stats each rendered PNG. Return a size that
-		// passes minRenderedSlidePngBytes so the happy-path tests
-		// proceed to the per-segment encode without being stopped at
-		// the validation gate.
+		// validateMarpPngs stats each rendered PNG. Also used by the
+		// post-encode requireNonEmptyOutput checks (segment .mp4 +
+		// concat /tmp/final.mp4). Return a size that passes both
+		// floors so happy-path tests proceed to the next gate.
 		return session.ExecResult{Stdout: []byte("65536\n")}, nil
+	case strings.Contains(script, "head -c 8 "):
+		// validateMarpPngs's PNG-magic-byte check. Return the valid
+		// PNG signature so happy-path tests advance past it.
+		return session.ExecResult{Stdout: []byte(pngMagicHex)}, nil
 	case strings.Contains(script, "-loop"):
 		return session.ExecResult{}, nil
 	case strings.Contains(script, "concat"):
@@ -416,10 +420,15 @@ func TestSlidesNarrate_FfmpegConcatFailure(t *testing.T) {
 			if strings.Contains(script, "ffprobe") {
 				return session.ExecResult{Stdout: []byte("5.0\n")}, nil
 			}
-			// validateMarpPngs stats each rendered PNG via `wc -c`;
-			// return a healthy size so the test reaches the concat path.
+			// validateMarpPngs stats each rendered PNG via `wc -c` and
+			// reads 8 header bytes via `head -c 8`. Also the new
+			// requireNonEmptyOutput post-encode check uses `wc -c`.
+			// Return healthy values so the test reaches the concat path.
 			if strings.Contains(script, "wc -c < ") {
 				return session.ExecResult{Stdout: []byte("65536\n")}, nil
+			}
+			if strings.Contains(script, "head -c 8 ") {
+				return session.ExecResult{Stdout: []byte(pngMagicHex)}, nil
 			}
 			return session.ExecResult{}, nil
 		},
@@ -474,6 +483,9 @@ func TestSlidesNarrate_FfmpegSegmentFailure_FullStderrSurfaced(t *testing.T) {
 				// return a healthy size so the test reaches the ffmpeg
 				// segment path it is targeting.
 				return session.ExecResult{Stdout: []byte("65536\n")}, nil
+			case strings.Contains(script, "head -c 8 "):
+				// validateMarpPngs's magic-byte check.
+				return session.ExecResult{Stdout: []byte(pngMagicHex)}, nil
 			default:
 				return session.ExecResult{}, nil
 			}
@@ -809,12 +821,17 @@ func TestSlidesNarrate_DoubleOOMSurfacesCodeResourceExhausted(t *testing.T) {
 // --- validateMarpPngs (Mermaid-render-failure guard) ---
 
 // pngStatExec is a minimal Executor stub that returns scripted
-// (stdout, exitCode) values per slide for the `wc -c < file` calls
-// validateMarpPngs makes. The slide indexes are 1-based in the file
-// path; the stub records what it sees and returns the i-th entry of
-// the script (0-based) for the matching `wc -c` call.
+// (stdout, exitCode) values per slide for both the `wc -c < file`
+// (size) and `head -c 8 … od …` (magic-bytes) calls validateMarpPngs
+// makes. The slide indexes are 1-based in the file path; the stub
+// records what it sees and returns the i-th entry of the size +
+// magic scripts (0-based) for the matching call. If magics is nil,
+// every slide's magic check returns the valid PNG signature
+// (pngMagicHex) — convenient for size-failure tests where the magic
+// check is never reached.
 type pngStatExec struct {
-	sizes      []int64 // size in bytes for slide i+1; <0 means "file missing"
+	sizes      []int64  // size in bytes for slide i+1; <0 means "file missing"
+	magics     []string // hex string for slide i+1; "" means use pngMagicHex (valid)
 	t          *testing.T
 	calls      []string
 	transports error // if non-nil, every call returns this error
@@ -829,7 +846,8 @@ func (p *pngStatExec) fn(_ context.Context, req session.ExecRequest) (session.Ex
 		script = req.Cmd[2]
 	}
 	p.calls = append(p.calls, script)
-	// Extract the 1-based slide index from `wc -c < '/tmp/slides/deck.NNN.png'`.
+	// Extract the 1-based slide index from the file path embedded in
+	// the script (works for both `wc -c < '...'` and `head -c 8 '...'`).
 	idx := -1
 	for i := 1; i <= len(p.sizes); i++ {
 		needle := "deck." + fmt.Sprintf("%03d", i) + ".png"
@@ -840,6 +858,13 @@ func (p *pngStatExec) fn(_ context.Context, req session.ExecRequest) (session.Ex
 	}
 	if idx <= 0 || idx > len(p.sizes) {
 		return session.ExecResult{}, fmt.Errorf("pngStatExec: unmatched script %q", script)
+	}
+	if strings.Contains(script, "head -c 8 ") {
+		hex := pngMagicHex
+		if idx-1 < len(p.magics) && p.magics[idx-1] != "" {
+			hex = p.magics[idx-1]
+		}
+		return session.ExecResult{Stdout: []byte(hex)}, nil
 	}
 	size := p.sizes[idx-1]
 	if size < 0 {
@@ -861,8 +886,9 @@ func TestValidateMarpPngs_AllHealthy_NoError(t *testing.T) {
 	if err := validateMarpPngs(context.Background(), newPngValidateEC(exec), 3); err != nil {
 		t.Fatalf("expected nil; got %v", err)
 	}
-	if len(exec.calls) != 3 {
-		t.Errorf("expected 3 wc-c calls (one per slide); got %d", len(exec.calls))
+	// 3 slides × 2 checks (wc-c size + head -c 8 magic) = 6 calls.
+	if len(exec.calls) != 6 {
+		t.Errorf("expected 6 calls (3 wc-c + 3 head-c-8, one of each per slide); got %d", len(exec.calls))
 	}
 }
 
@@ -887,8 +913,10 @@ func TestValidateMarpPngs_MissingFile_ReturnsInvalidInputNamingSlide(t *testing.
 		t.Errorf("error must hint at the common cause (Mermaid) so operators have a starting point; got %q", pe.Message)
 	}
 	// Must stop at the first failure — no need to stat slide 4.
-	if len(exec.calls) != 3 {
-		t.Errorf("expected 3 stat calls (1, 2, 3-fails); got %d", len(exec.calls))
+	// Slide 1: wc + head (both pass). Slide 2: wc + head (both pass).
+	// Slide 3: wc fails, short-circuit before head. Total = 5.
+	if len(exec.calls) != 5 {
+		t.Errorf("expected 5 calls (slide 1+2 do wc+head each = 4, slide 3 wc fails = 1, total 5, no slide 4); got %d", len(exec.calls))
 	}
 }
 
@@ -939,5 +967,287 @@ func TestValidateMarpPngs_TransportError_ReturnsHandlerFailed(t *testing.T) {
 	}
 	if pe.Code != packs.CodeHandlerFailed {
 		t.Errorf("transport error must surface as CodeHandlerFailed (not CodeInvalidInput — caller's input is fine); got %s", pe.Code)
+	}
+}
+
+// TestValidateMarpPngs_BadPngMagic_ReturnsInvalidInputNamingSlide pins the
+// new magic-byte check: a slide whose size passes the floor but whose
+// first 8 bytes don't match the PNG signature must surface as
+// CodeInvalidInput naming the slide. This catches the Mermaid-failure
+// shape PR #399's size-only check let through (placeholder content that
+// is >=1024 bytes but not a valid PNG).
+func TestValidateMarpPngs_BadPngMagic_ReturnsInvalidInputNamingSlide(t *testing.T) {
+	exec := &pngStatExec{
+		t:      t,
+		sizes:  []int64{50000, 50000, 50000},
+		magics: []string{pngMagicHex, "deadbeefdeadbeef", pngMagicHex},
+	}
+	err := validateMarpPngs(context.Background(), newPngValidateEC(exec), 3)
+	if err == nil {
+		t.Fatal("expected error; got nil")
+	}
+	var pe *packs.PackError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *packs.PackError; got %T", err)
+	}
+	if pe.Code != packs.CodeInvalidInput {
+		t.Errorf("expected CodeInvalidInput (routes to FailureCallerFixable); got %s", pe.Code)
+	}
+	if !strings.Contains(pe.Message, "slide 2") {
+		t.Errorf("error must name the failing 1-based slide index; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "PNG signature") {
+		t.Errorf("error must explain the magic-byte mismatch; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "Mermaid") {
+		t.Errorf("error must hint at the common cause; got %q", pe.Message)
+	}
+	// Must stop at slide 2 — no need to magic-check slide 3.
+	// Slide 1: wc + head (both pass). Slide 2: wc passes, head fails.
+	// = 2 + 2 = 4 calls.
+	if len(exec.calls) != 4 {
+		t.Errorf("expected 4 calls (slide 1: wc+head, slide 2: wc+head-fails, no slide 3); got %d", len(exec.calls))
+	}
+}
+
+// --- segment-encode error message + post-encode size check ---
+
+// TestSlidesNarrate_SegmentTransportError_HonestMessage pins the fix for
+// the misleading "ffmpeg segment N failed (exit 0)" message that
+// appeared when ec.Exec returned err != nil but res.ExitCode was the
+// zero value. The new message must surface the actual transport error
+// and explicitly say ffmpeg did NOT return a real exit code, so
+// operators stop chasing imaginary ffmpeg bugs.
+func TestSlidesNarrate_SegmentTransportError_HonestMessage(t *testing.T) {
+	pack := SlidesNarrate(nil, nil, nil)
+	artifacts := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack:    pack,
+		Input:   json.RawMessage(`{"markdown":"---\nmarp: true\n---\n\n# Slide","allow_silent_output":true}`),
+		Session: &session.Session{ID: "s"},
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec: func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+			script := ""
+			if len(req.Cmd) >= 3 {
+				script = req.Cmd[2]
+			}
+			switch {
+			case strings.Contains(script, "-loop"):
+				// THE bug: transport error with default ExitCode = 0.
+				return session.ExecResult{}, errors.New("docker exec: connection reset by peer")
+			case strings.Contains(script, "ffprobe"):
+				return session.ExecResult{Stdout: []byte("5.0\n")}, nil
+			case strings.Contains(script, "wc -c < "):
+				return session.ExecResult{Stdout: []byte("65536\n")}, nil
+			case strings.Contains(script, "head -c 8 "):
+				return session.ExecResult{Stdout: []byte(pngMagicHex)}, nil
+			default:
+				return session.ExecResult{}, nil
+			}
+		},
+		Artifacts: artifacts,
+	}
+	_, err := pack.Handler(context.Background(), ec)
+	var pe *packs.PackError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *packs.PackError; got %T (%v)", err, err)
+	}
+	if pe.Code != packs.CodeHandlerFailed {
+		t.Errorf("transport error must surface as CodeHandlerFailed; got %s", pe.Code)
+	}
+	// Must NOT include the misleading "exit 0" phrase.
+	if strings.Contains(pe.Message, "exit 0") {
+		t.Errorf("message must NOT print 'exit 0' on a transport error — this was the original bug. got %q", pe.Message)
+	}
+	// Must call out the transport error explicitly so operators stop
+	// chasing imaginary ffmpeg bugs.
+	if !strings.Contains(pe.Message, "transport error") {
+		t.Errorf("message must explain the transport error; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "did NOT return a real exit code") {
+		t.Errorf("message must explicitly tell operators ffmpeg did not exit; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "connection reset by peer") {
+		t.Errorf("message must surface the underlying transport error verbatim; got %q", pe.Message)
+	}
+}
+
+// TestSlidesNarrate_SegmentExitZeroEmptyOutput_PostCheckFires pins the
+// new post-encode size check: ffmpeg exit 0 with a 0-byte segment file
+// must surface as CodeHandlerFailed naming the segment, instead of
+// flowing into concat and surfacing as a misleading concat error.
+func TestSlidesNarrate_SegmentExitZeroEmptyOutput_PostCheckFires(t *testing.T) {
+	pack := SlidesNarrate(nil, nil, nil)
+	artifacts := packs.NewMemoryArtifactStore()
+	// Track which wc-c paths were stat'd so we can distinguish
+	// PNG-input checks (deck.NNN.png) from post-encode output checks
+	// (seg-NNN.mp4 / final.mp4).
+	ec := &packs.ExecutionContext{
+		Pack:    pack,
+		Input:   json.RawMessage(`{"markdown":"---\nmarp: true\n---\n\n# Slide","allow_silent_output":true}`),
+		Session: &session.Session{ID: "s"},
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec: func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+			script := ""
+			if len(req.Cmd) >= 3 {
+				script = req.Cmd[2]
+			}
+			switch {
+			case strings.Contains(script, "-loop"):
+				// ffmpeg "succeeds" — exit 0 with no output.
+				return session.ExecResult{}, nil
+			case strings.Contains(script, "ffprobe"):
+				return session.ExecResult{Stdout: []byte("5.0\n")}, nil
+			case strings.Contains(script, "head -c 8 "):
+				return session.ExecResult{Stdout: []byte(pngMagicHex)}, nil
+			case strings.Contains(script, "wc -c < "):
+				// PNG inputs pass (deck.NNN.png); segment output empty.
+				if strings.Contains(script, "seg-") {
+					return session.ExecResult{Stdout: []byte("0\n")}, nil
+				}
+				return session.ExecResult{Stdout: []byte("65536\n")}, nil
+			default:
+				return session.ExecResult{}, nil
+			}
+		},
+		Artifacts: artifacts,
+	}
+	_, err := pack.Handler(context.Background(), ec)
+	var pe *packs.PackError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *packs.PackError; got %T (%v)", err, err)
+	}
+	if pe.Code != packs.CodeHandlerFailed {
+		t.Errorf("expected CodeHandlerFailed; got %s", pe.Code)
+	}
+	if !strings.Contains(pe.Message, "ffmpeg segment") {
+		t.Errorf("message must name the failing step; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "0 bytes") {
+		t.Errorf("message must surface the actual size so operators can sanity-check; got %q", pe.Message)
+	}
+	if strings.Contains(pe.Message, "concat") {
+		t.Errorf("post-encode check must surface at the SEGMENT step, not flow into concat; got %q", pe.Message)
+	}
+}
+
+// TestSlidesNarrate_ConcatTransportError_HonestMessage mirrors the
+// segment-path transport-error test for the concat step (line 616
+// bug). Same shape, different ffmpeg call site.
+func TestSlidesNarrate_ConcatTransportError_HonestMessage(t *testing.T) {
+	pack := SlidesNarrate(nil, nil, nil)
+	artifacts := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack:    pack,
+		Input:   json.RawMessage(`{"markdown":"---\nmarp: true\n---\n\n# Slide","allow_silent_output":true}`),
+		Session: &session.Session{ID: "s"},
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec: func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+			script := ""
+			if len(req.Cmd) >= 3 {
+				script = req.Cmd[2]
+			}
+			switch {
+			// Match the ffmpeg concat command specifically, not any
+			// script that mentions "concat" — the prior `cat >`
+			// writing /tmp/concat.txt also mentions it.
+			case strings.Contains(script, "ffmpeg -y -f concat"):
+				return session.ExecResult{}, errors.New("docker exec: container exited mid-call")
+			case strings.Contains(script, "ffprobe"):
+				return session.ExecResult{Stdout: []byte("5.0\n")}, nil
+			case strings.Contains(script, "head -c 8 "):
+				return session.ExecResult{Stdout: []byte(pngMagicHex)}, nil
+			case strings.Contains(script, "wc -c < "):
+				return session.ExecResult{Stdout: []byte("65536\n")}, nil
+			default:
+				return session.ExecResult{}, nil
+			}
+		},
+		Artifacts: artifacts,
+	}
+	_, err := pack.Handler(context.Background(), ec)
+	var pe *packs.PackError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *packs.PackError; got %T (%v)", err, err)
+	}
+	if pe.Code != packs.CodeHandlerFailed {
+		t.Errorf("expected CodeHandlerFailed; got %s", pe.Code)
+	}
+	if strings.Contains(pe.Message, "exit 0") {
+		t.Errorf("concat message must NOT print 'exit 0' on transport error; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "concat") {
+		t.Errorf("message must name the concat step; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "transport error") {
+		t.Errorf("message must explain the transport error; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "container exited mid-call") {
+		t.Errorf("message must surface the underlying transport error; got %q", pe.Message)
+	}
+}
+
+// TestRequireNonEmptyOutput_Healthy is the happy-path baseline.
+func TestRequireNonEmptyOutput_Healthy(t *testing.T) {
+	exec := func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		return session.ExecResult{Stdout: []byte("65536\n")}, nil
+	}
+	ec := &packs.ExecutionContext{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:   exec,
+	}
+	if err := requireNonEmptyOutput(context.Background(), ec, "/tmp/x.mp4", minEncodedSegmentBytes, "test"); err != nil {
+		t.Errorf("healthy stat should pass; got %v", err)
+	}
+}
+
+// TestRequireNonEmptyOutput_MissingFile_HandlerFailed — wc-c exits 1.
+func TestRequireNonEmptyOutput_MissingFile_HandlerFailed(t *testing.T) {
+	exec := func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		return session.ExecResult{ExitCode: 1, Stderr: []byte("wc: No such file")}, nil
+	}
+	ec := &packs.ExecutionContext{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:   exec,
+	}
+	err := requireNonEmptyOutput(context.Background(), ec, "/tmp/x.mp4", minEncodedSegmentBytes, "ffmpeg segment 0")
+	var pe *packs.PackError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *packs.PackError; got %T", err)
+	}
+	if pe.Code != packs.CodeHandlerFailed {
+		t.Errorf("expected CodeHandlerFailed; got %s", pe.Code)
+	}
+	if !strings.Contains(pe.Message, "ffmpeg segment 0") {
+		t.Errorf("must name the step label; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "produced no output") {
+		t.Errorf("must explain missing output; got %q", pe.Message)
+	}
+}
+
+// TestRequireNonEmptyOutput_BelowFloor_HandlerFailed — wc-c succeeds
+// but reports a size below the floor.
+func TestRequireNonEmptyOutput_BelowFloor_HandlerFailed(t *testing.T) {
+	exec := func(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
+		return session.ExecResult{Stdout: []byte("100\n")}, nil
+	}
+	ec := &packs.ExecutionContext{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:   exec,
+	}
+	err := requireNonEmptyOutput(context.Background(), ec, "/tmp/x.mp4", minEncodedSegmentBytes, "ffmpeg concat")
+	var pe *packs.PackError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *packs.PackError; got %T", err)
+	}
+	if pe.Code != packs.CodeHandlerFailed {
+		t.Errorf("expected CodeHandlerFailed; got %s", pe.Code)
+	}
+	if !strings.Contains(pe.Message, "100 bytes") {
+		t.Errorf("must surface the actual size; got %q", pe.Message)
+	}
+	if !strings.Contains(pe.Message, "ffmpeg concat") {
+		t.Errorf("must name the step label; got %q", pe.Message)
 	}
 }

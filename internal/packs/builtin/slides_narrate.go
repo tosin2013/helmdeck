@@ -174,6 +174,7 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				"plan":                   "string",
 				"hero_image_prompt":      "string",
 				"hero_image_model":       "string",
+				"mermaid":                "boolean",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -263,6 +264,15 @@ type slidesNarrateInput struct {
 	// blank intro slide would break the audio pipeline.
 	HeroImagePrompt string `json:"hero_image_prompt"`
 	HeroImageModel  string `json:"hero_image_model"`
+	// Mermaid controls whether ```mermaid fenced blocks are
+	// pre-rendered to inline SVG via mmdc before Marp sees the deck.
+	// Default true (nil ⇒ on). Mirrors slides.render's same field —
+	// without this, Marp's headless Chromium leaves Mermaid blocks
+	// blank in the per-slide PNGs and the narrated video has missing
+	// diagrams. Pointer so the JSON shape is identical to slides.render
+	// and explicit `false` opts out for decks that don't need Mermaid
+	// (saves ~500ms of mmdc startup per diagram).
+	Mermaid *bool `json:"mermaid,omitempty"`
 }
 
 func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuard) packs.HandlerFunc {
@@ -310,6 +320,26 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			} else {
 				markdown = heroBlock + markdown
 			}
+		}
+
+		// Mermaid pre-processing — substitute ```mermaid fenced blocks
+		// with inline-SVG <img> data-URIs so Marp's headless Chromium
+		// (which has no built-in Mermaid renderer) produces per-slide
+		// PNGs with diagrams visible. Without this, Mermaid blocks land
+		// in the deck as raw code or render blank, and the narrated
+		// video has missing diagrams. Default on (`Mermaid == nil` ⇒ on);
+		// explicit `false` opts out for decks without diagrams (saves
+		// ~500ms of mmdc startup per diagram). Mirrors slides.render's
+		// same field — the actual rewriter (preprocessMermaidFences) is
+		// the same helper, package-level visible because both packs
+		// live in the same `builtin` package.
+		mermaidOn := in.Mermaid == nil || *in.Mermaid
+		if mermaidOn && !in.DryRun {
+			rewritten, perr := preprocessMermaidFences(ctx, ec.Exec, markdown)
+			if perr != nil {
+				return nil, perr
+			}
+			markdown = rewritten
 		}
 
 		// Defaults.
@@ -663,6 +693,24 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 		}
 
 		// 7. Concatenate all segments.
+		//
+		// Audio is RE-ENCODED (`-c:a aac -b:a 192k`) at concat time;
+		// video is stream-copied (`-c:v copy`). Reason: per-segment
+		// AAC frames don't align with segment boundaries (AAC's
+		// 1024-sample frame size rarely divides cleanly into a
+		// segment's TTS-driven duration). With `-c copy` on both
+		// streams, the concat demuxer splices at the wrong-boundary
+		// audio frames and produces audible mid-segment dropouts —
+		// the operator-reported "audio goes in and out within slides"
+		// failure mode. Re-encoding audio re-aligns the frames at
+		// concat time, eliminating the dropouts at the cost of a
+		// single AAC re-encode pass over the whole audio track (cheap
+		// — total audio length is typically 5-15 min, which AAC
+		// encodes in seconds, vs. the 5-15 minutes the per-segment
+		// h264 encodes already spent on video). Video stays
+		// stream-copy because per-segment h264 IS identical across
+		// segments (same libx264 invocation, same params) and the GOP
+		// structure aligns to keyframes at each segment start.
 		ec.Report(90, "concatenating final video")
 		var concatList strings.Builder
 		for i := range slides {
@@ -672,13 +720,14 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 				Message: fmt.Sprintf("write concat list: %v", err)}
 		}
+		const concatCmd = "ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt -c:v copy -c:a aac -b:a 192k /tmp/final.mp4"
 		concatRes, err := ec.Exec(ctx, session.ExecRequest{
-			Cmd: []string{"sh", "-c", "ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt -c copy /tmp/final.mp4"},
+			Cmd: []string{"sh", "-c", concatCmd},
 		})
 		if err != nil || concatRes.ExitCode != 0 {
 			stderr := strings.TrimSpace(string(concatRes.Stderr))
 			artKey := persistFfmpegStderr(ctx, ec, "ffmpeg-stderr-concat.txt",
-				"ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt -c copy /tmp/final.mp4", concatRes.Stderr)
+				concatCmd, concatRes.Stderr)
 			// Same honest-message fix as the segment path: a transport
 			// error (err != nil) zero-initializes concatRes.ExitCode, so
 			// the old message printed a misleading "exit 0".

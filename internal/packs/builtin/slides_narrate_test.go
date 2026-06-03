@@ -63,6 +63,12 @@ func (n *narrateExecScript) fn(_ context.Context, req session.ExecRequest) (sess
 		script = req.Cmd[2]
 	}
 	switch {
+	case strings.Contains(script, "mmdc"):
+		// preprocessMermaidFences shell wrapper runs mmdc and cats the
+		// SVG output. Return a tiny valid SVG so the rewrite produces a
+		// data-URI Marp can ingest. MUST come BEFORE the "cat >" case
+		// since the mmdc wrapper script contains both substrings.
+		return session.ExecResult{Stdout: []byte(`<svg xmlns="http://www.w3.org/2000/svg"><g/></svg>`)}, nil
 	case strings.Contains(script, "cat >"):
 		return session.ExecResult{}, nil
 	case strings.Contains(script, "marp"):
@@ -1506,5 +1512,181 @@ func TestPadSlideAudioToMin_StopsOnMidStepFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "pad exit") {
 		t.Errorf("error must surface the pad failure; got %q", err.Error())
+	}
+}
+
+// --- Mermaid pre-processing (parity with slides.render) ---
+
+// TestSlidesNarrate_MermaidFencePreprocessed — when the deck has a
+// ```mermaid block, the handler must run mmdc to produce SVG and
+// rewrite the markdown so what gets written to /tmp/helmdeck-deck.md
+// (and ultimately handed to Marp) contains an inline-SVG <img>
+// data-URI in place of the fence. Without this, Marp's headless
+// Chromium leaves Mermaid blocks blank in per-slide PNGs.
+func TestSlidesNarrate_MermaidFencePreprocessed(t *testing.T) {
+	ex := &narrateExecScript{}
+	body := "---\nmarp: true\n---\n\n# Slide 1\n\n```mermaid\ngraph TD; A-->B;\n```\n\n---\n\n# Slide 2"
+	raw, _ := json.Marshal(map[string]any{"markdown": body, "allow_silent_output": true})
+	input := json.RawMessage(raw)
+	pack := SlidesNarrate(nil, nil, nil)
+	artifacts := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack:      pack,
+		Input:     input,
+		Session:   &session.Session{ID: "s"},
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:      ex.fn,
+		Artifacts: artifacts,
+	}
+	if _, err := pack.Handler(context.Background(), ec); err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	// Locate the script that wrote the markdown to the sidecar — its
+	// stdin is the post-rewrite markdown Marp will ingest.
+	var writeMarkdownStdin []byte
+	var sawMmdc bool
+	for _, req := range ex.calls {
+		if len(req.Cmd) >= 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" {
+			script := req.Cmd[2]
+			if strings.Contains(script, "mmdc") {
+				sawMmdc = true
+			}
+			if strings.Contains(script, "cat > '/tmp/helmdeck-deck.md'") {
+				writeMarkdownStdin = req.Stdin
+			}
+		}
+	}
+	if !sawMmdc {
+		t.Errorf("mmdc must run when the deck contains a ```mermaid fence; saw %d execs",
+			len(ex.calls))
+	}
+	if len(writeMarkdownStdin) == 0 {
+		t.Fatalf("expected a cat-write of /tmp/helmdeck-deck.md; none found")
+	}
+	piped := string(writeMarkdownStdin)
+	if strings.Contains(piped, "```mermaid") {
+		t.Errorf("markdown handed to Marp must NOT contain raw ```mermaid fence after preprocessing:\n%s", piped)
+	}
+	if !strings.Contains(piped, `<img src="data:image/svg+xml;base64,`) {
+		t.Errorf("markdown handed to Marp must contain inline-SVG <img> data-URI:\n%s", piped)
+	}
+}
+
+// TestSlidesNarrate_MermaidOptOut — when the caller passes
+// `"mermaid": false`, the preprocessor must NOT run even on a deck
+// that contains a fence. Mirrors slides.render's same opt-out.
+func TestSlidesNarrate_MermaidOptOut(t *testing.T) {
+	ex := &narrateExecScript{}
+	body := "---\nmarp: true\n---\n\n# Slide\n\n```mermaid\ngraph TD; A-->B;\n```"
+	raw, _ := json.Marshal(map[string]any{"markdown": body, "allow_silent_output": true, "mermaid": false})
+	input := json.RawMessage(raw)
+	pack := SlidesNarrate(nil, nil, nil)
+	artifacts := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack:      pack,
+		Input:     input,
+		Session:   &session.Session{ID: "s"},
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:      ex.fn,
+		Artifacts: artifacts,
+	}
+	if _, err := pack.Handler(context.Background(), ec); err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	for _, req := range ex.calls {
+		if len(req.Cmd) >= 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" {
+			if strings.Contains(req.Cmd[2], "mmdc") {
+				t.Errorf("mmdc must NOT run when mermaid:false is passed; got script %q", req.Cmd[2])
+			}
+		}
+	}
+}
+
+// TestSlidesNarrate_NoMermaidFenceSkipsMmdc — a deck without any
+// ```mermaid blocks must NOT incur the mmdc startup cost even with
+// mermaid enabled (the default). preprocessMermaidFences early-returns
+// on zero matches; this test pins that behavior at the slides.narrate
+// boundary.
+func TestSlidesNarrate_NoMermaidFenceSkipsMmdc(t *testing.T) {
+	ex := &narrateExecScript{}
+	input := json.RawMessage(`{"markdown":"---\nmarp: true\n---\n\n# Title\n\nPlain markdown, no diagrams here.","allow_silent_output":true}`)
+	pack := SlidesNarrate(nil, nil, nil)
+	artifacts := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack:      pack,
+		Input:     input,
+		Session:   &session.Session{ID: "s"},
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:      ex.fn,
+		Artifacts: artifacts,
+	}
+	if _, err := pack.Handler(context.Background(), ec); err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	for _, req := range ex.calls {
+		if len(req.Cmd) >= 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" {
+			if strings.Contains(req.Cmd[2], "mmdc") {
+				t.Errorf("mmdc must NOT run for a deck without ```mermaid blocks; got %q", req.Cmd[2])
+			}
+		}
+	}
+}
+
+// TestSlidesNarrate_ConcatReencodesAudio is the regression guard for
+// the audio-dropouts-mid-slide failure mode. Per-segment AAC frames
+// don't align with segment boundaries, so concat with `-c copy` on
+// the audio stream produces audible mid-segment dropouts. The fix is
+// to re-encode audio (`-c:a aac -b:a 192k`) while keeping video
+// stream-copy (`-c:v copy`). This test pins the new ffmpeg flag
+// shape so a future "make concat faster" refactor doesn't quietly
+// re-introduce the bug.
+func TestSlidesNarrate_ConcatReencodesAudio(t *testing.T) {
+	ex := &narrateExecScript{}
+	raw, _ := json.Marshal(map[string]any{
+		"markdown":            "---\nmarp: true\n---\n\n# Slide",
+		"allow_silent_output": true,
+	})
+	pack := SlidesNarrate(nil, nil, nil)
+	artifacts := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack:      pack,
+		Input:     json.RawMessage(raw),
+		Session:   &session.Session{ID: "s"},
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:      ex.fn,
+		Artifacts: artifacts,
+	}
+	if _, err := pack.Handler(context.Background(), ec); err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	// Find the ffmpeg concat invocation.
+	var concatScript string
+	for _, req := range ex.calls {
+		if len(req.Cmd) >= 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" {
+			if strings.Contains(req.Cmd[2], "ffmpeg -y -f concat") {
+				concatScript = req.Cmd[2]
+				break
+			}
+		}
+	}
+	if concatScript == "" {
+		t.Fatal("no ffmpeg concat invocation observed")
+	}
+	// Video stream-copy is preserved (fast).
+	if !strings.Contains(concatScript, "-c:v copy") {
+		t.Errorf("concat must keep video stream-copy (-c:v copy); got %q", concatScript)
+	}
+	// Audio MUST be re-encoded (not stream-copied) so AAC frame
+	// boundaries realign, eliminating mid-segment dropouts.
+	if !strings.Contains(concatScript, "-c:a aac") {
+		t.Errorf("concat must re-encode audio (-c:a aac) to fix mid-segment dropouts; got %q", concatScript)
+	}
+	if !strings.Contains(concatScript, "-b:a 192k") {
+		t.Errorf("concat audio bitrate must match per-segment 192k; got %q", concatScript)
+	}
+	// The legacy `-c copy` (which would stream-copy both streams)
+	// must NOT appear — the operator-reported bug shape.
+	if strings.Contains(concatScript, "-c copy") {
+		t.Errorf("concat must NOT use legacy `-c copy` (stream-copies both streams and re-introduces dropouts); got %q", concatScript)
 	}
 }

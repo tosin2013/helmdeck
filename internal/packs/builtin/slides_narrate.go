@@ -693,6 +693,24 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 		}
 
 		// 7. Concatenate all segments.
+		//
+		// Audio is RE-ENCODED (`-c:a aac -b:a 192k`) at concat time;
+		// video is stream-copied (`-c:v copy`). Reason: per-segment
+		// AAC frames don't align with segment boundaries (AAC's
+		// 1024-sample frame size rarely divides cleanly into a
+		// segment's TTS-driven duration). With `-c copy` on both
+		// streams, the concat demuxer splices at the wrong-boundary
+		// audio frames and produces audible mid-segment dropouts —
+		// the operator-reported "audio goes in and out within slides"
+		// failure mode. Re-encoding audio re-aligns the frames at
+		// concat time, eliminating the dropouts at the cost of a
+		// single AAC re-encode pass over the whole audio track (cheap
+		// — total audio length is typically 5-15 min, which AAC
+		// encodes in seconds, vs. the 5-15 minutes the per-segment
+		// h264 encodes already spent on video). Video stays
+		// stream-copy because per-segment h264 IS identical across
+		// segments (same libx264 invocation, same params) and the GOP
+		// structure aligns to keyframes at each segment start.
 		ec.Report(90, "concatenating final video")
 		var concatList strings.Builder
 		for i := range slides {
@@ -702,13 +720,14 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 				Message: fmt.Sprintf("write concat list: %v", err)}
 		}
+		const concatCmd = "ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt -c:v copy -c:a aac -b:a 192k /tmp/final.mp4"
 		concatRes, err := ec.Exec(ctx, session.ExecRequest{
-			Cmd: []string{"sh", "-c", "ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt -c copy /tmp/final.mp4"},
+			Cmd: []string{"sh", "-c", concatCmd},
 		})
 		if err != nil || concatRes.ExitCode != 0 {
 			stderr := strings.TrimSpace(string(concatRes.Stderr))
 			artKey := persistFfmpegStderr(ctx, ec, "ffmpeg-stderr-concat.txt",
-				"ffmpeg -y -f concat -safe 0 -i /tmp/concat.txt -c copy /tmp/final.mp4", concatRes.Stderr)
+				concatCmd, concatRes.Stderr)
 			// Same honest-message fix as the segment path: a transport
 			// error (err != nil) zero-initializes concatRes.ExitCode, so
 			// the old message printed a misleading "exit 0".

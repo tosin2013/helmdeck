@@ -1631,3 +1631,62 @@ func TestSlidesNarrate_NoMermaidFenceSkipsMmdc(t *testing.T) {
 		}
 	}
 }
+
+// TestSlidesNarrate_ConcatReencodesAudio is the regression guard for
+// the audio-dropouts-mid-slide failure mode. Per-segment AAC frames
+// don't align with segment boundaries, so concat with `-c copy` on
+// the audio stream produces audible mid-segment dropouts. The fix is
+// to re-encode audio (`-c:a aac -b:a 192k`) while keeping video
+// stream-copy (`-c:v copy`). This test pins the new ffmpeg flag
+// shape so a future "make concat faster" refactor doesn't quietly
+// re-introduce the bug.
+func TestSlidesNarrate_ConcatReencodesAudio(t *testing.T) {
+	ex := &narrateExecScript{}
+	raw, _ := json.Marshal(map[string]any{
+		"markdown":            "---\nmarp: true\n---\n\n# Slide",
+		"allow_silent_output": true,
+	})
+	pack := SlidesNarrate(nil, nil, nil)
+	artifacts := packs.NewMemoryArtifactStore()
+	ec := &packs.ExecutionContext{
+		Pack:      pack,
+		Input:     json.RawMessage(raw),
+		Session:   &session.Session{ID: "s"},
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:      ex.fn,
+		Artifacts: artifacts,
+	}
+	if _, err := pack.Handler(context.Background(), ec); err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	// Find the ffmpeg concat invocation.
+	var concatScript string
+	for _, req := range ex.calls {
+		if len(req.Cmd) >= 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" {
+			if strings.Contains(req.Cmd[2], "ffmpeg -y -f concat") {
+				concatScript = req.Cmd[2]
+				break
+			}
+		}
+	}
+	if concatScript == "" {
+		t.Fatal("no ffmpeg concat invocation observed")
+	}
+	// Video stream-copy is preserved (fast).
+	if !strings.Contains(concatScript, "-c:v copy") {
+		t.Errorf("concat must keep video stream-copy (-c:v copy); got %q", concatScript)
+	}
+	// Audio MUST be re-encoded (not stream-copied) so AAC frame
+	// boundaries realign, eliminating mid-segment dropouts.
+	if !strings.Contains(concatScript, "-c:a aac") {
+		t.Errorf("concat must re-encode audio (-c:a aac) to fix mid-segment dropouts; got %q", concatScript)
+	}
+	if !strings.Contains(concatScript, "-b:a 192k") {
+		t.Errorf("concat audio bitrate must match per-segment 192k; got %q", concatScript)
+	}
+	// The legacy `-c copy` (which would stream-copy both streams)
+	// must NOT appear — the operator-reported bug shape.
+	if strings.Contains(concatScript, "-c copy") {
+		t.Errorf("concat must NOT use legacy `-c copy` (stream-copies both streams and re-introduces dropouts); got %q", concatScript)
+	}
+}

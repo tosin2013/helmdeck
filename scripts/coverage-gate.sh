@@ -71,7 +71,7 @@ declare -A FLOORS=(
   ["internal/llmcontext"]=90
   ["internal/gateway"]=88
   ["internal/packs/builtin"]=80
-  ["internal/packs"]=80
+  ["internal/packs"]=87
   ["internal/api"]=80
   ["internal/pipelines"]=80
 )

@@ -66,13 +66,17 @@ jobs:
           go-version: '1.26.x'
           cache: true
       - name: golangci-lint
-        # Pinned to a recent release that supports v2 config schema.
-        # When bumping: keep the major in sync with the schema version
-        # in .golangci.yml. The action handles caching the lint binary
-        # so re-running the workflow on the same SHA is fast.
-        uses: golangci/golangci-lint-action@v6
+        # Action v8 + linter v2.x — they share a major version, and
+        # our .golangci.yml uses the v2 config schema. The previous
+        # action-v6 + linter-v1.64.0 pairing 404'd because v1.64.0
+        # itself was never published (v1.64 line starts at v1.64.2).
+        # When bumping the linter: keep the major in sync with both
+        # the action AND the schema version in .golangci.yml. The
+        # action caches the lint binary so re-runs on the same SHA
+        # are fast.
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: v1.64.0
+          version: v2.12.2
           args: --timeout=5m
 
   compose-lint:

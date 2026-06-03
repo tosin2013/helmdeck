@@ -26,10 +26,24 @@ jobs:
           cache: true
 
       - name: go vet
-        run: go vet ./...
+        run: go vet ./internal/... ./cmd/...
 
       - name: go test (race)
-        run: go test -race -count=1 -coverprofile=coverage.txt ./...
+        # Restricted to ./internal/... ./cmd/... so the lint/build
+        # passes don't trip on the website/build/assets/ tree —
+        # those are Docusaurus-bundled .go asset files that
+        # reference internal/api symbols but are not part of the
+        # go.mod build module. Same scope as the coverage gate
+        # below so the percentages line up with the gate's view.
+        run: go test -race -count=1 -coverprofile=coverage.txt -timeout=240s ./internal/... ./cmd/...
+
+      - name: coverage gate (per-package floors)
+        # Statement-weighted per-package coverage check. Fails the
+        # build if any tracked package drops below its declared floor.
+        # Floors and the rationale for each are documented in
+        # scripts/coverage-gate.sh and docs/howto/maintain-coverage-gate.md.
+        # PRs A-D of the v0.24.0 reliability arc ratchet these up.
+        run: ./scripts/coverage-gate.sh coverage.txt
 
       - name: build
         run: make build
@@ -41,6 +55,38 @@ jobs:
           name: coverage
           path: coverage.txt
           if-no-files-found: ignore
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          cache: true
+      - name: golangci-lint
+        # Action v8 + linter v2.x — they share a major version, and
+        # our .golangci.yml uses the v2 config schema. The previous
+        # action-v6 + linter-v1.64.0 pairing 404'd because v1.64.0
+        # itself was never published (v1.64 line starts at v1.64.2).
+        # When bumping the linter: keep the major in sync with both
+        # the action AND the schema version in .golangci.yml. The
+        # action caches the lint binary so re-runs on the same SHA
+        # are fast.
+        #
+        # `only-new-issues: true` ratchets the gate the same way the
+        # coverage-gate.sh script does — PR A enables the linter
+        # without forcing the cleanup of ~100 pre-existing findings
+        # in code paths this PR doesn't touch. The gate still blocks
+        # NEW lint issues a PR introduces, so backsliding is loud.
+        # Subsequent reliability-arc PRs (B-D) can pay down the
+        # backlog without one PR carrying the whole burden.
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+          only-new-issues: true
 
   compose-lint:
     name: compose config (image-mode + source-build) (#134)

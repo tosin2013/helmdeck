@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tosin2013/helmdeck/internal/gateway"
+	"github.com/tosin2013/helmdeck/internal/session"
+	"github.com/tosin2013/helmdeck/internal/session/fake"
 	"github.com/tosin2013/helmdeck/internal/store"
 	"github.com/tosin2013/helmdeck/internal/vault"
 	"github.com/tosin2013/helmdeck/internal/voices"
@@ -145,5 +149,161 @@ func TestVoiceListerCachingAdapter_PropagatesVaultErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "credential not found") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestSessionListerAdapter_List covers the helmdeck://sessions adapter:
+// it must shape session.Session into mcp.SessionView (id/status/image/
+// created_at) and propagate runtime errors. An empty runtime returns []
+// so the resource never renders as `null` on the MCP wire.
+func TestSessionListerAdapter_List(t *testing.T) {
+	rt := fake.New()
+	a := sessionListerAdapter{rt: rt}
+
+	out, err := a.List(context.Background())
+	if err != nil {
+		t.Fatalf("empty List: %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("empty runtime List = %+v; want []", out)
+	}
+
+	s, err := rt.Create(context.Background(), session.Spec{Image: "browser:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = a.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("want 1 view, got %d (%+v)", len(out), out)
+	}
+	v := out[0]
+	if v.ID != s.ID || v.Image != "browser:1" || v.Status != string(session.StatusRunning) {
+		t.Errorf("view = %+v; want id=%s image=browser:1 status=running", v, s.ID)
+	}
+	if v.CreatedAt == "" {
+		t.Error("CreatedAt must be RFC3339-formatted, got empty")
+	}
+	if _, err := time.Parse(time.RFC3339, v.CreatedAt); err != nil {
+		t.Errorf("CreatedAt %q is not RFC3339: %v", v.CreatedAt, err)
+	}
+}
+
+// listerErr is a session.Runtime whose List returns a fixed error so we
+// can exercise the error-propagation branch of sessionListerAdapter.
+// The other Runtime methods are unused in this test; embedding fake's
+// behavior would force us to seed a session we don't want.
+type listerErrRuntime struct {
+	session.Runtime
+	err error
+}
+
+func (r listerErrRuntime) List(_ context.Context) ([]*session.Session, error) {
+	return nil, r.err
+}
+
+func TestSessionListerAdapter_List_PropagatesRuntimeError(t *testing.T) {
+	want := errors.New("docker daemon unreachable")
+	a := sessionListerAdapter{rt: listerErrRuntime{err: want}}
+	_, err := a.List(context.Background())
+	if !errors.Is(err, want) {
+		t.Errorf("List error = %v; want %v", err, want)
+	}
+}
+
+// TestImageModelListerAdapter_List covers the helmdeck://image-models
+// adapter — the constructor (which today wires the in-tree static
+// catalog) plus the per-Model → ImageModelView reshape.
+func TestImageModelListerAdapter_List(t *testing.T) {
+	a := newImageModelListerAdapter()
+	out, err := a.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("static catalog must surface at least one model")
+	}
+	// The catalog is curated cheapest-first; assert the first entry is
+	// a fal-ai/flux/* family entry so the adapter is preserving order
+	// rather than reshuffling under us.
+	if !strings.HasPrefix(out[0].ID, "fal-ai/") {
+		t.Errorf("first model id = %q; want fal-ai/* (catalog is ordered cheapest-first)", out[0].ID)
+	}
+	for _, m := range out {
+		if m.ID == "" || m.Engine == "" || m.Provider == "" {
+			t.Errorf("incomplete view: %+v", m)
+		}
+	}
+}
+
+// stubGWProvider is the minimal gateway.Provider needed to exercise
+// modelListerAdapter — only Models() is called by AllModels.
+type stubGWProvider struct {
+	name   string
+	models []string
+	err    error
+}
+
+func (p stubGWProvider) Name() string { return p.name }
+func (p stubGWProvider) Models(_ context.Context) ([]string, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	return p.models, nil
+}
+func (p stubGWProvider) ChatCompletion(_ context.Context, _ gateway.ChatRequest) (gateway.ChatResponse, error) {
+	return gateway.ChatResponse{}, errors.New("not used in this test")
+}
+
+// TestModelListerAdapter_List covers helmdeck://models — the gateway
+// formats IDs as "<provider>/<model>"; the adapter parses the first
+// segment back into ModelView.Provider so an agent can pin a model
+// AND know which gateway provider will resolve it.
+func TestModelListerAdapter_List(t *testing.T) {
+	reg := gateway.NewRegistry()
+	reg.Register(stubGWProvider{name: "openai", models: []string{"gpt-4o", "gpt-4o-mini"}})
+	reg.Register(stubGWProvider{name: "anthropic", models: []string{"claude-sonnet-4-6"}})
+
+	a := newModelListerAdapter(reg)
+	out, err := a.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(out) != 3 {
+		t.Fatalf("want 3 views (2 openai + 1 anthropic), got %d (%+v)", len(out), out)
+	}
+	byID := map[string]string{}
+	for _, v := range out {
+		byID[v.ID] = v.Provider
+	}
+	cases := map[string]string{
+		"openai/gpt-4o":               "openai",
+		"openai/gpt-4o-mini":          "openai",
+		"anthropic/claude-sonnet-4-6": "anthropic",
+	}
+	for id, wantProvider := range cases {
+		if got, ok := byID[id]; !ok {
+			t.Errorf("missing model id %q in output", id)
+		} else if got != wantProvider {
+			t.Errorf("model %q provider = %q; want %q", id, got, wantProvider)
+		}
+	}
+}
+
+func TestModelListerAdapter_List_PropagatesRegistryError(t *testing.T) {
+	reg := gateway.NewRegistry()
+	want := errors.New("upstream models endpoint timed out")
+	reg.Register(stubGWProvider{name: "openai", err: want})
+
+	a := newModelListerAdapter(reg)
+	_, err := a.List(context.Background())
+	if err == nil {
+		t.Fatal("want error from provider Models() to propagate")
+	}
+	// AllModels wraps with "provider <name>: <err>" — confirm both ends.
+	if !strings.Contains(err.Error(), "openai") || !errors.Is(err, want) {
+		t.Errorf("err = %v; want wrapped error containing provider name and original err", err)
 	}
 }

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -133,6 +134,150 @@ func TestWebhookResultBody(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("success body missing %q\n%s", want, got)
 		}
+	}
+}
+
+// TestDispatchWebhookPack_NoEngine — dispatch is a best-effort dropin
+// behind the synchronous webhook ack. When the engine isn't wired
+// (e.g. compose with packs disabled) the function must log and bail
+// rather than nil-deref.
+func TestDispatchWebhookPack_NoEngine(t *testing.T) {
+	deps := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	// Should not panic; the function bails on nil registry/engine.
+	dispatchWebhookPack(deps,
+		WebhookRule{Pack: "swe.solve"}, "issues",
+		json.RawMessage(`{}`), mkIssuePayload("swe-solve"), "del-1")
+}
+
+// TestDispatchWebhookPack_PackNotFound — registry wired but the
+// configured pack name doesn't exist. The function must log "pack not
+// found" and exit cleanly without nil-derefing on the post-comment
+// path that runs only on successful execution.
+func TestDispatchWebhookPack_PackNotFound(t *testing.T) {
+	reg := packs.NewPackRegistry()
+	eng := packs.New()
+	deps := Deps{
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PackRegistry: reg,
+		PackEngine:   eng,
+	}
+	dispatchWebhookPack(deps,
+		WebhookRule{Pack: "nonexistent.pack"}, "issues",
+		json.RawMessage(`{}`), mkIssuePayload("swe-solve"), "del-2")
+}
+
+// TestDispatchWebhookPack_HappyPath_AttemptsResultComment — register a
+// pack that succeeds, then dispatch an "issues" event. The function
+// must (a) execute the matched pack and (b) invoke postIssueResultComment
+// (which itself bails because there's no github credential or post_comment
+// pack in this test setup, but that's the documented best-effort
+// behaviour — the test asserts the call doesn't crash).
+func TestDispatchWebhookPack_HappyPath_AttemptsResultComment(t *testing.T) {
+	var executed bool
+	reg := packs.NewPackRegistry()
+	_ = reg.Register(&packs.Pack{
+		Name: "swe.solve", Version: "v1",
+		Handler: func(_ context.Context, _ *packs.ExecutionContext) (json.RawMessage, error) {
+			executed = true
+			return json.RawMessage(`{"success":true,"pr_url":"https://github.com/o/r/pull/1"}`), nil
+		},
+	})
+	eng := packs.New()
+	deps := Deps{
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PackRegistry: reg,
+		PackEngine:   eng,
+	}
+	dispatchWebhookPack(deps,
+		WebhookRule{Pack: "swe.solve", Args: json.RawMessage(`{"credential":"gh-pat"}`)},
+		"issues", json.RawMessage(`{}`), mkIssuePayload("swe-solve"), "del-3")
+	if !executed {
+		t.Error("matched pack handler was not called")
+	}
+}
+
+// TestPostIssueResultComment_EarlyReturns covers the three guard
+// branches that must short-circuit without touching the registry:
+//
+//  1. payload has no repo full_name → return (the webhook came from
+//     an event shape we don't model).
+//  2. payload has no issue number → same.
+//  3. rule has no credential in args → return after logging (no way
+//     to authenticate the back-comment without one).
+func TestPostIssueResultComment_EarlyReturns(t *testing.T) {
+	deps := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	// Missing repo full_name.
+	pNoRepo := webhookPayload{}
+	pNoRepo.Issue.Number = 7
+	postIssueResultComment(context.Background(), deps,
+		WebhookRule{}, pNoRepo, nil, nil)
+
+	// Missing issue number.
+	pNoIssue := webhookPayload{}
+	pNoIssue.Repo.FullName = "o/r"
+	postIssueResultComment(context.Background(), deps,
+		WebhookRule{}, pNoIssue, nil, nil)
+
+	// No credential in args → logs the skip and returns.
+	postIssueResultComment(context.Background(), deps,
+		WebhookRule{}, mkIssuePayload("swe-solve"), nil, nil)
+}
+
+// TestPostIssueResultComment_NoPostCommentPack — the rule supplies a
+// credential, but the github.post_comment pack isn't registered.
+// Function must log and exit cleanly.
+func TestPostIssueResultComment_NoPostCommentPack(t *testing.T) {
+	reg := packs.NewPackRegistry()
+	deps := Deps{
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PackRegistry: reg,
+	}
+	rule := WebhookRule{Args: json.RawMessage(`{"credential":"gh-pat"}`)}
+	postIssueResultComment(context.Background(), deps, rule,
+		mkIssuePayload("swe-solve"),
+		&packs.Result{Output: json.RawMessage(`{"success":true}`)}, nil)
+}
+
+// TestPostIssueResultComment_CallsPostCommentPack — register a
+// stub github.post_comment pack and assert it's invoked with a
+// well-formed body. This is the happy-path branch that takes
+// postIssueResultComment all the way through Execute.
+func TestPostIssueResultComment_CallsPostCommentPack(t *testing.T) {
+	var (
+		called   bool
+		gotInput map[string]any
+	)
+	reg := packs.NewPackRegistry()
+	_ = reg.Register(&packs.Pack{
+		Name: "github.post_comment", Version: "v1",
+		Handler: func(_ context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+			called = true
+			_ = json.Unmarshal(ec.Input, &gotInput)
+			return json.RawMessage(`{"ok":true}`), nil
+		},
+	})
+	eng := packs.New()
+	deps := Deps{
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PackRegistry: reg,
+		PackEngine:   eng,
+	}
+	rule := WebhookRule{Args: json.RawMessage(`{"credential":"gh-pat"}`)}
+	postIssueResultComment(context.Background(), deps, rule,
+		mkIssuePayload("swe-solve"),
+		&packs.Result{Output: json.RawMessage(`{"success":true,"pr_url":"https://github.com/o/r/pull/9"}`)},
+		nil)
+
+	if !called {
+		t.Fatal("github.post_comment handler was not invoked")
+	}
+	if gotInput["repo"] != "o/r" || gotInput["credential"] != "gh-pat" {
+		t.Errorf("unexpected pack input: %+v", gotInput)
+	}
+	body, _ := gotInput["body"].(string)
+	if !strings.Contains(body, "pull/9") {
+		t.Errorf("comment body should mention PR URL: %q", body)
 	}
 }
 

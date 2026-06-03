@@ -1,0 +1,109 @@
+# golangci-lint configuration.
+#
+# Wired by .github/workflows/ci.yml as the lint gate that catches what
+# coverage doesn't — shadowed variables, unchecked errors, dead code,
+# noisy-but-real staticcheck findings. The list is intentionally the
+# defaults plus a few additions; we'd rather have one or two false-
+# positives on a PR than miss the real bug class these linters
+# specialise in.
+#
+# When a finding is genuinely a false positive: prefer `//nolint:<name> // <reason>`
+# over disabling the linter package-wide. Reasons must explain WHY the
+# exception is correct (not "shut up linter"), so a future maintainer
+# can audit them.
+
+version: "2"
+
+run:
+  timeout: 5m
+  # Tests count for coverage; they should pass lint too.
+  tests: true
+
+linters:
+  default: none
+  enable:
+    # The "always on" trio: bugs the compiler doesn't catch.
+    - errcheck     # unchecked errors (the biggest category)
+    - govet        # standard `go vet` checks
+    - staticcheck  # advanced bug + simplification checks
+    # Quality-of-life: unused symbols and noisy redundancy.
+    - unused
+    - ineffassign  # assignments to a value that is never used
+  settings:
+    errcheck:
+      # Don't require checking these — too noisy and the unchecked
+      # error doesn't change observable behaviour.
+      #
+      # errcheck matches on the STATIC receiver type, not interface
+      # satisfaction, so `(io.Closer).Close` only catches calls whose
+      # compile-time type is io.Closer. Common concrete Close/Flush
+      # receivers (sql.DB, sql.Rows, io.PipeWriter, tabwriter, …) need
+      # explicit entries. Default-excluded functions
+      # (fmt.Print/Errorf/Sprint, bytes.Buffer.Write*) are still active —
+      # this list is APPENDED, not replacing.
+      exclude-functions:
+        # Interface forms — caught when the static type IS the interface.
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (io.WriteCloser).Close
+        - (net.Conn).Close
+        - (net/http.ResponseWriter).Write
+        # Concrete Close patterns flagged by the production tree.
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Stmt).Close
+        - (*database/sql.Conn).Close
+        - (*os.File).Close
+        - (*io.PipeReader).Close
+        - (*io.PipeWriter).Close
+        # Flush patterns — buffered writers in cmd/* and bridge.
+        - (*bufio.Writer).Flush
+        - (*text/tabwriter.Writer).Flush
+        # Best-effort writes to log/audit sinks where downstream-write
+        # failure is already surfaced via the sink's own error path.
+        - (*github.com/tosin2013/helmdeck/internal/audit.Writer).Write
+        # Standard fmt.Fprint family on arbitrary writers.
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+    staticcheck:
+      # PR A scopes staticcheck to the SA-prefix (genuine bug checks)
+      # and skips ST (style), S (simplifications), and QF (quick-fix
+      # suggestions). Those three categories surfaced ~33 pre-existing
+      # findings in a codebase that had never run staticcheck before —
+      # cleaning them up belongs in a focused style PR, not the
+      # coverage-gate PR. Subsequent PRs can opt categories in as the
+      # backlog drains.
+      #
+      # SA9003: empty branch — we use these for documentation in
+      # error-classification ladders.
+      checks: ["SA*", "-SA9003"]
+  # Paths the linters MUST NOT inspect. v2 schema requires this block
+  # to live under `linters:` (not at the document root as in v1). The
+  # website/ tree contains Docusaurus-bundled .go files that exist as
+  # asset artefacts, not source — they reference symbols from
+  # internal/api but aren't part of the build module (go.mod scopes
+  # them out). Linting them would produce reams of false positives.
+  exclusions:
+    generated: lax
+    rules:
+      - path: website/build/.*
+        linters:
+          - errcheck
+          - govet
+          - staticcheck
+          - unused
+          - ineffassign
+      - path: \.claude/worktrees/.*
+        linters:
+          - errcheck
+          - govet
+          - staticcheck
+          - unused
+          - ineffassign
+
+issues:
+  # Don't flag the same line twice across linters; pick the most
+  # specific one.
+  max-issues-per-linter: 0
+  max-same-issues: 0

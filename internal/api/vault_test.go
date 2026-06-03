@@ -185,6 +185,114 @@ func TestVault_DeleteRemovesCredential(t *testing.T) {
 	}
 }
 
+// TestVault_GetUnknownIDIs404 — Get on a non-existent id returns 404
+// not_found via writeVaultError's ErrNotFound branch.
+func TestVault_GetUnknownIDIs404(t *testing.T) {
+	h, _ := newVaultRouter(t)
+	rr := doVault(t, h, http.MethodGet, "/api/v1/vault/credentials/no-such-id", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+// TestVault_DeleteUnknownIDIs404 — Delete on a missing id surfaces
+// 404 (not 204) so the operator notices typos.
+func TestVault_DeleteUnknownIDIs404(t *testing.T) {
+	h, _ := newVaultRouter(t)
+	rr := doVault(t, h, http.MethodDelete, "/api/v1/vault/credentials/no-such-id", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+// TestVault_RotateUnknownIDIs404 — same for rotate.
+func TestVault_RotateUnknownIDIs404(t *testing.T) {
+	h, _ := newVaultRouter(t)
+	pt := base64.StdEncoding.EncodeToString([]byte("rotated"))
+	rr := doVault(t, h, http.MethodPut, "/api/v1/vault/credentials/no-such-id",
+		`{"plaintext_b64":"`+pt+`"}`)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+// TestVault_RotateBadJSON returns 400.
+func TestVault_RotateBadJSON(t *testing.T) {
+	h, _ := newVaultRouter(t)
+	body := `{"name":"x","type":"api_key","host_pattern":"h","plaintext_b64":"YQ=="}`
+	rr := doVault(t, h, http.MethodPost, "/api/v1/vault/credentials", body)
+	var rec vault.Record
+	_ = json.Unmarshal(rr.Body.Bytes(), &rec)
+
+	rr2 := doVault(t, h, http.MethodPut, "/api/v1/vault/credentials/"+rec.ID, `{nope`)
+	if rr2.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr2.Code)
+	}
+}
+
+// TestVault_RotateBadB64 — non-base64 plaintext is rejected.
+func TestVault_RotateBadB64(t *testing.T) {
+	h, _ := newVaultRouter(t)
+	body := `{"name":"x","type":"api_key","host_pattern":"h","plaintext_b64":"YQ=="}`
+	rr := doVault(t, h, http.MethodPost, "/api/v1/vault/credentials", body)
+	var rec vault.Record
+	_ = json.Unmarshal(rr.Body.Bytes(), &rec)
+
+	rr2 := doVault(t, h, http.MethodPut, "/api/v1/vault/credentials/"+rec.ID,
+		`{"plaintext_b64":"!!!not-b64!!!"}`)
+	if rr2.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr2.Code)
+	}
+}
+
+// TestVault_GrantBadJSON returns 400.
+func TestVault_GrantBadJSON(t *testing.T) {
+	h, _ := newVaultRouter(t)
+	body := `{"name":"x","type":"api_key","host_pattern":"h","plaintext_b64":"YQ=="}`
+	rr := doVault(t, h, http.MethodPost, "/api/v1/vault/credentials", body)
+	var rec vault.Record
+	_ = json.Unmarshal(rr.Body.Bytes(), &rec)
+
+	rr2 := doVault(t, h, http.MethodPost, "/api/v1/vault/credentials/"+rec.ID+"/grants", `{nope`)
+	if rr2.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr2.Code)
+	}
+}
+
+// TestVault_UsageEndpoint — GET /usage returns an empty list for a
+// fresh credential and wraps it under {"usage":[...],"count":0}.
+func TestVault_UsageEndpoint(t *testing.T) {
+	h, _ := newVaultRouter(t)
+	body := `{"name":"x","type":"api_key","host_pattern":"h","plaintext_b64":"YQ=="}`
+	rr := doVault(t, h, http.MethodPost, "/api/v1/vault/credentials", body)
+	var rec vault.Record
+	_ = json.Unmarshal(rr.Body.Bytes(), &rec)
+
+	rr2 := doVault(t, h, http.MethodGet, "/api/v1/vault/credentials/"+rec.ID+"/usage", "")
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("usage status = %d (%s)", rr2.Code, rr2.Body.String())
+	}
+	if !strings.Contains(rr2.Body.String(), `"count":0`) {
+		t.Errorf("usage body missing count:0: %s", rr2.Body.String())
+	}
+}
+
+// TestVault_ListWithTypeFilter — ?type=login returns only login
+// credentials (api_key-typed entries are excluded).
+func TestVault_ListWithTypeFilter(t *testing.T) {
+	h, _ := newVaultRouter(t)
+	body := `{"name":"k","type":"api_key","host_pattern":"h","plaintext_b64":"YQ=="}`
+	_ = doVault(t, h, http.MethodPost, "/api/v1/vault/credentials", body)
+	// Filter out the api_key entry by asking for login.
+	rr := doVault(t, h, http.MethodGet, "/api/v1/vault/credentials?type=login", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list status = %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `"count":0`) {
+		t.Errorf("login-typed list should be empty, got %s", rr.Body.String())
+	}
+}
+
 func TestVault_NoVaultConfigured503(t *testing.T) {
 	h := NewRouter(Deps{
 		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),

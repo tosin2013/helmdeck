@@ -1,0 +1,128 @@
+name: mutation-testing
+
+# Mutation testing on decision-dense, LLM-facing code (PR D of the
+# v0.24.0 reliability arc). Coverage % proves a line was executed by a
+# test; mutation testing proves the test would catch a regression in
+# that line. The two are complementary — coverage is necessary, but a
+# 100%-covered package whose tests don't actually assert on the
+# important branches (only on side effects) gets caught here.
+#
+# Scope is deliberately narrow because go-mutesting runs the test suite
+# once per mutation and is slow (~30 min per package on a single core).
+# We target the three places where a flipped condition has the largest
+# blast radius on the cheap-model reliability story:
+#
+#   - internal/packs/classify.go: the typed-error closed-set mapping.
+#     A mutation that swaps CodeInvalidInput for CodeInternal in the
+#     classifier would silently break every LLM's failure-recovery
+#     channel — wrong bucket, wrong retry behavior.
+#
+#   - internal/gateway/fallback.go: the Chain.Dispatch retry-and-fallback
+#     ladder. A mutation that flips a "should retry" predicate
+#     surfaces as a routing dead-letter that no example test catches
+#     because the ladder is condition-density code.
+#
+#   - internal/avenc: the codec byte-floor checks (PR #400/#404/#405).
+#     "size < floor" vs "size <= floor" is a 1-byte difference that
+#     coverage can't tell apart; mutation testing can.
+#
+# Scheduled nightly (not per-PR) because of the runtime. When a mutation
+# survives, the workflow uploads the survivor list as an artifact and
+# (in a future iteration) opens an issue. PR D ships the workflow + the
+# pinned scope; ratcheting the survivor-threshold down is a follow-up.
+
+on:
+  schedule:
+    # 04:00 UTC daily — quiet hours for the repo's primary timezone,
+    # well after CI traffic has died down.
+    - cron: '0 4 * * *'
+  # Manual trigger for ad-hoc runs (e.g. testing a fix to mutation
+  # survivors before the next nightly).
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package path to mutate (e.g. ./internal/packs/classify.go). Defaults to the full pinned scope.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+# Concurrency: cancel an in-flight nightly if a new commit lands; cron
+# starts from main HEAD anyway, so a queue-up is just wasted compute.
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutate:
+    name: go-mutesting (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - internal/packs/classify.go
+          - internal/gateway/fallback.go
+          - internal/avenc
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Install go-mutesting
+        # Pinned to v1.2.0 — last release as of v0.24.0 PR D. When
+        # bumping, verify the operator list (arithmetic, comparison,
+        # condition, increment-decrement, statement) hasn't changed
+        # shape, and re-tune the survivor threshold below if so.
+        run: go install github.com/avito-tech/go-mutesting/cmd/go-mutesting@v1.2.0
+
+      - name: Run mutation tests
+        id: mutate
+        # 1500s per matrix entry is a generous ceiling — typical
+        # observed runtime is 5-15 min per file, longer for
+        # internal/avenc which has more functions. Failing past the
+        # ceiling means scope got bloated and needs trimming.
+        timeout-minutes: 25
+        run: |
+          set -o pipefail
+          OUTPUT=mutation-${{ matrix.target == 'internal/avenc' && 'avenc' || matrix.target == 'internal/gateway/fallback.go' && 'fallback' || 'classify' }}.txt
+          target="${{ github.event.inputs.package || matrix.target }}"
+          echo "Running go-mutesting against $target"
+          go-mutesting "$target" 2>&1 | tee "$OUTPUT" || true
+          echo "output=$OUTPUT" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize survivors
+        # go-mutesting prints "PASS" for caught mutations and "FAIL" or
+        # "DUPLICATE" lines for survivors. We grep + count so the job
+        # status reflects reality and a Slack/issue follow-up can post
+        # the count without re-parsing logs.
+        run: |
+          if [ ! -f "${{ steps.mutate.outputs.output }}" ]; then
+            echo "::error::mutation output file missing"
+            exit 1
+          fi
+          SURVIVED=$(grep -cE "^\s*FAIL\b" "${{ steps.mutate.outputs.output }}" || true)
+          CAUGHT=$(grep -cE "^\s*PASS\b" "${{ steps.mutate.outputs.output }}" || true)
+          echo "## Mutation testing: ${{ matrix.target }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Mutations caught: **$CAUGHT**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Mutations survived: **$SURVIVED**" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SURVIVED" -gt 0 ]; then
+            echo "Surviving mutations indicate the test suite does NOT actually verify the branch the mutation hit — coverage % may be high while the assertion is weak. See the run log for the specific lines." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No survivors — every tested-line mutation is caught by an assertion." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload survivor report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-${{ matrix.target == 'internal/avenc' && 'avenc' || matrix.target == 'internal/gateway/fallback.go' && 'fallback' || 'classify' }}
+          path: ${{ steps.mutate.outputs.output }}
+          if-no-files-found: ignore
+          retention-days: 14

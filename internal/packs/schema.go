@@ -30,6 +30,13 @@ func (s BasicSchema) Validate(data json.RawMessage) error {
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return fmt.Errorf("input must be a JSON object: %w", err)
 	}
+	// `json.Unmarshal([]byte("null"), &obj)` succeeds with obj=nil —
+	// Go's decoder treats null as "no value" for map types. The
+	// docstring promises rejection of non-objects, so guard explicitly.
+	// Caught by schema_property_test.go's TestProperty_NonObjectInputAlwaysRejects.
+	if obj == nil {
+		return fmt.Errorf("input must be a JSON object: got null")
+	}
 	for _, k := range s.Required {
 		if _, ok := obj[k]; !ok {
 			return fmt.Errorf("missing required field %q", k)

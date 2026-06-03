@@ -39,14 +39,40 @@ if [[ ! -f "$COVERAGE_FILE" ]]; then
   exit 2
 fi
 
-# Per-package floors. Initial values match the v0.23.0 baseline rounded
-# down so PR A doesn't fail itself; PRs B/C/D ratchet these up.
+# Per-package floors. PRs A–D of the v0.24.0 reliability arc ratcheted
+# from baseline. PR D locks the floors at the empirical realistic level:
+#
+#   Critical (LLM-facing reliability) — 88-90% floors:
+#     - avenc (99.3 actual)        — codec/byte-floor guards are
+#                                     load-bearing for slides.narrate;
+#                                     a regression here breaks every
+#                                     ffmpeg-using pack at once.
+#     - llmcontext (92.1 actual)   — budget compaction; ADR 050.
+#     - gateway (88.1 actual)      — provider dispatch + fallback,
+#                                     bumped 85→88.
+#
+#   Infrastructure — 80% floors:
+#     - packs/builtin (80.5 actual) — original plan's 90 target proved
+#                                     aspirational; 80 is the floor the
+#                                     test surface supports without
+#                                     significant new mock infra.
+#     - api (80.1 actual)          — REST + MCP adapter surface.
+#     - pipelines (84.0 actual)    — NEW track in PR D; ADR 041 store +
+#                                     runner. 80 floor with ~4pp slack.
+#
+# Not yet tracked:
+#   - internal/mcp (69.5 actual) — below the 80% infra floor. Adding it
+#     now would fail the gate. Tracking + ratcheting is a v0.25.0 task
+#     scoped separately so PR D doesn't bundle a forced cleanup.
+#   - cmd/* — entry points with os.Exit/signal handling; integration-only.
+#   - *_fixtures.go / generated code — excluded by not listing here.
 declare -A FLOORS=(
   ["internal/avenc"]=90
   ["internal/llmcontext"]=90
-  ["internal/gateway"]=85
+  ["internal/gateway"]=88
   ["internal/packs/builtin"]=80
   ["internal/api"]=80
+  ["internal/pipelines"]=80
 )
 
 # Compute statement-weighted coverage for one package prefix.

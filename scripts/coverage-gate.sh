@@ -45,7 +45,7 @@ declare -A FLOORS=(
   ["internal/avenc"]=90
   ["internal/llmcontext"]=90
   ["internal/gateway"]=85
-  ["internal/packs/builtin"]=77
+  ["internal/packs/builtin"]=80
   ["internal/api"]=80
 )
 

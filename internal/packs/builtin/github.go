@@ -30,8 +30,12 @@ import (
 	"github.com/tosin2013/helmdeck/internal/vault"
 )
 
+// githubAPIBase is the GitHub REST API root. Var (not const) so tests
+// can point it at an httptest.NewServer stub — same pattern as
+// internal/voices.ElevenLabsBaseURL. Production never reassigns it.
+var githubAPIBase = "https://api.github.com"
+
 const (
-	githubAPIBase      = "https://api.github.com"
 	defaultGitHubCred  = "github-token"
 	githubAcceptHeader = "application/vnd.github+json"
 	githubAPIVersion   = "2022-11-28"

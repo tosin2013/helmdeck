@@ -366,6 +366,29 @@ func (r *Runtime) Terminate(ctx context.Context, id string) error {
 	return nil
 }
 
+// ExtendTimeout bumps the session's Spec.Timeout when newTimeout is
+// greater than the current value, so the watchdog uses the longer
+// deadline. No-op when newTimeout is less than or equal (the deadline
+// never shrinks on a pinned-session reuse). Returns ErrSessionNotFound
+// if the session is unknown. See the Runtime interface docstring for
+// the slides.narrate / repo.fetch shared-session motivation.
+//
+// Only Spec.Timeout is mutated. MemoryLimit, CPULimit, SHMSize, and
+// the container's actual runtime resources are frozen at creation by
+// Docker and cannot be changed on a live container without restart.
+func (r *Runtime) ExtendTimeout(_ context.Context, id string, newTimeout time.Duration) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[id]
+	if !ok {
+		return session.ErrSessionNotFound
+	}
+	if newTimeout > s.Spec.Timeout {
+		s.Spec.Timeout = newTimeout
+	}
+	return nil
+}
+
 // TerminateByRunID force-removes every helmdeck-managed container labeled
 // helmdeck.run_id=<runID> (set by the pipeline runner via Spec.Labels).
 // Returns the number actually killed. Uses the docker label filter so a

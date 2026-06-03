@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/tosin2013/helmdeck/internal/session"
 )
@@ -38,7 +39,10 @@ func (stubRuntime) Logs(context.Context, string) (io.ReadCloser, error) {
 	panic("not implemented")
 }
 func (stubRuntime) Terminate(context.Context, string) error { panic("not implemented") }
-func (stubRuntime) Close() error                            { return nil }
+func (stubRuntime) ExtendTimeout(context.Context, string, time.Duration) error {
+	return nil
+}
+func (stubRuntime) Close() error { return nil }
 
 func newVNCRouter(t *testing.T, rt session.Runtime) http.Handler {
 	t.Helper()

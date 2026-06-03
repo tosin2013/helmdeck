@@ -31,6 +31,21 @@ type fakeRuntime struct {
 	// lastSpec captures the Spec the last Create was called with so
 	// label-on-create tests can assert what the engine passed in.
 	lastSpec session.Spec
+	// getTimeout is the Spec.Timeout the Get-returned session reports.
+	// Zero means "use a clean Spec{}" (the legacy default). Set to a
+	// non-zero value when a test needs to assert engine behavior on a
+	// session that was created with a specific watchdog deadline (e.g.
+	// pinned-session-reuse-extends).
+	getTimeout time.Duration
+	// extendCalls captures every ExtendTimeout invocation so tests can
+	// pin which sessions got extended and to what value.
+	extendCalls []extendCall
+	extendErr   error
+}
+
+type extendCall struct {
+	ID         string
+	NewTimeout time.Duration
 }
 
 func (f *fakeRuntime) Create(ctx context.Context, spec session.Spec) (*session.Session, error) {
@@ -45,12 +60,16 @@ func (f *fakeRuntime) Get(ctx context.Context, id string) (*session.Session, err
 	if id == "" {
 		return nil, nil
 	}
-	return &session.Session{ID: id, Status: session.StatusRunning}, nil
+	return &session.Session{ID: id, Status: session.StatusRunning, Spec: session.Spec{Timeout: f.getTimeout}}, nil
 }
 func (f *fakeRuntime) List(ctx context.Context) ([]*session.Session, error)       { return nil, nil }
 func (f *fakeRuntime) Logs(ctx context.Context, id string) (io.ReadCloser, error) { return nil, nil }
 func (f *fakeRuntime) Terminate(ctx context.Context, id string) error             { f.terminateCalls++; return nil }
-func (f *fakeRuntime) Close() error                                               { return nil }
+func (f *fakeRuntime) ExtendTimeout(_ context.Context, id string, newTimeout time.Duration) error {
+	f.extendCalls = append(f.extendCalls, extendCall{ID: id, NewTimeout: newTimeout})
+	return f.extendErr
+}
+func (f *fakeRuntime) Close() error { return nil }
 
 func TestEngineHappyPath(t *testing.T) {
 	pack := &Pack{
@@ -265,10 +284,10 @@ func TestBasicSchema(t *testing.T) {
 		}
 	}
 	bad := map[string]string{
-		"missing required":  `{}`,
-		"wrong url type":    `{"url":123}`,
-		"wrong bool type":   `{"url":"x","fullPage":"yes"}`,
-		"not an object":     `["url"]`,
+		"missing required": `{}`,
+		"wrong url type":   `{"url":123}`,
+		"wrong bool type":  `{"url":"x","fullPage":"yes"}`,
+		"not an object":    `["url"]`,
 	}
 	for name, b := range bad {
 		if err := s.Validate(json.RawMessage(b)); err == nil {
@@ -418,5 +437,108 @@ func TestEngine_WithRunID_PinnedSessionNotRelabeled(t *testing.T) {
 	// stamped on its Labels map across calls).
 	if v, ok := pack.SessionSpec.Labels[session.LabelRunID]; ok {
 		t.Errorf("pack.SessionSpec should not be mutated by Execute, got Labels[%s]=%q", session.LabelRunID, v)
+	}
+}
+
+// TestEngine_PinnedSessionReuse_ExtendsTimeoutWhenLonger pins the
+// shared-session-watchdog fix. When a pack reuses a session via
+// _session_id AND that pack's SessionSpec.Timeout is longer than the
+// session was created with, the engine MUST call ExtendTimeout so the
+// watchdog uses the longer deadline. Without this, slides.narrate's
+// 30-minute Timeout is silently overridden by whatever (shorter)
+// timeout repo.fetch used to create the shared session.
+func TestEngine_PinnedSessionReuse_ExtendsTimeoutWhenLonger(t *testing.T) {
+	rt := &fakeRuntime{getTimeout: 5 * time.Minute}
+	pack := &Pack{
+		Name: "slides.narrate", Version: "v1", NeedsSession: true,
+		SessionSpec: session.Spec{Timeout: 30 * time.Minute},
+		Handler: func(ctx context.Context, ec *ExecutionContext) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		},
+	}
+	eng := New(WithRuntime(rt), WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	if _, err := eng.Execute(context.Background(), pack, json.RawMessage(`{"_session_id":"pinned"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(rt.extendCalls) != 1 {
+		t.Fatalf("expected 1 ExtendTimeout call; got %d (%v)", len(rt.extendCalls), rt.extendCalls)
+	}
+	call := rt.extendCalls[0]
+	if call.ID != "pinned" {
+		t.Errorf("ExtendTimeout called on %q, want session id %q", call.ID, "pinned")
+	}
+	if call.NewTimeout != 30*time.Minute {
+		t.Errorf("ExtendTimeout newTimeout = %v, want 30m (the reusing pack's Spec.Timeout)", call.NewTimeout)
+	}
+}
+
+// TestEngine_PinnedSessionReuse_NoExtendWhenShorter — when the
+// reusing pack has a SHORTER Spec.Timeout than the existing session,
+// the engine must NOT call ExtendTimeout. Critical so a fast follow-on
+// pack cannot accidentally pull the deadline down on a session another
+// long-running pack might depend on.
+func TestEngine_PinnedSessionReuse_NoExtendWhenShorter(t *testing.T) {
+	rt := &fakeRuntime{getTimeout: 30 * time.Minute}
+	pack := &Pack{
+		Name: "repo.map", Version: "v1", NeedsSession: true,
+		SessionSpec: session.Spec{Timeout: 5 * time.Minute},
+		Handler: func(ctx context.Context, ec *ExecutionContext) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		},
+	}
+	eng := New(WithRuntime(rt), WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	if _, err := eng.Execute(context.Background(), pack, json.RawMessage(`{"_session_id":"pinned"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(rt.extendCalls) != 0 {
+		t.Errorf("ExtendTimeout should NOT be called when pack timeout <= session timeout; got %d calls (%v)",
+			len(rt.extendCalls), rt.extendCalls)
+	}
+}
+
+// TestEngine_PinnedSessionReuse_NoExtendWhenEqual mirrors the shorter
+// case at the boundary. Equal Spec.Timeout values are a no-op — no
+// gratuitous registry mutation, no spurious log line.
+func TestEngine_PinnedSessionReuse_NoExtendWhenEqual(t *testing.T) {
+	rt := &fakeRuntime{getTimeout: 30 * time.Minute}
+	pack := &Pack{
+		Name: "slides.narrate", Version: "v1", NeedsSession: true,
+		SessionSpec: session.Spec{Timeout: 30 * time.Minute},
+		Handler: func(ctx context.Context, ec *ExecutionContext) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		},
+	}
+	eng := New(WithRuntime(rt), WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	if _, err := eng.Execute(context.Background(), pack, json.RawMessage(`{"_session_id":"pinned"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(rt.extendCalls) != 0 {
+		t.Errorf("ExtendTimeout should NOT be called when timeouts are equal; got %d calls (%v)",
+			len(rt.extendCalls), rt.extendCalls)
+	}
+}
+
+// TestEngine_PinnedSessionReuse_ExtendErrorDoesNotFailHandler — when
+// ExtendTimeout returns an error, the engine logs but proceeds. The
+// worst case is the pre-fix behavior (watchdog kills at the old
+// deadline) — that's a fallback, not a regression. The pack handler
+// must still get a chance to run.
+func TestEngine_PinnedSessionReuse_ExtendErrorDoesNotFailHandler(t *testing.T) {
+	rt := &fakeRuntime{getTimeout: 5 * time.Minute, extendErr: errors.New("simulated extend failure")}
+	handlerRan := false
+	pack := &Pack{
+		Name: "slides.narrate", Version: "v1", NeedsSession: true,
+		SessionSpec: session.Spec{Timeout: 30 * time.Minute},
+		Handler: func(ctx context.Context, ec *ExecutionContext) (json.RawMessage, error) {
+			handlerRan = true
+			return json.RawMessage(`{}`), nil
+		},
+	}
+	eng := New(WithRuntime(rt), WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	if _, err := eng.Execute(context.Background(), pack, json.RawMessage(`{"_session_id":"pinned"}`)); err != nil {
+		t.Fatalf("Execute should not error on ExtendTimeout failure; got %v", err)
+	}
+	if !handlerRan {
+		t.Error("handler must still run after a failed ExtendTimeout — it is best-effort")
 	}
 }

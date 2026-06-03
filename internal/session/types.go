@@ -157,6 +157,24 @@ type Runtime interface {
 	// second call on an already-terminated session returns nil.
 	Terminate(ctx context.Context, id string) error
 
+	// ExtendTimeout extends the session's Spec.Timeout in the runtime's
+	// in-memory registry when newTimeout is greater than the current
+	// value, so the watchdog uses the longer deadline. No-op when
+	// newTimeout is less than or equal to the current value (the
+	// deadline never shrinks under a pinned-session reuse). Returns
+	// ErrSessionNotFound if the session is unknown.
+	//
+	// Used by the engine when a pinned-session pack reuses a session
+	// created by an earlier pack with a shorter Spec.Timeout: without
+	// extension, the watchdog applies the creator pack's deadline (e.g.
+	// repo.fetch's 5-minute default) and kills the session before slow
+	// follow-on packs like slides.narrate (30-minute Spec.Timeout) can
+	// finish a multi-segment encode. Extension does NOT mutate other
+	// Spec fields (MemoryLimit, CPULimit, etc.) — those are frozen at
+	// container creation and cannot be changed at runtime on a live
+	// container without restart.
+	ExtendTimeout(ctx context.Context, id string, newTimeout time.Duration) error
+
 	// Close releases any backend resources (Docker client, K8s informers).
 	Close() error
 }

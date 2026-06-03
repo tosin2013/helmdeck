@@ -95,6 +95,21 @@ func (r *Runtime) Terminate(_ context.Context, id string) error {
 	return nil
 }
 
+// ExtendTimeout implements session.Runtime — bumps Spec.Timeout when
+// newTimeout exceeds the current value, no-op otherwise.
+func (r *Runtime) ExtendTimeout(_ context.Context, id string, newTimeout time.Duration) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[id]
+	if !ok {
+		return session.ErrSessionNotFound
+	}
+	if newTimeout > s.Spec.Timeout {
+		s.Spec.Timeout = newTimeout
+	}
+	return nil
+}
+
 // Close implements session.Runtime.
 func (r *Runtime) Close() error { return nil }
 

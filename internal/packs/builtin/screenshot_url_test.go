@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/tosin2013/helmdeck/internal/cdp"
 	cdpfake "github.com/tosin2013/helmdeck/internal/cdp/fake"
@@ -25,7 +26,10 @@ func (fakeRuntime) Get(ctx context.Context, id string) (*session.Session, error)
 func (fakeRuntime) List(ctx context.Context) ([]*session.Session, error)         { return nil, nil }
 func (fakeRuntime) Logs(ctx context.Context, id string) (io.ReadCloser, error)   { return nil, nil }
 func (fakeRuntime) Terminate(ctx context.Context, id string) error               { return nil }
-func (fakeRuntime) Close() error                                                  { return nil }
+func (fakeRuntime) ExtendTimeout(ctx context.Context, id string, t time.Duration) error {
+	return nil
+}
+func (fakeRuntime) Close() error { return nil }
 
 // fakeFactory hands out a single shared fake CDP client so tests can
 // inspect what the pack handler called.

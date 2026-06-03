@@ -603,6 +603,28 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 			}
 			sess = s
 			pinnedSession = true
+			// Extend the pinned session's watchdog deadline when this
+			// pack needs longer than whoever created the session asked
+			// for. Without this, the watchdog uses the creator pack's
+			// Spec.Timeout (frozen at Create time) — e.g. repo.fetch's
+			// 5-minute default kills a session 5 minutes after creation
+			// even though slides.narrate's own SessionSpec.Timeout is
+			// 30 minutes. The runtime no-ops when newTimeout is shorter,
+			// so the deadline never shrinks. Best-effort: on failure we
+			// log and proceed; the worst case is the pre-fix behavior
+			// (watchdog kills at the old deadline), not a regression.
+			if pack.SessionSpec.Timeout > sess.Spec.Timeout {
+				oldT := sess.Spec.Timeout
+				if extErr := e.runtime.ExtendTimeout(ctx, sess.ID, pack.SessionSpec.Timeout); extErr != nil {
+					logger.Warn("extend pinned session timeout failed",
+						"session_id", sess.ID, "pack", pack.Name,
+						"want", pack.SessionSpec.Timeout, "err", extErr)
+				} else {
+					logger.Info("extended pinned session timeout",
+						"session_id", sess.ID, "pack", pack.Name,
+						"from", oldT, "to", pack.SessionSpec.Timeout)
+				}
+			}
 			logger.Info("reusing pinned session", "session_id", meta.SessionID, "pack", pack.Name)
 		} else {
 			// Copy the pack's session spec so we can stamp per-run

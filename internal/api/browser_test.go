@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/tosin2013/helmdeck/internal/cdp"
 	cdpfake "github.com/tosin2013/helmdeck/internal/cdp/fake"
+	"github.com/tosin2013/helmdeck/internal/session"
+	"github.com/tosin2013/helmdeck/internal/session/fake"
 )
 
 type stubCDPFactory struct {
@@ -164,6 +167,72 @@ func TestBrowserNavigateWithVaultCookieInjection(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), `"action":"cookies_installed"`) {
 		t.Errorf("response missing vault outcome: %s", rr.Body.String())
 	}
+}
+
+// TestDefaultCDPClientFactory_GetErrorPaths exercises the two error
+// branches in defaultCDPFactory.Get that don't need a real Chrome
+// process to reach: (1) session.Runtime.Get returns ErrSessionNotFound,
+// and (2) the session exists but has no CDPEndpoint. The happy path
+// dials chromedp + WaitReady, which needs a real Chromium — covered
+// by the integration suite, not unit tests.
+func TestDefaultCDPClientFactory_GetErrorPaths(t *testing.T) {
+	rt := fake.New()
+	factory := DefaultCDPClientFactory(rt)
+	if factory == nil {
+		t.Fatal("DefaultCDPClientFactory returned nil")
+	}
+
+	// (1) Unknown session id → ErrSessionNotFound propagates verbatim
+	// so the browser handler can map it to 404.
+	if _, err := factory.Get(context.Background(), "no-such-session"); err == nil {
+		t.Error("Get on unknown session must error")
+	} else if !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("err = %v; want session.ErrSessionNotFound", err)
+	}
+
+	// (2) Session exists but has no CDPEndpoint — the factory must
+	// refuse rather than hand back a half-built client.
+	s, err := rt.Create(context.Background(), session.Spec{Image: "browser:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// fake.Create doesn't populate CDPEndpoint — that mirrors the real
+	// behavior of a pending container that hasn't bound CDP yet.
+	if _, err := factory.Get(context.Background(), s.ID); err == nil {
+		t.Error("Get on session with no CDPEndpoint must error")
+	} else if !strings.Contains(err.Error(), "CDP endpoint") {
+		t.Errorf("err = %v; want one mentioning CDP endpoint", err)
+	}
+}
+
+// TestDefaultCDPClientFactory_Evict covers both Evict branches:
+// the cached-hit path (Close called, cache entry removed) and the
+// no-op path (unknown id). We populate the cache directly with a
+// fake cdp.Client since spinning up a real one needs Chromium.
+func TestDefaultCDPClientFactory_Evict(t *testing.T) {
+	fc := &cdpfake.Client{}
+	f := &defaultCDPFactory{
+		rt:    fake.New(),
+		cache: map[string]cdp.Client{"s1": fc},
+	}
+	// No-op path: Evict on an unknown id should not panic and should
+	// leave the cache untouched.
+	f.Evict("missing")
+	if len(f.cache) != 1 {
+		t.Errorf("unknown-id Evict mutated cache: %+v", f.cache)
+	}
+
+	// Hit path: Evict on s1 removes the entry and Closes the client.
+	f.Evict("s1")
+	if _, ok := f.cache["s1"]; ok {
+		t.Error("Evict left s1 in cache")
+	}
+	if fc.CloseCallCount != 1 {
+		t.Errorf("Evict CloseCallCount = %d; want 1", fc.CloseCallCount)
+	}
+
+	// Idempotency: Evict again on s1 (already gone) is safe.
+	f.Evict("s1")
 }
 
 func TestBrowserNavigateWithoutInjectorIsUnchanged(t *testing.T) {

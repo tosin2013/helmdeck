@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
@@ -127,6 +128,88 @@ func TestMemoryForget_All(t *testing.T) {
 	left, _ := store.List(context.Background(), caller, packs.AuditKeyPrefixPack)
 	if len(left) != 0 {
 		t.Errorf("audit rows should be empty post-forget; got %d", len(left))
+	}
+}
+
+// TestMemoryForget_BadJSON — non-empty malformed body returns 400.
+// (Empty body falls through to scope=all by design.)
+func TestMemoryForget_BadJSON(t *testing.T) {
+	h, _ := newMemoryRouter(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/forget",
+		bytes.NewBufferString(`{not-json`)))
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}
+
+// TestMemoryStore_BadJSON — malformed body on /memory/store → 400.
+func TestMemoryStore_BadJSON(t *testing.T) {
+	h, _ := newMemoryRouter(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/store",
+		bytes.NewBufferString(`{nope`)))
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}
+
+// TestMemoryForget_PackEmptyID — "pack:" without a value → 400.
+func TestMemoryForget_PackEmptyID(t *testing.T) {
+	h, _ := newMemoryRouter(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/forget",
+		bytes.NewBufferString(`{"scope":"pack:"}`)))
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", rr.Code, rr.Body.String())
+	}
+}
+
+// TestMemoryForget_PipelineEmptyID — "pipeline:" without a value → 400.
+func TestMemoryForget_PipelineEmptyID(t *testing.T) {
+	h, _ := newMemoryRouter(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/forget",
+		bytes.NewBufferString(`{"scope":"pipeline:"}`)))
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", rr.Code, rr.Body.String())
+	}
+}
+
+// TestMemoryForget_KeyEmpty — "key:" without a value → 400.
+func TestMemoryForget_KeyEmpty(t *testing.T) {
+	h, _ := newMemoryRouter(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/forget",
+		bytes.NewBufferString(`{"scope":"key:"}`)))
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", rr.Code, rr.Body.String())
+	}
+}
+
+// TestMemoryForget_ScopedByPipelineID — "pipeline:<id>" deletes only
+// audits for the named pipeline.
+func TestMemoryForget_ScopedByPipelineID(t *testing.T) {
+	h, store := newMemoryRouter(t)
+	caller := "unknown"
+	// Use the pack-audit seeding helper repurposed: we need pipeline
+	// audits. Write them directly so we don't need a new helper.
+	for _, pid := range []string{"flow.a", "flow.a", "flow.b"} {
+		audit := packs.PipelineAudit{Pipeline: pid, Outcome: "ok", AtUnix: 1, DurationMs: 1}
+		blob, _ := json.Marshal(audit)
+		key := packs.AuditKeyPrefixPipeline + pid + "/run_" + pid + "_" + time.Now().Format("150405.000000000")
+		_, _ = store.Put(context.Background(), caller, key, blob, memory.WithTTL(time.Hour))
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/memory/forget",
+		bytes.NewBufferString(`{"scope":"pipeline:flow.a"}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", rr.Code, rr.Body.String())
+	}
+	var got memoryForgetResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &got)
+	if got.Deleted < 1 {
+		t.Errorf("want at least 1 deleted, got %d", got.Deleted)
 	}
 }
 

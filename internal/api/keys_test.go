@@ -139,6 +139,126 @@ func TestKeysTestEndpoint(t *testing.T) {
 	}
 }
 
+// TestKeys_BadJSONOnCreate — malformed body should return 400
+// invalid_json (not 500).
+func TestKeys_BadJSONOnCreate(t *testing.T) {
+	h, _ := newKeysRouter(t, nil)
+	rr := doJSON(t, h, http.MethodPost, "/api/v1/providers/keys", `{not-json`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "invalid_json") {
+		t.Errorf("body should mention invalid_json: %s", rr.Body.String())
+	}
+}
+
+// TestKeys_RotateBadJSON — malformed rotate body returns 400.
+func TestKeys_RotateBadJSON(t *testing.T) {
+	h, _ := newKeysRouter(t, nil)
+	rr := doJSON(t, h, http.MethodPost, "/api/v1/providers/keys", `{"provider":"openai","label":"L","key":"sk-1234"}`)
+	var rec keystore.Record
+	_ = json.Unmarshal(rr.Body.Bytes(), &rec)
+
+	rr2 := doJSON(t, h, http.MethodPost, "/api/v1/providers/keys/"+rec.ID+"/rotate", `{`)
+	if rr2.Code != http.StatusBadRequest {
+		t.Errorf("rotate bad-json status = %d, want 400", rr2.Code)
+	}
+}
+
+// TestKeys_RotateUnknownKey — 404 not_found when rotating an id that
+// the store doesn't recognize.
+func TestKeys_RotateUnknownKey(t *testing.T) {
+	h, _ := newKeysRouter(t, nil)
+	rr := doJSON(t, h, http.MethodPost, "/api/v1/providers/keys/no-such-id/rotate",
+		`{"key":"sk-new-1234"}`)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("rotate unknown status = %d, want 404", rr.Code)
+	}
+}
+
+// TestKeys_DeleteUnknownKey — 404 not_found rather than 204.
+func TestKeys_DeleteUnknownKey(t *testing.T) {
+	h, _ := newKeysRouter(t, nil)
+	rr := doJSON(t, h, http.MethodDelete, "/api/v1/providers/keys/no-such-id", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("delete unknown status = %d, want 404", rr.Code)
+	}
+}
+
+// TestKeys_MissingIDIs404 — GET /api/v1/providers/keys/ (no id) returns
+// 404 with "missing id" rather than echoing the list endpoint.
+func TestKeys_MissingIDIs404(t *testing.T) {
+	h, _ := newKeysRouter(t, nil)
+	rr := doJSON(t, h, http.MethodGet, "/api/v1/providers/keys/", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("missing id status = %d, want 404", rr.Code)
+	}
+}
+
+// TestKeys_MethodNotAllowed — PUT or PATCH on /{id} returns 405.
+func TestKeys_MethodNotAllowed(t *testing.T) {
+	h, _ := newKeysRouter(t, nil)
+	rr := doJSON(t, h, http.MethodPost, "/api/v1/providers/keys",
+		`{"provider":"openai","label":"L","key":"sk-abc-1234"}`)
+	var rec keystore.Record
+	_ = json.Unmarshal(rr.Body.Bytes(), &rec)
+
+	rr2 := doJSON(t, h, http.MethodPut, "/api/v1/providers/keys/"+rec.ID, `{}`)
+	if rr2.Code != http.StatusMethodNotAllowed {
+		t.Errorf("PUT status = %d, want 405", rr2.Code)
+	}
+}
+
+// TestKeys_UnknownSubroute — POST to /{id}/unknown returns 404.
+func TestKeys_UnknownSubroute(t *testing.T) {
+	h, _ := newKeysRouter(t, nil)
+	rr := doJSON(t, h, http.MethodPost, "/api/v1/providers/keys",
+		`{"provider":"openai","label":"L","key":"sk-xyz-1234"}`)
+	var rec keystore.Record
+	_ = json.Unmarshal(rr.Body.Bytes(), &rec)
+
+	rr2 := doJSON(t, h, http.MethodPost, "/api/v1/providers/keys/"+rec.ID+"/bogus", `{}`)
+	if rr2.Code != http.StatusNotFound {
+		t.Errorf("bogus subroute status = %d, want 404", rr2.Code)
+	}
+}
+
+// TestKeys_TestEndpoint_UnknownKey — POST /{id}/test on a missing id
+// returns 404 (the Get inside test).
+func TestKeys_TestEndpoint_UnknownKey(t *testing.T) {
+	h, _ := newKeysRouter(t, nil)
+	rr := doJSON(t, h, http.MethodPost, "/api/v1/providers/keys/no-id/test", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+// TestKeys_TestEndpoint_TesterError — tester returns an error → 502
+// with {"ok":false,"error":...}, not a 500. The operator distinguishes
+// "key works" from "key was rejected by the provider".
+func TestKeys_TestEndpoint_TesterError(t *testing.T) {
+	tester := func(_ context.Context, _ *http.Client, _, _ string) error {
+		return errAuthFailed{}
+	}
+	h, _ := newKeysRouter(t, tester)
+	rr := doJSON(t, h, http.MethodPost, "/api/v1/providers/keys",
+		`{"provider":"anthropic","label":"L","key":"sk-test-9999"}`)
+	var rec keystore.Record
+	_ = json.Unmarshal(rr.Body.Bytes(), &rec)
+
+	rr2 := doJSON(t, h, http.MethodPost, "/api/v1/providers/keys/"+rec.ID+"/test", "")
+	if rr2.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rr2.Code)
+	}
+	if !strings.Contains(rr2.Body.String(), `"ok":false`) {
+		t.Errorf("body should be ok:false: %s", rr2.Body.String())
+	}
+}
+
+type errAuthFailed struct{}
+
+func (errAuthFailed) Error() string { return "401 unauthorized" }
+
 func TestKeysUnavailableWhenNil(t *testing.T) {
 	h := NewRouter(Deps{
 		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),

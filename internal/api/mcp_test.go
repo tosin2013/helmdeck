@@ -118,6 +118,130 @@ func TestMCPCRUDFlow(t *testing.T) {
 	}
 }
 
+// TestMCPCreate_BadJSON — malformed body returns 400.
+func TestMCPCreate_BadJSON(t *testing.T) {
+	h, _ := newMCPRouter(t)
+	rr := doMCP(t, h, http.MethodPost, "/api/v1/mcp/servers", `{not-json`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+// TestMCPCreate_ValidationFailure — registry rejects invalid input
+// (missing name) with create_failed.
+func TestMCPCreate_ValidationFailure(t *testing.T) {
+	h, _ := newMCPRouter(t)
+	rr := doMCP(t, h, http.MethodPost, "/api/v1/mcp/servers",
+		`{"transport":"stdio","config":{}}`) // missing required `name`
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", rr.Code, rr.Body.String())
+	}
+}
+
+// TestMCPGet_UnknownID returns 404.
+func TestMCPGet_UnknownID(t *testing.T) {
+	h, _ := newMCPRouter(t)
+	rr := doMCP(t, h, http.MethodGet, "/api/v1/mcp/servers/no-such", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+// TestMCPUpdate_UnknownID returns 404.
+func TestMCPUpdate_UnknownID(t *testing.T) {
+	h, _ := newMCPRouter(t)
+	rr := doMCP(t, h, http.MethodPut, "/api/v1/mcp/servers/no-such",
+		`{"name":"e","transport":"stdio","config":{"command":"echo"}}`)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+// TestMCPUpdate_BadJSON returns 400 invalid_json.
+func TestMCPUpdate_BadJSON(t *testing.T) {
+	h, _ := newMCPRouter(t)
+	body := `{"name":"e","transport":"stdio","config":{"command":"echo"},"enabled":true}`
+	rr := doMCP(t, h, http.MethodPost, "/api/v1/mcp/servers", body)
+	var s mcp.Server
+	_ = json.Unmarshal(rr.Body.Bytes(), &s)
+
+	rr2 := doMCP(t, h, http.MethodPut, "/api/v1/mcp/servers/"+s.ID, `{nope`)
+	if rr2.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr2.Code)
+	}
+}
+
+// TestMCPDelete_UnknownID returns 404 not_found.
+func TestMCPDelete_UnknownID(t *testing.T) {
+	h, _ := newMCPRouter(t)
+	rr := doMCP(t, h, http.MethodDelete, "/api/v1/mcp/servers/no-such", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+// TestMCP_MethodNotAllowed — PATCH on /{id} returns 405.
+func TestMCP_MethodNotAllowed(t *testing.T) {
+	h, _ := newMCPRouter(t)
+	body := `{"name":"x","transport":"stdio","config":{"command":"echo"},"enabled":true}`
+	rr := doMCP(t, h, http.MethodPost, "/api/v1/mcp/servers", body)
+	var s mcp.Server
+	_ = json.Unmarshal(rr.Body.Bytes(), &s)
+
+	rr2 := doMCP(t, h, http.MethodPatch, "/api/v1/mcp/servers/"+s.ID, "")
+	if rr2.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", rr2.Code)
+	}
+}
+
+// TestMCP_MissingIDIs404 — trailing /api/v1/mcp/servers/ with no id
+// returns 404.
+func TestMCP_MissingIDIs404(t *testing.T) {
+	h, _ := newMCPRouter(t)
+	rr := doMCP(t, h, http.MethodGet, "/api/v1/mcp/servers/", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+// TestMCP_UnknownSubroute — GET /{id}/bogus returns 404 unknown route.
+func TestMCP_UnknownSubroute(t *testing.T) {
+	h, _ := newMCPRouter(t)
+	body := `{"name":"sub","transport":"stdio","config":{"command":"echo"},"enabled":true}`
+	rr := doMCP(t, h, http.MethodPost, "/api/v1/mcp/servers", body)
+	var s mcp.Server
+	_ = json.Unmarshal(rr.Body.Bytes(), &s)
+
+	rr2 := doMCP(t, h, http.MethodGet, "/api/v1/mcp/servers/"+s.ID+"/bogus", "")
+	if rr2.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr2.Code)
+	}
+}
+
+// TestMCP_ManifestUnknownID — GET /{id}/manifest on a missing id
+// returns 404 from the underlying Manifest call.
+func TestMCP_ManifestUnknownID(t *testing.T) {
+	h, _ := newMCPRouter(t)
+	rr := doMCP(t, h, http.MethodGet, "/api/v1/mcp/servers/missing/manifest", "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+// TestMCP_ManifestMethodNotAllowed — DELETE on /{id}/manifest is 405.
+func TestMCP_ManifestMethodNotAllowed(t *testing.T) {
+	h, _ := newMCPRouter(t)
+	body := `{"name":"m","transport":"stdio","config":{"command":"echo"},"enabled":true}`
+	rr := doMCP(t, h, http.MethodPost, "/api/v1/mcp/servers", body)
+	var s mcp.Server
+	_ = json.Unmarshal(rr.Body.Bytes(), &s)
+
+	rr2 := doMCP(t, h, http.MethodDelete, "/api/v1/mcp/servers/"+s.ID+"/manifest", "")
+	if rr2.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", rr2.Code)
+	}
+}
+
 func TestMCPUnavailableWhenNil(t *testing.T) {
 	h := NewRouter(Deps{
 		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),

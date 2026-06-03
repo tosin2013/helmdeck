@@ -84,6 +84,46 @@ func TestWebRoute_HealthzBypassesSPA(t *testing.T) {
 	}
 }
 
+// TestWebRoute_MethodNotAllowed — non-GET/HEAD on the SPA root returns
+// 405 with Allow: GET, HEAD. POST /api/v1/* still routes to the API
+// handlers (proven elsewhere); this just covers the SPA's method gate.
+func TestWebRoute_MethodNotAllowed(t *testing.T) {
+	h := newWebRouter(t)
+	req := httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(""))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", rr.Code)
+	}
+	if allow := rr.Header().Get("Allow"); allow != "GET, HEAD" {
+		t.Errorf("Allow = %q, want \"GET, HEAD\"", allow)
+	}
+}
+
+// TestWebRoute_APIPathReturns404 — /api/* paths that aren't wired
+// must return 404 (not the SPA HTML). The existing
+// DoesNotShadowAPI test asserts the body shape; this one asserts the
+// status code so a routing regression that returns 200 with HTML
+// fails loudly.
+func TestWebRoute_APIPathReturns404(t *testing.T) {
+	h := newWebRouter(t)
+	rr := doGet(t, h, "/api/v1/no-such-route")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("unwired API path status = %d, want 404", rr.Code)
+	}
+}
+
+// TestWebRoute_HEADAllowed — HEAD on the SPA root is allowed.
+func TestWebRoute_HEADAllowed(t *testing.T) {
+	h := newWebRouter(t)
+	req := httptest.NewRequest(http.MethodHead, "/", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("HEAD status = %d, want 200", rr.Code)
+	}
+}
+
 func TestIsAPIPath(t *testing.T) {
 	cases := []struct {
 		path string

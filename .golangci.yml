@@ -1,0 +1,76 @@
+# golangci-lint configuration.
+#
+# Wired by .github/workflows/ci.yml as the lint gate that catches what
+# coverage doesn't — shadowed variables, unchecked errors, dead code,
+# noisy-but-real staticcheck findings. The list is intentionally the
+# defaults plus a few additions; we'd rather have one or two false-
+# positives on a PR than miss the real bug class these linters
+# specialise in.
+#
+# When a finding is genuinely a false positive: prefer `//nolint:<name> // <reason>`
+# over disabling the linter package-wide. Reasons must explain WHY the
+# exception is correct (not "shut up linter"), so a future maintainer
+# can audit them.
+
+version: "2"
+
+run:
+  timeout: 5m
+  # Tests count for coverage; they should pass lint too.
+  tests: true
+
+linters:
+  default: none
+  enable:
+    # The "always on" trio: bugs the compiler doesn't catch.
+    - errcheck     # unchecked errors (the biggest category)
+    - govet        # standard `go vet` checks
+    - staticcheck  # advanced bug + simplification checks
+    # Quality-of-life: unused symbols and noisy redundancy.
+    - unused
+    - ineffassign  # assignments to a value that is never used
+  settings:
+    errcheck:
+      # Don't require checking these — too noisy and the unchecked
+      # error doesn't change observable behaviour.
+      exclude-functions:
+        - (io.Closer).Close             # defer rsp.Body.Close() etc.
+        - (net/http.ResponseWriter).Write
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+    staticcheck:
+      # SA9003: empty branch — we use these for documentation purposes
+      # in error-classification ladders. ST1005: error string starting
+      # with capital letter — clashes with the convention in many of
+      # our typed error messages.
+      checks: ["all", "-SA9003", "-ST1005"]
+
+issues:
+  # Don't flag the same line twice across linters; pick the most
+  # specific one.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+# Paths the linters MUST NOT inspect. The website/ tree contains
+# Docusaurus-bundled .go files that exist as asset artefacts, not
+# source — they reference symbols from internal/api but aren't part
+# of the build module (go.mod scopes them out). Linting them would
+# produce reams of false positives for missing imports.
+exclusions:
+  generated: lax
+  rules:
+    - path: website/build/.*
+      linters:
+        - errcheck
+        - govet
+        - staticcheck
+        - unused
+        - ineffassign
+    - path: \.claude/worktrees/.*
+      linters:
+        - errcheck
+        - govet
+        - staticcheck
+        - unused
+        - ineffassign

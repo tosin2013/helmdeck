@@ -74,10 +74,19 @@ jobs:
         # the action AND the schema version in .golangci.yml. The
         # action caches the lint binary so re-runs on the same SHA
         # are fast.
+        #
+        # `only-new-issues: true` ratchets the gate the same way the
+        # coverage-gate.sh script does — PR A enables the linter
+        # without forcing the cleanup of ~100 pre-existing findings
+        # in code paths this PR doesn't touch. The gate still blocks
+        # NEW lint issues a PR introduces, so backsliding is loud.
+        # Subsequent reliability-arc PRs (B-D) can pay down the
+        # backlog without one PR carrying the whole burden.
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.2
           args: --timeout=5m
+          only-new-issues: true
 
   compose-lint:
     name: compose config (image-mode + source-build) (#134)

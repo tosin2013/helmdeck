@@ -101,17 +101,53 @@ func splitSlides(body string) []string {
 	return parts
 }
 
-// extractNotes pulls all <!-- ... --> blocks from a slide chunk,
-// returns the joined notes text and the chunk with comments removed.
+// extractNotes pulls all <!-- ... --> blocks from a slide chunk and
+// returns (a) the joined SPOKEN-NOTES text — comments that are meant
+// to be read aloud by slides.narrate's TTS — and (b) the chunk with
+// every comment (notes + metadata) removed so the visible slide body
+// stays clean. Structured-metadata comments emitted by slides.outline
+// (image_prompt:, future per-slide annotation prefixes) are filtered
+// out of the notes string so the narrator does not literally speak
+// "image prompt colon: a chart of revenue by year." They are still
+// stripped from the visible content via the catch-all ReplaceAllString
+// below — metadata comments should never render on the slide either.
 func extractNotes(chunk string) (notes, clean string) {
 	matches := notePattern.FindAllStringSubmatch(chunk, -1)
 	var notesBuf strings.Builder
-	for i, m := range matches {
-		if i > 0 {
+	first := true
+	for _, m := range matches {
+		inner := m[1]
+		if isStructuredMetadataComment(inner) {
+			// Skip — this is a key:value-shaped comment that another
+			// pack consumes structurally (e.g. slides.outline's
+			// extractImagePrompts). Reading it aloud would be wrong.
+			continue
+		}
+		if !first {
 			notesBuf.WriteString("\n")
 		}
-		notesBuf.WriteString(m[1])
+		notesBuf.WriteString(inner)
+		first = false
 	}
 	clean = notePattern.ReplaceAllString(chunk, "")
 	return notesBuf.String(), clean
+}
+
+// isStructuredMetadataComment reports whether the inner text of an
+// HTML comment matches the shape of a structured metadata directive
+// emitted by slides.outline (or any future pack that piggy-backs on
+// Marp's <!-- ... --> comment syntax for per-slide annotations).
+//
+// The current allowlist:
+//   - image_prompt: — consumed by slides.outline.extractImagePrompts
+//     to produce the typed image_prompts[] output array.
+//
+// Add new prefixes here as new structured-comment shapes ship.
+// Intentionally an explicit allowlist instead of a generic
+// "anything-with-a-colon" filter so legitimate freeform notes that
+// happen to contain a colon ("Note: discuss further") still get
+// spoken aloud.
+func isStructuredMetadataComment(inner string) bool {
+	t := strings.ToLower(strings.TrimSpace(inner))
+	return strings.HasPrefix(t, "image_prompt:")
 }

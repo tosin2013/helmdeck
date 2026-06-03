@@ -228,6 +228,60 @@ func TestExtractNotes(t *testing.T) {
 			"line1\nline2",
 			true,
 		},
+		// --- image_prompt filter (the narrator-says-image-prompt bug) ---
+		{
+			// The actual production shape: slides.outline puts speaker
+			// notes AND the image_prompt comment side-by-side. ONLY the
+			// speaker notes should reach the TTS engine.
+			"speaker notes plus image_prompt — only notes spoken",
+			"# Title\n\n<!-- speaker notes here -->\n<!-- image_prompt: A chart of revenue. -->\n\nBody",
+			"speaker notes here",
+			true,
+		},
+		{
+			// A slide with ONLY an image_prompt and no speaker notes:
+			// the narrator path treats it as no narration and falls
+			// back to silence — that's the right outcome.
+			"image_prompt only — empty notes",
+			"<!-- image_prompt: A flowchart. -->",
+			"",
+			true,
+		},
+		{
+			// Image prompt in the middle of multiple speaker notes is
+			// filtered out; the other freeform notes survive in order.
+			"image_prompt interleaved with speaker notes — image_prompt dropped",
+			"<!-- intro line -->\n<!-- image_prompt: A bar chart. -->\n<!-- outro line -->",
+			"intro line\noutro line",
+			true,
+		},
+		{
+			// Case-insensitivity matters because a model can produce
+			// IMAGE_PROMPT or Image_Prompt by accident; we don't want
+			// those to slip through to the TTS engine.
+			"IMAGE_PROMPT uppercase — still filtered",
+			"<!-- speaker line -->\n<!-- IMAGE_PROMPT: A diagram. -->",
+			"speaker line",
+			true,
+		},
+		{
+			// Whitespace-tolerant: leading/trailing space inside the
+			// comment body must not let the filter slip.
+			"image_prompt with weird whitespace — filtered",
+			"<!--   image_prompt:   spaced prompt   -->",
+			"",
+			true,
+		},
+		{
+			// CRITICAL false-positive guard: a freeform note that
+			// happens to MENTION the words image_prompt in its body
+			// must still be spoken. HasPrefix on the TRIMMED inner
+			// only matches when the prefix is at the very start.
+			"freeform note containing image_prompt as substring — preserved",
+			"<!-- The image_prompt feature is documented in the README. -->",
+			"The image_prompt feature is documented in the README.",
+			true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

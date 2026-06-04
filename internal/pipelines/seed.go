@@ -181,9 +181,9 @@ func Builtins() []*Pipeline {
 			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":"${{ inputs.allow_silent_output }}","metadata_model":"openrouter/auto"}`),
 		).withMeta(PipelineMetadata{
 			Accepts:        []string{"repo_url"},
-			Produces:       []string{"mp4", "narrated_video", "engagement_metadata"},
+			Produces:       []string{"mp4", "narrated_video", "engagement_metadata", "srt_captions"},
 			IntentKeywords: []string{"video about repo", "narrate this codebase", "presentation from GitHub project", "explain repo as a video"},
-			TypicalUse:     "When the user wants a narrated MP4 walkthrough of a GitHub repo — uses README + docs + code map as source. Emits an `engagement` object (title, description, chapters, hashtags, hook) sized for YouTube.",
+			TypicalUse:     "When the user wants a narrated MP4 walkthrough of a GitHub repo — uses README + docs + code map as source. Emits an `engagement` object (title, description, chapters, hashtags, hook) sized for YouTube AND a sidecar `captions.srt` (YouTube/Vimeo auto-import as CC track).",
 			Limitations: []string{
 				"narrated video only — for a podcast use repo-readme-podcast",
 				"requires ElevenLabs key for narration (falls back to silent video)",
@@ -193,6 +193,10 @@ func Builtins() []*Pipeline {
 				// can't bridge the gap. See engagement.format_ceiling_note
 				// in the slides.narrate output for the long-form note.
 				"engagement metadata is generated post-hoc and is research-shaped (chapters at 0:00, title char-cap, hook structure); won't bridge the structural retention gap vs talking-head video — best for asynchronous explainer content",
+				// Captions-honesty entry — sidecar SRT is free
+				// (research-cited ~12-13% YouTube view boost via auto-imported
+				// CC); burn-in is opt-in and carries real cost.
+				"captions sidecar (captions.srt) is auto-imported by YouTube/Vimeo as the CC track; burned-in captions are opt-in via slides.narrate captions_burn_in:true and add 5-50% encode time + 20-50 MB per encoder thread — large decks on tight memory limits may OOM at burn-in",
 			},
 			Supersedes: []string{"repo.fetch", "repo.map", "slides.outline", "slides.narrate"},
 		}),

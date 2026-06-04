@@ -182,7 +182,7 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 	return &packs.Pack{
 		Name:         "slides.narrate",
 		Version:      "v1",
-		Description:  "Convert a Marp slide deck to a narrated MP4 video with ElevenLabs TTS and YouTube engagement metadata (title, description, chapters, hashtags, hook). Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to render slides over silence when no key is configured (CI smoke / demo placeholder). Optional hero_image_prompt generates a hero artwork via fal.ai and inlines it into slide 1. Honest scope: slide-deck-with-voiceover sits in the lower retention bracket vs talking-head; metadata moves the artifact toward median within format, but cannot bridge the structural gap. Best for asynchronous explainer/educational content.",
+		Description:  "Convert a Marp slide deck to a narrated MP4 video with ElevenLabs TTS and YouTube engagement metadata (title, description, chapters, hashtags, hook). Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to render slides over silence when no key is configured (CI smoke / demo placeholder). Optional hero_image_prompt generates a hero artwork via fal.ai and inlines it into slide 1. Captions sidecar (captions.srt) is emitted by default — YouTube/Vimeo auto-import as CC tracks (the path backing the cited ~12-13% view boost). Burn-in (visible always-on subtitles) is opt-in via captions_burn_in:true for Twitter/X / LinkedIn / raw-download distribution; adds 5-50% encode cost and 20-50 MB per encoder thread, which on memory-tight hosts with large decks can trigger (and fail) the OOM-retry path. Honest scope: slide-deck-with-voiceover sits in the lower retention bracket vs talking-head; metadata moves the artifact toward median within format, but cannot bridge the structural gap. Best for asynchronous explainer/educational content.",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"markdown"},
@@ -210,6 +210,13 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				"hashtag_count": "number",
 				"category":      "string",
 				"language":      "string",
+				// Captions sidecar (SRT file) is default-on; pass
+				// false to suppress. Burn-in (libass subtitles= filter
+				// into every frame) is opt-in via captions_burn_in.
+				// See pack Description for the OOM caveat on tight
+				// memory + large decks.
+				"captions_sidecar": "boolean",
+				"captions_burn_in": "boolean",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -233,6 +240,17 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				//  title_char_count}.
 				"engagement":              "object",
 				"engagement_artifact_key": "string",
+				// captions_artifact_key is the SRT sidecar (default-on).
+				// YouTube/Vimeo auto-import as CC tracks — the path
+				// that backs the research-cited ~12-13% view boost.
+				// Empty string when captions_sidecar:false.
+				"captions_artifact_key": "string",
+				// captions_burned_in reflects whether the libass
+				// subtitles= filter ran during per-segment encode.
+				// Operator-opt-in via captions_burn_in:true; the field
+				// is ALWAYS emitted (even when false) so consumers can
+				// rely on its presence for branching.
+				"captions_burned_in": "boolean",
 				// Cost transparency — emitted by the handler; declared
 				// here so agents/pipeline authors see them in the catalog.
 				// tts_chars is a per-slide breakdown map with a "_total"
@@ -322,6 +340,21 @@ type slidesNarrateInput struct {
 	// and explicit `false` opts out for decks that don't need Mermaid
 	// (saves ~500ms of mmdc startup per diagram).
 	Mermaid *bool `json:"mermaid,omitempty"`
+	// CaptionsSidecar emits a sidecar SRT artifact (captions.srt)
+	// alongside the MP4. Default true (nil → on); pass explicit
+	// false to suppress. Mirrors the Mermaid pointer-bool default-on
+	// shape so the JSON wire is identical (`captions_sidecar:false`
+	// to disable; absent or null means default).
+	CaptionsSidecar *bool `json:"captions_sidecar,omitempty"`
+	// CaptionsBurnIn forces ffmpeg to burn the captions into every
+	// frame via libass `subtitles=` filter. Default false. Required
+	// on platforms that don't surface CC tracks (Twitter/X embedded
+	// videos, LinkedIn embeds, raw MP4 downloads). Adds 5-50%
+	// per-segment encode wall-clock and 20-50 MB per encoder thread.
+	// On memory-tight hosts (3 GiB MemoryLimit) with large 1080p
+	// decks may trigger the OOM-retry path — and if libass-with-1-
+	// thread also OOMs, the run fails. See pack Description.
+	CaptionsBurnIn bool `json:"captions_burn_in,omitempty"`
 }
 
 func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuard) packs.HandlerFunc {
@@ -638,6 +671,40 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			}
 		}
 
+		// 5b. Captions. SRT runs once on the finalized durations
+		// array — used by both sidecar persistence and (optionally)
+		// burn-in. sidecarOn applies the Mermaid pointer-bool
+		// default-on pattern: nil → on; explicit false → off. Both
+		// sidecar artifact-store failures and burn-in write failures
+		// log + continue rather than fail the whole video — captions
+		// are auxiliary, and failing a 3-minute encode over an
+		// artifact-store hiccup is worse than degraded output.
+		sidecarOn := in.CaptionsSidecar == nil || *in.CaptionsSidecar
+		var captionsKey, captionsBurnPath string
+		var captionsBurnedIn bool
+		if sidecarOn || in.CaptionsBurnIn {
+			srtBytes := buildSRT(slides, durations)
+			if sidecarOn {
+				art, aerr := ec.Artifacts.Put(ctx, "slides.narrate",
+					"captions.srt", srtBytes, "text/plain")
+				if aerr != nil {
+					ec.Logger.Warn("captions sidecar upload failed", "err", aerr)
+				} else {
+					captionsKey = art.Key
+				}
+			}
+			if in.CaptionsBurnIn {
+				captionsBurnPath = "/tmp/captions.srt"
+				if _, werr := execWithStdin(ctx, ec, captionsBurnPath, srtBytes); werr != nil {
+					ec.Logger.Warn("captions burn-in write failed; falling back to no burn-in",
+						"err", werr)
+					captionsBurnPath = ""
+				} else {
+					captionsBurnedIn = true
+				}
+			}
+		}
+
 		// 6. Compose per-slide video segments. Progress 50→90%.
 		ec.Report(50, "encoding video segments")
 		for i := range slides {
@@ -659,6 +726,15 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 					vf += fmt.Sprintf(",fade=t=in:st=0:d=%.3f,fade=t=out:st=%.3f:d=%.3f",
 						fadeSec, dur-fadeSec, fadeSec)
 				}
+			}
+			// Captions burn-in via libass. captionsBurnPath is the
+			// per-run /tmp file written above; appending to the vf
+			// chain follows the same comma-separated pattern as the
+			// fade filter. /tmp paths have no spaces/quotes so no
+			// extra escaping is needed for libass's colon-quoted
+			// filename arg.
+			if captionsBurnPath != "" {
+				vf += ",subtitles=" + captionsBurnPath
 			}
 			// Primary attempt: capped threads (default 4) at libx264's
 			// "medium" preset. Operators can bump the thread cap via
@@ -835,6 +911,12 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			"tts_failure_count":       ttsFailureCount,
 			"voice_used":              voiceID,
 			"engagement_artifact_key": engagementKey,
+			// captions_burned_in is ALWAYS emitted so consumers can
+			// branch on its presence. captions_artifact_key is only
+			// non-empty when sidecar was on AND the artifact-store
+			// Put succeeded.
+			"captions_artifact_key": captionsKey,
+			"captions_burned_in":    captionsBurnedIn,
 			// #145: cost transparency on real runs too. Mirrors the
 			// dry_run shape so callers can rely on the same fields
 			// regardless of mode.

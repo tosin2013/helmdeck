@@ -166,6 +166,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 RUN marp --version \
  && mmdc --version \
  && ffmpeg -version >/dev/null \
+ # Verify libass / subtitles filter is present in this ffmpeg build —
+ # slides.narrate's captions_burn_in:true wires `-vf subtitles=...`,
+ # which silently fails at run time if libass support is missing from
+ # the apt package. Failing the IMAGE build is loud, prevents a
+ # confusing `Unrecognized option 'subtitles'` mid-run surprise.
+ && (ffmpeg -filters 2>/dev/null | grep -q ' subtitles ' \
+     || (echo "ffmpeg lacks libass/subtitles filter — captions burn-in will fail" >&2 && exit 1)) \
  && test -e /usr/lib/node_modules/@playwright/mcp/package.json
 
 # Layer 5 — non-root user, runtime dirs, entrypoint

@@ -332,6 +332,58 @@ print(f"OK: chapters={len(chapters)}, cta=mid-roll")
 PY
 }
 
+# captions_assert <runfile>
+# Asserts the slides.narrate captions sidecar exists, is non-trivially
+# sized, and looks like an SRT (first cue at 00:00:00,000 with -->
+# separator). Returns ENGAGEMENT_ABSENT-style soft-skip when the
+# captions_artifact_key is empty (operator disabled the sidecar via
+# captions_sidecar:false).
+#
+# Catches: the sidecar artifact-store Put silently failing (key
+# empty but no log); SRT format drift (wrong time format would
+# silently break YouTube CC import — operators would notice weeks
+# later when uploads stop importing captions).
+captions_assert() {
+  local runfile="$1"
+  local key
+  key=$(python3 -c '
+import sys, json
+run = json.load(sys.stdin)
+steps = run.get("steps") or []
+if not steps: sys.exit(0)
+out = steps[-1].get("output") or {}
+if isinstance(out, str):
+    try: out = json.loads(out)
+    except Exception: out = {}
+print(out.get("captions_artifact_key") or "")
+' <"$runfile")
+  if [[ -z "$key" ]]; then
+    echo "CAPTIONS_ABSENT"
+    return 0
+  fi
+  local srt="$WORK/captions.srt"
+  if ! fetch_artifact "$key" "$srt"; then
+    echo "FAIL: captions artifact $key not downloadable"
+    return 1
+  fi
+  local size; size=$(wc -c <"$srt" | tr -d ' ')
+  if [[ "$size" -lt 30 ]]; then
+    echo "FAIL: captions.srt suspiciously small (size=$size)"
+    return 1
+  fi
+  # YouTube acceptance signature: must contain "-->" and an
+  # 00:00:00,000 first stamp (comma decimal, NOT period).
+  if ! grep -q -- '-->' "$srt"; then
+    echo "FAIL: captions.srt missing '-->' cue separator"
+    return 1
+  fi
+  if ! grep -q '00:00:00,000' "$srt"; then
+    echo "FAIL: captions.srt first cue not at 00:00:00,000 (YouTube spec)"
+    return 1
+  fi
+  echo "OK: size=$size, SRT format valid"
+}
+
 # terminal_step_duration_s <runfile> — extracts total_duration_s
 # (slides.narrate) or duration_s (podcast.generate) from the terminal
 # step's output. Empty string when absent.
@@ -424,10 +476,23 @@ assert_artifact() {
             ENGAGEMENT_ABSENT)
               yellow "  ! $name: engagement object absent — pipeline didn't request it (metadata_model unset)" ;;
             OK:*)
-              green "  ✓ $name: MP4 ok (size=$size, faststart, audio contiguous, RMS ≥ -45dB, aac@44100, engagement $eng_out)"
-              return 0 ;;
+              ;;  # passed; captions check below decides whether to green-success
           esac ;;
         1) red "  ✗ $name: engagement object structurally invalid — $eng_out"; return 1 ;;
+      esac
+      # Captions sidecar (slides.narrate v0.26.0+).
+      local cap_out
+      cap_out=$(captions_assert "$runfile")
+      case $? in
+        0)
+          case "$cap_out" in
+            CAPTIONS_ABSENT)
+              yellow "  ! $name: captions sidecar absent — operator disabled via captions_sidecar:false" ;;
+            OK:*)
+              green "  ✓ $name: MP4 ok (size=$size, faststart, audio contiguous, RMS ≥ -45dB, aac@44100, engagement $eng_out, captions $cap_out)"
+              return 0 ;;
+          esac ;;
+        1) red "  ✗ $name: captions sidecar invalid — $cap_out"; return 1 ;;
       esac
       green "  ✓ $name: MP4 ok (size=$size, faststart, audio contiguous, RMS ≥ -45dB, aac@44100)"; return 0 ;;
     mp3)

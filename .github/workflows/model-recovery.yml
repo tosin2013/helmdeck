@@ -58,7 +58,11 @@ env:
 
 jobs:
   recovery:
-    name: model recovery (${{ env.RECOVERY_MODEL }})
+    # Job name is a static literal because GitHub Actions can't
+    # interpolate workflow-level env into jobs.<id>.name. If the
+    # model pin changes, also update this label so the Actions page
+    # shows what's actually running.
+    name: model recovery (kimi-k2.6:free)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

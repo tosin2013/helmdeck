@@ -1,0 +1,207 @@
+name: model-discovery
+
+# Multi-model recovery matrix (v0.26.0). The single-pinned-model
+# regression backstop lives in model-recovery.yml (weekly Sunday).
+# This workflow takes the same 5 typed-error recovery scenarios and
+# runs them against a *matrix* of free-tier models so we can:
+#
+#   1. Confirm the pinned model (openai/gpt-oss-120b:free) still
+#      meets the v0.25.0 thresholds — it's the only `required` row.
+#   2. Track the recovery rate of three OTHER free models against
+#      helmdeck's typed-error contract. This is informational —
+#      `continue-on-error` ensures their failures don't block the
+#      workflow — but their per-week scores are the empirical input
+#      to a product decision we deferred at v0.25.0: should
+#      openrouter/free be surfaced as a default chat-model target
+#      for helmdeck users without API keys?
+#
+# Decision rule for the openrouter/free row (documented up front so
+# it's not retrofitted to the data): ≥7/10 across all 5 scenarios
+# for 6 consecutive weekly runs → surface as a recommended default.
+# <5/10 on any scenario → never offer. In between → document the
+# gaps and leave the routing choice to the operator.
+#
+# Each observational model has a `threshold_modifier` so weaker /
+# higher-variance models can have honest lower thresholds without
+# globally weakening the v0.25.0 reliability bet. Gemma-4-31B at
+# threshold-1 is the same reliability story as gpt-oss-120B at
+# threshold+0 — "reliably correct in 60% of cases for the smaller
+# model" vs "70% for the larger." Documenting the modifier per
+# model keeps the comparison honest.
+#
+# Cadence: weekly Wednesday 06:00 UTC. Different day from
+# model-recovery.yml (Sunday) so the two workflows don't compete
+# for the same runner pool.
+
+on:
+  schedule:
+    - cron: '0 6 * * 3'
+  workflow_dispatch:
+    inputs:
+      attempts:
+        description: 'Attempts per scenario per model (default 10)'
+        required: false
+        default: '10'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-discovery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    name: ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      # fail-fast: false so one observational row dying doesn't
+      # short-circuit the matrix. Each row is independent data.
+      fail-fast: false
+      matrix:
+        include:
+          - model: openai/gpt-oss-120b:free
+            label: required — gpt-oss-120b
+            tier: required
+            threshold_modifier: 0
+          - model: google/gemma-4-31b-it:free
+            label: observational — gemma-4-31b
+            tier: observational
+            # 31B is ~4x smaller than the pinned 120B; one threshold
+            # tick lower respects the size gap honestly.
+            threshold_modifier: -1
+          - model: nvidia/nemotron-3-ultra-550b-a55b:free
+            label: observational — nemotron-3-ultra
+            tier: observational
+            # 550B-A55B (MoE, 55B active) is comparable to the pinned
+            # model in usable size; same threshold.
+            threshold_modifier: 0
+          - model: openrouter/auto
+            label: observational — openrouter auto-router
+            tier: observational
+            # The auto-router picks a different model per call within
+            # its free-tier pool; per-attempt variance is inherently
+            # higher. One threshold tick lower for honesty.
+            threshold_modifier: -1
+    # continue-on-error: only the required tier blocks the workflow.
+    # Observational failures still report scores; the alert workflow
+    # opens an issue when an observational row goes fully dark.
+    continue-on-error: ${{ matrix.tier != 'required' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Preflight — model availability
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MODEL: ${{ matrix.model }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo "::warning::OPENROUTER_API_KEY secret not set; this matrix row will skip."
+            exit 0
+          fi
+          tmp=$(mktemp)
+          curl -fsS https://openrouter.ai/api/v1/models \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            -o "$tmp" \
+            || { echo "::error::OpenRouter /models call failed"; exit 1; }
+          if ! grep -F "\"id\":\"$MODEL\"" "$tmp" >/dev/null; then
+            # On the openrouter/auto row this can mean the auto-router
+            # listing isn't queryable the same way model rows are; the
+            # test itself will surface the right error.
+            echo "::warning::$MODEL not found in /models response; the test may surface routing errors."
+          else
+            echo "preflight: $MODEL is in catalog ✓"
+          fi
+
+      - name: Run recovery scenarios
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          HELMDECK_RECOVERY_TESTS: '1'
+          HELMDECK_RECOVERY_MODEL: ${{ matrix.model }}
+          HELMDECK_RECOVERY_ATTEMPTS: ${{ github.event.inputs.attempts || '10' }}
+          # The threshold modifier is the v0.26.0 addition: each
+          # matrix row passes its modifier through to runScenario,
+          # which shifts every scenario's Threshold by that amount
+          # (floored at 1). Default 0 preserves v0.25.0 behavior;
+          # the required row uses 0 for honest comparison.
+          HELMDECK_RECOVERY_THRESHOLD_MODIFIER: ${{ matrix.threshold_modifier }}
+        run: |
+          go test -v -tags=recovery -count=1 -timeout=40m ./internal/reliability/...
+
+      - name: Rename report for matrix uniqueness
+        # Each matrix row writes to /tmp/recovery-report.json; rename
+        # so the artifact upload doesn't collide when the aggregator
+        # downloads all rows.
+        if: always() && hashFiles('/tmp/recovery-report.json') != ''
+        env:
+          MODEL_SLUG: ${{ matrix.model }}
+        run: |
+          slug=$(echo "$MODEL_SLUG" | tr '/:' '__')
+          mv /tmp/recovery-report.json "/tmp/recovery-report-${slug}.json"
+          echo "renamed to recovery-report-${slug}.json"
+
+      - name: Upload per-model report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: recovery-report-${{ strategy.job-index }}
+          path: /tmp/recovery-report-*.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  aggregate:
+    name: aggregate per-model summary
+    runs-on: ubuntu-latest
+    needs: discover
+    # Run even when an observational row failed, so the summary
+    # table reflects reality (including the failure rows).
+    if: always()
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all per-model reports
+        uses: actions/download-artifact@v7
+        with:
+          path: reports/
+          pattern: recovery-report-*
+          merge-multiple: true
+
+      - name: Build combined summary
+        run: |
+          set -euo pipefail
+          if [ ! -d reports ] || [ -z "$(ls reports 2>/dev/null)" ]; then
+            echo "::warning::no per-model reports found; matrix may have all failed before generating reports"
+            exit 0
+          fi
+          echo "## Multi-model recovery summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Model | Scenarios passed | Per-scenario | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          # jq: for each report, count scenarios that PASS, list the
+          # per-scenario score, mark a status emoji. The status is:
+          #   ✓  — every scenario passed its (possibly modified) threshold
+          #   ⚠  — at least one scenario below threshold (but >0 successes)
+          #   ✗  — at least one scenario at 0 successes (provider gone)
+          for f in reports/recovery-report-*.json; do
+            model=$(jq -r .model "$f")
+            scenarios=$(jq -r '.scenarios | length' "$f")
+            passed=$(jq -r '[.scenarios[] | select(.passed)] | length' "$f")
+            details=$(jq -r '.scenarios[] | "\(.name)=\(.successes)/\(.attempts)"' "$f" | tr '\n' ' ')
+            any_zero=$(jq -r 'any(.scenarios[]; .successes == 0)' "$f")
+            if [ "$any_zero" = "true" ]; then
+              status="✗"
+            elif [ "$passed" -eq "$scenarios" ]; then
+              status="✓"
+            else
+              status="⚠"
+            fi
+            echo "| \`$model\` | $passed/$scenarios | $details | $status |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Status legend: ✓ all scenarios met threshold · ⚠ at least one below threshold (but received responses) · ✗ at least one scenario fully dark (0 successes — provider may be deprecated or unreachable)" >> "$GITHUB_STEP_SUMMARY"

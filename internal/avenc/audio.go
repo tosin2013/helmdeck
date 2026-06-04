@@ -111,8 +111,22 @@ func ConcatVideoMP4s(ctx context.Context, exec Executor, listPath, outPath strin
 	if bitrate == 0 {
 		bitrate = 192
 	}
+	// -movflags +faststart relocates the moov atom from the file
+	// tail (mp4 muxer's default) to the head via a second-pass
+	// rewrite. Without this flag, every streaming player — HTML5
+	// <video>, browser embeds, the OpenClaw chat UI's inline
+	// preview, and most mobile MP4 frameworks — must download the
+	// entire file before they can begin playback because the seek
+	// index lives at the end. In practice that manifests as "audio
+	// plays for the buffered portion, then stops at a deterministic
+	// timestamp on every replay" — even though the on-disk audio is
+	// healthy and contiguous. ffprobe-diagnosed in PR (audio
+	// playback dropouts) by sampling RMS at 30s intervals across the
+	// full file: uniform -22 to -24 dB throughout, yet players cut
+	// out partway. The fix is one flag; the bug had been there since
+	// slides.narrate shipped.
 	cmd := fmt.Sprintf(
-		"ffmpeg -y -f concat -safe 0 -i %s -c:v copy -c:a aac -b:a %dk -ar 44100 %s",
+		"ffmpeg -y -f concat -safe 0 -i %s -c:v copy -c:a aac -b:a %dk -ar 44100 -movflags +faststart %s",
 		shellQuote(listPath), bitrate, shellQuote(outPath),
 	)
 	res, err := exec(ctx, session.ExecRequest{Cmd: []string{"sh", "-c", cmd}})

@@ -1,0 +1,184 @@
+name: model-recovery
+
+# Model-recovery loop test (PR H of the v0.25.0 reliability arc). The
+# headline claim helmdeck rests on is that WEAK models can drive
+# complex workflows iff the surrounding environment is perfectly
+# reliable — typed errors (ADR 008), strict schemas, context
+# compaction (ADR 050/051). PRs A-G proved the environment is
+# correct (coverage, contract tests, properties, mutation, engine
+# audit + S3 store + MCP). This workflow tests the BET itself:
+# given a typed error envelope, does a free weak model actually act
+# on it the way the closed-set error code says it should?
+#
+# Why free OpenRouter, not Haiku 4.5: real-token cost on nightly CI
+# compounds; a free tier keeps the test budget at zero. More
+# importantly, recovery from a weak model is a stronger reliability
+# claim than recovery from a smart one — if Kimi-K2.6 can recover,
+# the typed-error contract is doing the work, not the model's
+# general intelligence.
+#
+# To enable: add OPENROUTER_API_KEY as a repository secret (Settings
+# → Secrets and variables → Actions). Without the secret the
+# workflow runs the preflight + skips the test cleanly.
+
+on:
+  schedule:
+    # Weekly on Sunday 06:00 UTC. The regression risks this workflow
+    # catches (provider deprecation, model-behavior shift, OpenRouter
+    # free-tier rotation) don't benefit from sub-week detection;
+    # daily would mostly produce nearly-identical results with
+    # run-to-run variance obscuring actual drift. Weekly gives 4
+    # data points per month and ~12 per quarter — plenty for trend.
+    # Sunday is low-Actions-traffic; maintainer sees results Monday
+    # morning. If the v0.26.0 multi-model discovery workflow lands,
+    # stagger its cron (e.g. Wednesday) so the two don't compete for
+    # the same runner pool.
+    - cron: '0 6 * * 0'
+  workflow_dispatch:
+    inputs:
+      attempts:
+        description: 'Attempts per scenario (default 10)'
+        required: false
+        default: '10'
+
+permissions:
+  contents: read
+
+# Cancel an in-flight nightly if a new commit lands; the scheduled
+# run always starts from main HEAD anyway.
+concurrency:
+  group: model-recovery-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned model + dated quarterly review. Both live HERE (not in a
+  # separate doc) so updating the pin prompts updating the date. The
+  # preflight emits a `::warning::` annotation past MODEL_NEXT_REVIEW_DUE,
+  # nudging the maintainer to verify the model is still the right
+  # choice. To verify: visit https://openrouter.ai/models?supported_parameters=free
+  # — pick the strongest current free weak-model option, swap
+  # RECOVERY_MODEL, bump MODEL_LAST_VERIFIED to today, push
+  # MODEL_NEXT_REVIEW_DUE 3 months out.
+  # First-run history: moonshotai/kimi-k2.6:free was the initial
+  # pin (selected for the "weakest possible model" framing of the
+  # cheap-model bet). When the test ran, the model nailed the
+  # action whenever calls landed — but Moonshot's free-tier infra
+  # combined two problems: aggressive upstream throttling without
+  # Retry-After, and >90s per-call latency that hit the per-attempt
+  # context deadline. Swapped to openai/gpt-oss-120b:free on
+  # 2026-06-04: still firmly in the weak-model cohort the bet is
+  # about (120B is small by current standards), but OpenAI's
+  # infra delivers responses faster and with stronger JSON-mode
+  # adherence (fewer malformed-output failures).
+  RECOVERY_MODEL: openai/gpt-oss-120b:free
+  MODEL_LAST_VERIFIED: 2026-06-04
+  MODEL_NEXT_REVIEW_DUE: 2026-09-04
+  HELMDECK_RECOVERY_TESTS: '1'
+
+jobs:
+  recovery:
+    # Job name is a static literal because GitHub Actions can't
+    # interpolate workflow-level env into jobs.<id>.name. If the
+    # model pin changes, also update this label so the Actions page
+    # shows what's actually running.
+    name: model recovery (gpt-oss-120b:free)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Preflight — pinned-model availability + quarterly review reminder
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo "::warning::OPENROUTER_API_KEY secret not set; recovery test will skip. Add the secret in Settings → Secrets and variables → Actions to enable the nightly."
+            exit 0
+          fi
+
+          # Verify the pinned model is still in OpenRouter's catalog.
+          # If absent, fail loudly: the pin needs an explicit update,
+          # not a silent fallback.
+          tmp=$(mktemp)
+          if ! curl -fsS https://openrouter.ai/api/v1/models \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            -o "$tmp"; then
+            echo "::error::OpenRouter /models call failed. Check the API key validity and try the workflow_dispatch run."
+            exit 1
+          fi
+          if ! grep -F "\"id\":\"$RECOVERY_MODEL\"" "$tmp" >/dev/null; then
+            echo "::error::pinned model $RECOVERY_MODEL not in OpenRouter catalog. Visit https://openrouter.ai/models?supported_parameters=free and pick a replacement; update RECOVERY_MODEL + MODEL_LAST_VERIFIED + MODEL_NEXT_REVIEW_DUE in this workflow."
+            exit 1
+          fi
+          echo "preflight: $RECOVERY_MODEL is in catalog ✓"
+
+          # Quarterly review reminder. Comparing ISO date strings
+          # lexicographically is correct because YYYY-MM-DD sorts the
+          # same way the calendar does. The annotation surfaces on
+          # the run summary; maintainer sees it on every subsequent
+          # nightly until they update the dates.
+          today=$(date -u +%Y-%m-%d)
+          if [ "$today" \> "$MODEL_NEXT_REVIEW_DUE" ]; then
+            echo "::warning::model pin review overdue (was due $MODEL_NEXT_REVIEW_DUE). Re-verify $RECOVERY_MODEL is still the strongest free-tier weak-model option at https://openrouter.ai/models?supported_parameters=free. If still right: bump MODEL_LAST_VERIFIED=$today and MODEL_NEXT_REVIEW_DUE +3 months. If not: swap the pin."
+          else
+            echo "preflight: next review due $MODEL_NEXT_REVIEW_DUE (today $today) ✓"
+          fi
+
+      - name: Run recovery scenarios
+        # The test itself skips cleanly when OPENROUTER_API_KEY is
+        # empty (recovery_test.go's `envAPIKey` gate). We don't
+        # `if:` here on the secret because GitHub Actions doesn't
+        # allow the `secrets` context in step-level conditionals;
+        # the preflight step above prints a clear warning when the
+        # secret is missing instead.
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          HELMDECK_RECOVERY_MODEL: ${{ env.RECOVERY_MODEL }}
+          HELMDECK_RECOVERY_ATTEMPTS: ${{ github.event.inputs.attempts || '10' }}
+        run: |
+          # 40m timeout: 5 scenarios × 10 attempts × 12s base pacing
+          # = 10min minimum. With the client's 15/30/60/120s retry
+          # backoff on upstream throttle (kimi-k2.6:free's Moonshot
+          # provider rate-limits independently from OpenRouter's
+          # account quota, and the throttle doesn't publish a
+          # Retry-After), a fully-throttled run can take ~35min.
+          # 40m leaves headroom without burning the runner-minutes
+          # budget. If runs consistently hit timeout, the upstream
+          # quota has tightened — swap RECOVERY_MODEL and update
+          # MODEL_LAST_VERIFIED + MODEL_NEXT_REVIEW_DUE.
+          go test -v -tags=recovery -count=1 -timeout=40m ./internal/reliability/...
+
+      - name: Summarize per-scenario report
+        # Always run the summary step so a failed test still posts
+        # the distribution to the run page. The report file is small
+        # (one JSON object); a quick jq summary gives operators the
+        # PASS/FAIL ratio at a glance.
+        if: always() && hashFiles('/tmp/recovery-report.json') != ''
+        run: |
+          set -euo pipefail
+          echo "## Model recovery report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Model: \`$(jq -r .model /tmp/recovery-report.json)\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Run: $(jq -r .timestamp /tmp/recovery-report.json)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Scenario | Score | Threshold | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.scenarios[] | "| \(.name) | \(.successes)/\(.attempts) | \(.threshold) | \(if .passed then "✓ PASS" else "✗ FAIL" end) |"' \
+            /tmp/recovery-report.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload per-scenario report
+        # 30-day retention: enough to diff across recent nights when
+        # a regression appears, short enough to not balloon storage.
+        # The plan defers a long-term trend dashboard (would track
+        # per-scenario scores over time) to a follow-up PR.
+        if: always() && hashFiles('/tmp/recovery-report.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: recovery-report
+          path: /tmp/recovery-report.json
+          retention-days: 30

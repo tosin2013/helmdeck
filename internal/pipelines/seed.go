@@ -175,20 +175,43 @@ func Builtins() []*Pipeline {
 			// allow_silent_output deliberately omitted — caller can
 			// opt in by passing it explicitly. See grounded-narrate
 			// for the rationale.
-			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":"${{ inputs.allow_silent_output }}"}`),
+			// metadata_model threaded so the pipeline turns engagement
+			// metadata ON by default for pipeline runs (the bare
+			// slides.narrate pack stays opt-in for back-compat).
+			step("narrate", "slides.narrate", `{"markdown":"${{ steps.outline.output.markdown }}","allow_silent_output":"${{ inputs.allow_silent_output }}","metadata_model":"openrouter/auto"}`),
 		).withMeta(PipelineMetadata{
 			Accepts:        []string{"repo_url"},
-			Produces:       []string{"mp4", "narrated_video"},
+			Produces:       []string{"mp4", "narrated_video", "engagement_metadata"},
 			IntentKeywords: []string{"video about repo", "narrate this codebase", "presentation from GitHub project", "explain repo as a video"},
-			TypicalUse:     "When the user wants a narrated MP4 walkthrough of a GitHub repo — uses README + docs + code map as source.",
-			Limitations:    []string{"narrated video only — for a podcast use repo-readme-podcast", "requires ElevenLabs key for narration (falls back to silent video)"},
-			Supersedes:     []string{"repo.fetch", "repo.map", "slides.outline", "slides.narrate"},
+			TypicalUse:     "When the user wants a narrated MP4 walkthrough of a GitHub repo — uses README + docs + code map as source. Emits an `engagement` object (title, description, chapters, hashtags, hook) sized for YouTube.",
+			Limitations: []string{
+				"narrated video only — for a podcast use repo-readme-podcast",
+				"requires ElevenLabs key for narration (falls back to silent video)",
+				// Engagement-honesty entry — slide-deck-with-voiceover
+				// is a structurally lower-retention format than talking-head;
+				// metadata moves the artifact to median-within-format but
+				// can't bridge the gap. See engagement.format_ceiling_note
+				// in the slides.narrate output for the long-form note.
+				"engagement metadata is generated post-hoc and is research-shaped (chapters at 0:00, title char-cap, hook structure); won't bridge the structural retention gap vs talking-head video — best for asynchronous explainer content",
+			},
+			Supersedes: []string{"repo.fetch", "repo.map", "slides.outline", "slides.narrate"},
 		}),
 		pipe("builtin.repo-readme-podcast", "Repo → podcast",
-			"Clone a repo and generate a podcast about it from its README.",
+			"Clone a repo and generate a podcast about it from its README. Emits an `engagement` object (title, subtitle, summary, show notes, Podcasting 2.0 chapters, mid-roll CTA) alongside the MP3.",
 			step("fetch", "repo.fetch", `{"url":"${{ inputs.repo_url }}"}`),
 			step("podcast", "podcast.generate", `{"source_text":"${{ steps.fetch.output.readme.content }}","model":"openrouter/auto","speakers":`+defaultSpeakers+`,"allow_silent_output":true}`),
-		),
+		).withMeta(PipelineMetadata{
+			Accepts:        []string{"repo_url"},
+			Produces:       []string{"mp3", "podcast_audio", "engagement_metadata"},
+			IntentKeywords: []string{"podcast from repo", "audio walkthrough of repo", "narrate repo readme"},
+			TypicalUse:     "When the user wants an audio-only podcast of a repo (no video). Engagement metadata defaults follow Apple/Spotify spec.",
+			Limitations: []string{
+				"audio only — for a narrated video use repo-presentation",
+				"requires ElevenLabs key for narration (falls back to silence-padded MP3)",
+				"engagement metadata reflects Apple/Spotify spec; solo vs co-hosted retention is execution-dependent — pack supports both",
+			},
+			Supersedes: []string{"repo.fetch", "podcast.generate"},
+		}),
 		pipe("builtin.html-video", "HTML composition → MP4",
 			"Render an HTML/CSS/JS composition (authored by your agent, not hand-typed) to a deterministic MP4. Optional inputs resolution? (720p/1080p/4k) and aspect_ratio? (16:9 default / 9:16 for Shorts/TikTok / 1:1 square) are threaded to hyperframes.render — a composition whose intrinsic dimensions are vertical (e.g. 1080×1920) needs aspect_ratio:\"9:16\" set explicitly. To generate the composition from a plain description instead, use builtin.prompt-video.",
 			step("render", "hyperframes.render", `{"composition_html":"${{ inputs.composition_html }}","resolution":"${{ inputs.resolution }}","aspect_ratio":"${{ inputs.aspect_ratio }}"}`),
@@ -206,7 +229,17 @@ func Builtins() []*Pipeline {
 			// emits both (audio_url is "" on a keyless store → a silent video).
 			step("compose", "hyperframes.compose", `{"description":"${{ inputs.description }}","model":"openrouter/auto","aspect_ratio":"${{ inputs.aspect_ratio }}","audio_url":"${{ steps.podcast.output.audio_url }}","duration_seconds":"${{ steps.podcast.output.duration_s }}"}`),
 			step("render", "hyperframes.render", `{"composition_html":"${{ steps.compose.output.composition_html }}","resolution":"${{ inputs.resolution }}","aspect_ratio":"${{ inputs.aspect_ratio }}"}`),
-		),
+		).withMeta(PipelineMetadata{
+			Accepts:        []string{"description"},
+			Produces:       []string{"mp4", "narrated_video"},
+			IntentKeywords: []string{"describe a video", "narrated video from prompt", "make a video about", "narrate this idea as a video"},
+			TypicalUse:     "When the user has a description but no source repo or deck — generates a narrated MP4 directly from prose.",
+			Limitations: []string{
+				"requires ElevenLabs key for narration (falls back to silent video)",
+				"engagement metadata is produced as part of the intermediate podcast.generate step but the final hyperframes.render output is the MP4 — fetch engagement from the podcast step output if a publish bundle is needed",
+			},
+			Supersedes: []string{"podcast.generate", "hyperframes.compose", "hyperframes.render"},
+		}),
 
 		// ── Coding (beta) — ADR 046 ─────────────────────────────────
 		// Each name ends with " (beta)" so the UI renders a beta Badge;

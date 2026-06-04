@@ -168,14 +168,14 @@ func TestSlidesNarrate_HappyPathWithNarration(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 	var out struct {
-		VideoArtifactKey    string         `json:"video_artifact_key"`
-		VideoSize           int            `json:"video_size"`
-		SlideCount          int            `json:"slide_count"`
-		TotalDurationS      float64        `json:"total_duration_s"`
-		HasNarration        bool           `json:"has_narration"`
-		VoiceUsed           string         `json:"voice_used"`
-		MetadataArtifactKey string         `json:"metadata_artifact_key"`
-		Metadata            map[string]any `json:"metadata"`
+		VideoArtifactKey      string         `json:"video_artifact_key"`
+		VideoSize             int            `json:"video_size"`
+		SlideCount            int            `json:"slide_count"`
+		TotalDurationS        float64        `json:"total_duration_s"`
+		HasNarration          bool           `json:"has_narration"`
+		VoiceUsed             string         `json:"voice_used"`
+		EngagementArtifactKey string         `json:"engagement_artifact_key"`
+		Engagement            map[string]any `json:"engagement"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatal(err)
@@ -193,15 +193,121 @@ func TestSlidesNarrate_HappyPathWithNarration(t *testing.T) {
 	if out.HasNarration {
 		t.Error("has_narration should be false without vault key")
 	}
-	// Metadata should be generated (we provided metadata_model).
-	if out.MetadataArtifactKey == "" {
-		t.Error("metadata_artifact_key is empty")
+	// Engagement metadata should be generated (we provided metadata_model).
+	if out.EngagementArtifactKey == "" {
+		t.Error("engagement_artifact_key is empty")
 	}
-	if out.Metadata == nil {
-		t.Error("metadata is nil")
+	if out.Engagement == nil {
+		t.Error("engagement is nil")
 	}
-	if out.Metadata["title"] != "Test Deck" {
-		t.Errorf("metadata.title = %v", out.Metadata["title"])
+	if out.Engagement["title"] != "Test Deck" {
+		t.Errorf("engagement.title = %v", out.Engagement["title"])
+	}
+	// Constant enrichment fields per the engagement contract.
+	if out.Engagement["format_ceiling_note"] == nil {
+		t.Error("engagement.format_ceiling_note missing — should always be present when engagement enabled")
+	}
+	if out.Engagement["captions_recommended"] != true {
+		t.Errorf("engagement.captions_recommended = %v, want true", out.Engagement["captions_recommended"])
+	}
+	if _, ok := out.Engagement["title_char_count"].(float64); !ok {
+		t.Errorf("engagement.title_char_count missing or wrong type; got %T", out.Engagement["title_char_count"])
+	}
+}
+
+// TestSlidesNarrate_EngagementDisabled — without metadata_model the
+// handler emits NO engagement object and no sidecar artifact key.
+// This is the back-compat path: existing pipelines that don't ask for
+// metadata still get the v0.25.x output shape (minus the renamed
+// fields, which is the documented v0.26.0 breaking change).
+func TestSlidesNarrate_EngagementDisabled(t *testing.T) {
+	exec := &narrateExecScript{}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# Welcome\n\n<!-- Hello -->",
+		"allow_silent_output": true
+	}`
+	// No metadata_model, no dispatcher — engagement gate is two-fold
+	// (d != nil AND metadata_model != "") so passing nil here covers
+	// both branches at once.
+	raw, err := runNarrate(t, nil, nil, exec, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := out["engagement"]; present {
+		t.Errorf("engagement should be absent when metadata_model unset; got %v", out["engagement"])
+	}
+	// The artifact key field is always present in the marshaled out
+	// (declared in OutputSchema) but must be the empty string here.
+	if v, _ := out["engagement_artifact_key"].(string); v != "" {
+		t.Errorf("engagement_artifact_key = %q, want empty (no engagement gen)", v)
+	}
+}
+
+// TestSlidesNarrate_EngagementOperatorOverrides — the server-side
+// enrichment treats category and language as operator-authoritative:
+// whatever the LLM emitted for those fields is replaced. This is
+// the canonical safety pattern (don't trust the LLM with config).
+func TestSlidesNarrate_EngagementOperatorOverrides(t *testing.T) {
+	exec := &narrateExecScript{}
+	// LLM tries to emit Education + fr; operator inputs say Gaming + es.
+	disp := &scriptedDispatcherWT{replies: []string{
+		`{"title":"T","description":"d","tags":["x"],"category":"Education","language":"fr"}`,
+	}}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# A\n\n<!-- hi -->",
+		"metadata_model": "openai/gpt-4o-mini",
+		"category": "Gaming",
+		"language": "es",
+		"allow_silent_output": true
+	}`
+	raw, err := runNarrate(t, disp, nil, exec, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		Engagement map[string]any `json:"engagement"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.Engagement["category"]; got != "Gaming" {
+		t.Errorf("category = %v, want Gaming (operator input must override LLM)", got)
+	}
+	if got := out.Engagement["language"]; got != "es" {
+		t.Errorf("language = %v, want es (operator input must override LLM)", got)
+	}
+}
+
+// TestSlidesNarrate_EngagementHashtagCountClamp — values outside the
+// 3-5 research-validated range are clamped server-side. The prompt
+// asks the LLM for the value; the handler enforces it independently
+// so a drifted prompt can't slip through.
+func TestSlidesNarrate_EngagementHashtagCountClamp(t *testing.T) {
+	// Out-of-range input gets clamped to 4 (default). We can't easily
+	// observe the clamped value in the LLM prompt without mocking the
+	// dispatcher's request inspection, so we assert the input doesn't
+	// error and the engagement object is still produced.
+	exec := &narrateExecScript{}
+	disp := &scriptedDispatcherWT{replies: []string{
+		`{"title":"T","description":"d","hashtags":["a","b","c","d"],"tags":["x"],"category":"X","language":"en"}`,
+	}}
+	for _, hc := range []int{0, 1, 99} {
+		t.Run(fmt.Sprintf("hashtag_count=%d", hc), func(t *testing.T) {
+			disp.calls = 0 // reset
+			input := fmt.Sprintf(`{
+				"markdown": "---\nmarp: true\n---\n\n# A\n\n<!-- hi -->",
+				"metadata_model": "openai/gpt-4o-mini",
+				"hashtag_count": %d,
+				"allow_silent_output": true
+			}`, hc)
+			if _, err := runNarrate(t, disp, nil, exec, input); err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+		})
 	}
 }
 

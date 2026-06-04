@@ -244,6 +244,111 @@ audio_codec_params_ok() {
   [[ "$codec" == "$want_codec" && "$rate" == "$want_rate" ]]
 }
 
+# ── engagement-metadata asserts (mp4:av + mp3:av structural checks) ──
+# The engagement object lives in the run-record's terminal-step
+# output (slides.narrate / podcast.generate emit it inline). Each
+# pack's structural rules (chapter floor, 0:00 / startTime=0 anchor,
+# CTA placement) are baked into the pack's prompt, but the prompt is
+# advisory to the LLM — these asserts are the regression-impossibility
+# layer that catches prompt drift over time.
+#
+# Asserts run only when engagement IS emitted (presence is gated on
+# metadata_model). When absent, the pack-level test still passed but
+# the engagement layer doesn't gate the run.
+
+# engagement_assert_youtube <runfile> <duration_s>
+# Asserts the YouTube-shaped engagement object on a slides.narrate
+# pipeline run: title <= 60 chars, chapters[0].timestamp == "0:00",
+# at least 3 chapters when duration > 7 minutes.
+engagement_assert_youtube() {
+  python3 - "$1" "$2" <<'PY'
+import sys, json
+run = json.load(open(sys.argv[1]))
+dur = float(sys.argv[2] or 0)
+steps = run.get("steps") or []
+if not steps:
+    sys.exit(0)
+out = steps[-1].get("output") or {}
+if isinstance(out, str):
+    try: out = json.loads(out)
+    except Exception: out = {}
+eng = out.get("engagement") or {}
+if not eng:
+    print("ENGAGEMENT_ABSENT")
+    sys.exit(0)
+errs = []
+title = eng.get("title", "")
+if len(title) > 60:
+    errs.append(f"title {len(title)} chars > 60 cap")
+chapters = eng.get("chapters") or []
+if not chapters:
+    errs.append("chapters empty")
+elif chapters[0].get("timestamp") != "0:00":
+    errs.append(f"chapters[0].timestamp = {chapters[0].get('timestamp')!r}, must be '0:00'")
+if dur > 7 * 60 and len(chapters) < 3:
+    errs.append(f"duration {dur:.0f}s > 7min but only {len(chapters)} chapters (YouTube guidance: ≥3)")
+if errs:
+    print("FAIL: " + "; ".join(errs))
+    sys.exit(1)
+print(f"OK: title={len(title)}c, chapters={len(chapters)}")
+PY
+}
+
+# engagement_assert_podcast <runfile> <duration_s>
+# Asserts the Podcasting-2.0-shaped engagement object on a
+# podcast.generate pipeline run: chapters[0].startTime == 0, ≥3
+# chapters when duration > 10 minutes, cta.placement == "mid-roll".
+engagement_assert_podcast() {
+  python3 - "$1" "$2" <<'PY'
+import sys, json
+run = json.load(open(sys.argv[1]))
+dur = float(sys.argv[2] or 0)
+steps = run.get("steps") or []
+if not steps:
+    sys.exit(0)
+out = steps[-1].get("output") or {}
+if isinstance(out, str):
+    try: out = json.loads(out)
+    except Exception: out = {}
+eng = out.get("engagement") or {}
+if not eng:
+    print("ENGAGEMENT_ABSENT")
+    sys.exit(0)
+errs = []
+chapters = eng.get("chapters") or []
+if not chapters:
+    errs.append("chapters empty")
+elif chapters[0].get("startTime") != 0:
+    errs.append(f"chapters[0].startTime = {chapters[0].get('startTime')!r}, must be 0")
+if dur > 10 * 60 and len(chapters) < 3:
+    errs.append(f"duration {dur:.0f}s > 10min but only {len(chapters)} chapters")
+cta = eng.get("cta") or {}
+if cta.get("placement") != "mid-roll":
+    errs.append(f"cta.placement = {cta.get('placement')!r}, must be 'mid-roll' (defensive override)")
+if errs:
+    print("FAIL: " + "; ".join(errs))
+    sys.exit(1)
+print(f"OK: chapters={len(chapters)}, cta=mid-roll")
+PY
+}
+
+# terminal_step_duration_s <runfile> — extracts total_duration_s
+# (slides.narrate) or duration_s (podcast.generate) from the terminal
+# step's output. Empty string when absent.
+terminal_step_duration_s() {
+  python3 -c '
+import sys, json
+run = json.load(sys.stdin)
+steps = run.get("steps") or []
+if not steps: sys.exit(0)
+out = steps[-1].get("output") or {}
+if isinstance(out, str):
+    try: out = json.loads(out)
+    except Exception: out = {}
+print(out.get("total_duration_s") or out.get("duration_s") or "")
+' <"$1"
+}
+
 PASS=0; FAIL=0; SKIP=0; FAILED=()
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
@@ -309,6 +414,21 @@ assert_artifact() {
       if ! audio_codec_params_ok "$art" aac 44100; then
         red "  ✗ $name: audio codec/rate drifted from aac+44100 (encoder regression)"; return 1
       fi
+      # Engagement object structural check (YouTube-shaped).
+      local engdur eng_out
+      engdur=$(terminal_step_duration_s "$runfile")
+      eng_out=$(engagement_assert_youtube "$runfile" "$engdur")
+      case $? in
+        0)
+          case "$eng_out" in
+            ENGAGEMENT_ABSENT)
+              yellow "  ! $name: engagement object absent — pipeline didn't request it (metadata_model unset)" ;;
+            OK:*)
+              green "  ✓ $name: MP4 ok (size=$size, faststart, audio contiguous, RMS ≥ -45dB, aac@44100, engagement $eng_out)"
+              return 0 ;;
+          esac ;;
+        1) red "  ✗ $name: engagement object structurally invalid — $eng_out"; return 1 ;;
+      esac
       green "  ✓ $name: MP4 ok (size=$size, faststart, audio contiguous, RMS ≥ -45dB, aac@44100)"; return 0 ;;
     mp3)
       if [[ "$size" -lt 1000 ]]; then red "  ✗ $name: MP3 too small (size=$size)"; return 1; fi
@@ -333,6 +453,21 @@ assert_artifact() {
       if ! audio_codec_params_ok "$art" mp3 44100; then
         red "  ✗ $name: audio codec/rate drifted from mp3+44100 (encoder regression)"; return 1
       fi
+      # Engagement object structural check (Podcasting-2.0-shaped).
+      local engdur_mp3 eng_out_mp3
+      engdur_mp3=$(terminal_step_duration_s "$runfile")
+      eng_out_mp3=$(engagement_assert_podcast "$runfile" "$engdur_mp3")
+      case $? in
+        0)
+          case "$eng_out_mp3" in
+            ENGAGEMENT_ABSENT)
+              yellow "  ! $name: engagement object absent — pipeline didn't generate it" ;;
+            OK:*)
+              green "  ✓ $name: MP3 ok (size=$size, audio contiguous, RMS ≥ -45dB, mp3@44100, engagement $eng_out_mp3)"
+              return 0 ;;
+          esac ;;
+        1) red "  ✗ $name: engagement object structurally invalid — $eng_out_mp3"; return 1 ;;
+      esac
       green "  ✓ $name: MP3 ok (size=$size, audio contiguous, RMS ≥ -45dB, mp3@44100)"; return 0 ;;
     blog)
       if ! grep -qa '\[source\](' "$art" && [[ "$size" -lt 20 ]]; then

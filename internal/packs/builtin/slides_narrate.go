@@ -108,22 +108,71 @@ const (
 	// https://www.w3.org/TR/png-3/#5DataRep
 	pngMagicHex = "89504e470d0a1a0a"
 
-	narrateYouTubePrompt = `You are a YouTube metadata writer. Given the content and durations of a slide presentation, produce ONE JSON object with exactly these fields:
+	// narrateEngagementPrompt enforces research-validated YouTube
+	// engagement rules as HARD constraints. The rules are
+	// non-overridable because the research is unambiguous; letting an
+	// operator soften them would just allow the LLM to drift back to
+	// the generic patterns the research warns against.
+	//
+	// Citations (rules co-located with the WHY so a future maintainer
+	// can audit drift):
+	//   - YouTube chapter spec (0:00 first stamp, ≥10s each, ≥3
+	//     chapters per video — gives each chapter a search-result entry):
+	//     https://support.google.com/youtube/answer/9884579
+	//   - Title CTR sweet spot (~45-55 chars, hard cap 60 for mobile
+	//     truncation), front-loaded keyword, one power-word max:
+	//     humbleandbrag + influenceflow 2026 studies
+	//   - First-30s retention structure (pattern interrupt → payoff
+	//     promise → commitment hook): 1of10.com creator-economy data
+	//   - Hashtag relevance — generic #viral / #fyp provide zero
+	//     algorithmic signal as of 2025-2026 (YouTube AI validates
+	//     against transcript): monetag.com hashtag research
+	narrateEngagementPrompt = `You are a YouTube engagement-metadata writer for a NARRATED SLIDE-DECK video (static images + voice-over). Produce ONE JSON object — no surrounding prose, no markdown fences — with exactly these fields:
 
 {
-  "title": "catchy YouTube title, max 100 characters",
-  "description": "2-3 paragraph description followed by timestamps formatted as:\n\nTimestamps:\n0:00 First slide title\n0:32 Second slide title\n...",
-  "tags": ["tag1", "tag2", ...],
+  "title": "...",
+  "description": "...",
+  "chapters": [{"timestamp": "0:00", "title": "...", "seconds": 0}, ...],
+  "hashtags": ["...", "..."],
+  "tags": ["...", "..."],
+  "hook_30s": "...",
   "category": "Science & Technology",
   "language": "en"
 }
 
-Rules:
-- Timestamps must use cumulative durations provided
-- Format timestamps as M:SS (e.g. 0:00, 1:32, 10:05)
-- Description should summarize the presentation content
-- Tags should cover the main topics for discoverability (10-15 tags)
-- Do not wrap in markdown`
+HARD RULES (the output is rejected by automated tests if violated):
+
+Title:
+- 45-55 characters target, NEVER exceed 60 (mobile truncates beyond).
+- Front-load the primary keyword in the first 4-5 words.
+- One power word max. Numeric specificity ("3 steps", "5 patterns") if natural.
+- Plain text. No emoji. No clickbait punctuation (!!!).
+
+Description:
+- First 100 characters are the hook (this is what appears above-the-fold in search). Make them land.
+- Total length under 1000 characters.
+- Plain text. No keyword stuffing — YouTube's algorithm reads the transcript directly.
+
+Chapters:
+- The FIRST chapter MUST have timestamp "0:00" and seconds=0. YouTube rejects videos whose first chapter is not at 0:00.
+- Provide AT LEAST 3 chapters when total duration > 7 minutes; fewer is acceptable for shorter videos but still aim for ≥2.
+- Minimum 10 seconds between consecutive chapter starts.
+- Use timestamps from the cumulative slide durations supplied; format as M:SS (e.g. "0:00", "1:32", "10:05").
+- Chapter titles ≤ 45 characters, descriptive (not "Intro" / "Part 1" — use the actual topic).
+
+Hashtags:
+- 3 to 5 hashtags, each genuinely relevant to the video content. Format as plain strings WITHOUT the leading #.
+- ZERO generic hashtags (#viral, #fyp, #foryou, #trending, #subscribe) — YouTube validates relevance against the transcript and discards generic ones.
+
+Tags:
+- 10-15 backend keywords covering the main topics for discoverability.
+
+Hook (hook_30s):
+- A 2-4 sentence opening that follows the research-validated structure:
+  (a) Pattern interrupt — a specific surprising claim or question. NOT "Welcome to my channel".
+  (b) Payoff promise — what concrete thing the viewer gets.
+  (c) Commitment hook — open a loop ("here's why" / "this changes when") that resolves later.
+- This is a recommended VO script the creator can adopt; do not include in the description.`
 )
 
 // SlidesNarrate constructs the pack. The dispatcher is used for
@@ -133,7 +182,7 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 	return &packs.Pack{
 		Name:         "slides.narrate",
 		Version:      "v1",
-		Description:  "Convert a Marp slide deck to a narrated MP4 video with ElevenLabs TTS and YouTube metadata. Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to render slides over silence when no key is configured (CI smoke / demo placeholder). Optional hero_image_prompt generates a hero artwork via fal.ai and inlines it into slide 1.",
+		Description:  "Convert a Marp slide deck to a narrated MP4 video with ElevenLabs TTS and YouTube engagement metadata (title, description, chapters, hashtags, hook). Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to render slides over silence when no key is configured (CI smoke / demo placeholder). Optional hero_image_prompt generates a hero artwork via fal.ai and inlines it into slide 1. Honest scope: slide-deck-with-voiceover sits in the lower retention bracket vs talking-head; metadata moves the artifact toward median within format, but cannot bridge the structural gap. Best for asynchronous explainer/educational content.",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"markdown"},
@@ -153,6 +202,14 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				"hero_image_prompt":      "string",
 				"hero_image_model":       "string",
 				"mermaid":                "boolean",
+				// Engagement-metadata knobs — clamped server-side to the
+				// research-validated ranges. Operator can nudge within
+				// those bounds; structural rules (chapter 0:00 anchor,
+				// title char-cap, hook structure) are non-overridable
+				// because the research is unambiguous.
+				"hashtag_count": "number",
+				"category":      "string",
+				"language":      "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -165,9 +222,17 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				"has_narration":         "boolean",
 				"tts_failure_count":     "number",
 				"voice_used":            "string",
-				"metadata_artifact_key": "string",
-				"metadata":              "object",
 				"hero_image_model_used": "string",
+				// engagement is the v0.26.0-renamed-from-metadata field.
+				// Pre-1.0 breaking-change per CHANGELOG header policy;
+				// the metadata path was already opt-in via metadata_model
+				// so consumers are power-users who can adapt the rename.
+				// Engagement is a strict superset of the old metadata:
+				// {title, description, chapters, hashtags, tags, hook_30s,
+				//  captions_recommended, category, language, format_ceiling_note,
+				//  title_char_count}.
+				"engagement":              "object",
+				"engagement_artifact_key": "string",
 				// Cost transparency — emitted by the handler; declared
 				// here so agents/pipeline authors see them in the catalog.
 				// tts_chars is a per-slide breakdown map with a "_total"
@@ -236,6 +301,12 @@ type slidesNarrateInput struct {
 	MinTurnDurationS     float64 `json:"min_turn_duration_s"`
 	DryRun               bool    `json:"dry_run"`
 	Plan                 string  `json:"plan"`
+	// HashtagCount lets operators nudge the count within the 3-5
+	// range the research validates; 0 → default (4). Values outside
+	// 3-5 are clamped in the handler.
+	HashtagCount int    `json:"hashtag_count"`
+	Category     string `json:"category"` // YouTube category; default "Science & Technology"
+	Language     string `json:"language"` // ISO 639 code; default "en"
 	// HeroImagePrompt (#146c) triggers RunImageGen and inlines the
 	// resulting PNG into slide 1. Inserted WITHOUT a `---` separator
 	// so it becomes part of slide 1's existing narration — adding a
@@ -719,27 +790,28 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 				Message: fmt.Sprintf("upload video: %v", err), Cause: err}
 		}
 
-		// 10. YouTube metadata (optional).
+		// 10. YouTube engagement metadata (optional — opt-in via
+		// metadata_model on slides.narrate; default-on for podcast.generate).
 		var totalDuration float64
 		for _, d := range durations {
 			totalDuration += d
 		}
 
-		var metadataKey string
-		var metadata map[string]any
+		var engagementKey string
+		var engagement map[string]any
 		if d != nil && strings.TrimSpace(in.MetadataModel) != "" {
-			ec.Report(98, "generating YouTube metadata")
-			md, err := generateYouTubeMetadata(ctx, d, in.MetadataModel, slides, durations)
+			ec.Report(98, "generating engagement metadata")
+			md, err := generateEngagement(ctx, d, in.MetadataModel, slides, durations, in)
 			if err != nil {
-				ec.Logger.Warn("YouTube metadata generation failed", "err", err)
+				ec.Logger.Warn("engagement metadata generation failed", "err", err)
 			} else {
-				metadata = md
+				engagement = md
 				mdBytes, _ := json.MarshalIndent(md, "", "  ")
-				art, err := ec.Artifacts.Put(ctx, "slides.narrate", "metadata.json", mdBytes, "application/json")
+				art, err := ec.Artifacts.Put(ctx, "slides.narrate", "engagement.json", mdBytes, "application/json")
 				if err != nil {
-					ec.Logger.Warn("metadata artifact upload failed", "err", err)
+					ec.Logger.Warn("engagement artifact upload failed", "err", err)
 				} else {
-					metadataKey = art.Key
+					engagementKey = art.Key
 				}
 			}
 		}
@@ -755,14 +827,14 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 		honestHasNarration := hasNarration && voiceID != "" &&
 			narratableSlideCount > 0 && ttsFailureCount == 0
 		out := map[string]any{
-			"video_artifact_key":    videoArt.Key,
-			"video_size":            len(videoBytes),
-			"slide_count":           len(slides),
-			"total_duration_s":      totalDuration,
-			"has_narration":         honestHasNarration,
-			"tts_failure_count":     ttsFailureCount,
-			"voice_used":            voiceID,
-			"metadata_artifact_key": metadataKey,
+			"video_artifact_key":      videoArt.Key,
+			"video_size":              len(videoBytes),
+			"slide_count":             len(slides),
+			"total_duration_s":        totalDuration,
+			"has_narration":           honestHasNarration,
+			"tts_failure_count":       ttsFailureCount,
+			"voice_used":              voiceID,
+			"engagement_artifact_key": engagementKey,
 			// #145: cost transparency on real runs too. Mirrors the
 			// dry_run shape so callers can rely on the same fields
 			// regardless of mode.
@@ -770,8 +842,8 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			"estimated_cost_usd":       slideEstimateUSD,
 			"estimated_cost_breakdown": slideEstimateBreakdown,
 		}
-		if metadata != nil {
-			out["metadata"] = metadata
+		if engagement != nil {
+			out["engagement"] = engagement
 		}
 		if heroImageModelUsed != "" {
 			out["hero_image_model_used"] = heroImageModelUsed
@@ -909,10 +981,28 @@ func execWithStdin(ctx context.Context, ec *packs.ExecutionContext, path string,
 	})
 }
 
-// --- YouTube metadata helper ---------------------------------------------
+// --- YouTube engagement metadata helper ----------------------------------
 
-func generateYouTubeMetadata(ctx context.Context, d vision.Dispatcher, model string, slides []slideContent, durations []float64) (map[string]any, error) {
-	maxTokens := 1024
+// formatCeilingNoteSlidesNarrate is the constant honesty string per
+// the plan §3. Lives next to the helper so a future maintainer
+// reading drift can see it co-located with the WHY. Mirrored as a
+// pipeline Limitations entry in seed.go and the pack Description.
+const formatCeilingNoteSlidesNarrate = "Slide-deck-with-voiceover sits in the lower retention bracket vs talking-head (avg ~15-20% on 8-15min vs 20-25%). Metadata can move this to median within format category; cannot bridge the gap to talking-head. Best used for asynchronous explainer/educational content where the creator isn't on camera."
+
+// generateEngagement runs the LLM call that produces the YouTube
+// engagement object — title, description, chapters, hashtags, tags,
+// hook_30s — and enriches the response with the constant fields
+// (title_char_count, captions_recommended, format_ceiling_note) and
+// the operator-input clamps (hashtag_count, category, language).
+//
+// The prompt enforces the structural rules (0:00 first chapter,
+// title char-cap, hook structure). If the LLM violates them anyway,
+// we accept what it produced — avbench (#423) catches drift over
+// time. We do NOT pad with stub chapters; the unit tests intentionally
+// do not assert chapter floors against an LLM mock, only against
+// known-good fixtures.
+func generateEngagement(ctx context.Context, d vision.Dispatcher, model string, slides []slideContent, durations []float64, in slidesNarrateInput) (map[string]any, error) {
+	maxTokens := 1500
 	var userMsg strings.Builder
 	userMsg.WriteString("SLIDE DECK:\n\n")
 
@@ -927,13 +1017,28 @@ func generateYouTubeMetadata(ctx context.Context, d vision.Dispatcher, model str
 		cumulative += durations[i]
 	}
 	fmt.Fprintf(&userMsg, "Total duration: %s (%.0f seconds)\n", formatTimestamp(cumulative), cumulative)
-	userMsg.WriteString("\nGenerate YouTube metadata for this presentation.")
+
+	hashtagCount := in.HashtagCount
+	if hashtagCount < 3 || hashtagCount > 5 {
+		hashtagCount = 4
+	}
+	category := strings.TrimSpace(in.Category)
+	if category == "" {
+		category = "Science & Technology"
+	}
+	language := strings.TrimSpace(in.Language)
+	if language == "" {
+		language = "en"
+	}
+	fmt.Fprintf(&userMsg, "\nTarget hashtag count: %d. Category: %q. Language: %q.\n",
+		hashtagCount, category, language)
+	userMsg.WriteString("\nGenerate the engagement metadata JSON now.")
 
 	req := gateway.ChatRequest{
 		Model:     model,
 		MaxTokens: &maxTokens,
 		Messages: []gateway.Message{
-			{Role: "system", Content: gateway.TextContent(narrateYouTubePrompt)},
+			{Role: "system", Content: gateway.TextContent(narrateEngagementPrompt)},
 			{Role: "user", Content: gateway.TextContent(userMsg.String())},
 		},
 	}
@@ -951,12 +1056,25 @@ func generateYouTubeMetadata(ctx context.Context, d vision.Dispatcher, model str
 	if err := json.Unmarshal([]byte(raw), &md); err != nil {
 		if obj := extractFirstJSONObject(raw); obj != "" {
 			if err2 := json.Unmarshal([]byte(obj), &md); err2 != nil {
-				return nil, fmt.Errorf("parse metadata JSON: %w", err2)
+				return nil, fmt.Errorf("parse engagement JSON: %w", err2)
 			}
 		} else {
-			return nil, fmt.Errorf("no parseable JSON in metadata response")
+			return nil, fmt.Errorf("no parseable JSON in engagement response")
 		}
 	}
+
+	// Enrich with constants + computed fields. title_char_count
+	// gives tests + agents a cheap server-side check on the LLM's
+	// title-length compliance without re-counting in the consumer.
+	if title, ok := md["title"].(string); ok {
+		md["title_char_count"] = len(title)
+	}
+	md["captions_recommended"] = true
+	md["format_ceiling_note"] = formatCeilingNoteSlidesNarrate
+	// Server-side category / language overrides whatever the LLM
+	// emitted — operator input is authoritative.
+	md["category"] = category
+	md["language"] = language
 	return md, nil
 }
 

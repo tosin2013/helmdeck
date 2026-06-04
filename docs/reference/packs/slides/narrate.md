@@ -39,7 +39,10 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 | `resolution` | `string` | no | `"1920x1080"` | Video resolution. Smaller = lower memory (try `1280x720` if you OOM at 4K). |
 | `fade_ms` | `number` | no | `0` | Cross-slide fade duration in ms. `300`–`500` looks polished. |
 | `default_slide_duration` | `number` | no | `5.0` | Seconds of silence for slides without speaker notes. |
-| `metadata_model` | `string` | no | — | Provider/model for YouTube metadata (e.g., `openrouter/openai/gpt-4o-mini`). When unset, no `metadata_artifact_key` is returned. |
+| `metadata_model` | `string` | no | — | Provider/model for the engagement-metadata LLM call (e.g., `openrouter/openai/gpt-4o-mini`). When unset, no `engagement` object is returned. The prompt bakes in research-validated YouTube engagement rules (45-55 char title, 0:00 first chapter, ≥3 chapters when >7min, 3-5 hashtags, hook-30s structure). |
+| `hashtag_count` | `number` | no | `4` | Number of hashtags to request; clamped to `[3, 5]` server-side (the research-validated range). Out-of-range values silently snap to `4`. |
+| `category` | `string` | no | `"Science & Technology"` | YouTube category. Operator input is authoritative — overrides whatever the LLM emits. |
+| `language` | `string` | no | `"en"` | ISO 639 language code for the metadata. Operator input is authoritative. |
 | `webhook_url` | `string` | no | — | Push the result to this URL on completion (sync alternative to polling). |
 | `webhook_secret` | `string` | no | — | HMAC signature secret for the webhook callback. |
 | `hero_image_prompt` | `string` | no | — | When non-empty (v0.12.0 #146), the pack calls `image.generate` and inlines the resulting PNG INTO slide 1's content (no `---` separator) so the per-slide TTS pipeline still sees a narrated slide. Skipped automatically during `dry_run`. Fails loud on missing `fal-key` credential. |
@@ -55,9 +58,29 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 | `total_duration_s` | `number` | Cumulative video length, post-TTS — the authoritative timing after ElevenLabs has actually synthesized. |
 | `has_narration` | `boolean` | `true` if TTS succeeded; `false` if the ElevenLabs key was missing or the API errored on every slide. |
 | `voice_used` | `string` | Voice ID that narrated. Empty when `has_narration: false`. |
-| `metadata_artifact_key` | `string` | Present only when `metadata_model` was set. JSON file with the YouTube metadata. |
-| `metadata` | `object` | Same content as `metadata_artifact_key`'s JSON, inline for convenience: `{title, description, tags, category, language}`. |
+| `engagement_artifact_key` | `string` | Present only when `metadata_model` was set. JSON sidecar file with the engagement metadata. **v0.26.0 breaking change**: was `metadata_artifact_key` in v0.25.x. |
+| `engagement` | `object` | Same content as `engagement_artifact_key`'s JSON, inline for convenience. Shape: `{title, title_char_count, description, chapters: [{timestamp, title, seconds}], hashtags, tags, hook_30s, captions_recommended, category, language, format_ceiling_note}`. The structural rules (0:00 first chapter, title ≤ 60 chars, ≥3 chapters when video > 7min, 3-5 hashtags) are baked into the prompt as hard constraints; `category` and `language` are server-side-authoritative. **v0.26.0 breaking change**: was `metadata` in v0.25.x. |
 | `hero_image_model_used` | `string` | Only when `hero_image_prompt` was set. Echoes the model that actually generated the hero. |
+
+### Engagement metadata — what's baked in vs operator-overridable
+
+| Bucket | Field | Rule |
+|---|---|---|
+| **Non-overridable** (enforced by prompt) | First chapter | Always `"0:00"` / `seconds=0` — YouTube rejects chapter lists without a 0:00 anchor. |
+| Non-overridable | Chapter floor | ≥3 chapters when video duration > 7 min, ≥10s between consecutive starts. |
+| Non-overridable | Title cap | ≤60 chars (target 45-55 for mobile-truncation safety). |
+| Non-overridable | Hashtag relevance | No `#viral`/`#fyp`/`#trending` — YouTube validates relevance against the transcript. |
+| Non-overridable | Hook structure | Pattern interrupt → payoff promise → commitment hook, by second 15. |
+| **Operator-tunable** | `hashtag_count` | Clamped to `[3, 5]`. |
+| Operator-tunable | `category` / `language` | Authoritative override of whatever the LLM emits. |
+
+### Honest scope (`format_ceiling_note`)
+
+The `engagement.format_ceiling_note` field — always present when engagement is enabled — carries this constant string:
+
+> *Slide-deck-with-voiceover sits in the lower retention bracket vs talking-head (avg ~15-20% on 8-15min vs 20-25%). Metadata can move this to median within format category; cannot bridge the gap to talking-head. Best used for asynchronous explainer/educational content where the creator isn't on camera.*
+
+This is intentional. The research-validated metadata defaults move a slide-deck-with-voiceover video from bottom-decile to median *within its format category*; they cannot close the 5-12 percentage-point structural gap to talking-head video. If you want talking-head retention, you need talking-head visuals — not better metadata. See [the avbench workflow](https://github.com/tosin2013/helmdeck/blob/main/.github/workflows/avbench.yml) for the monthly regression check on the structural rules.
 
 ## Vault credentials needed
 

@@ -16,6 +16,7 @@ import (
 	"github.com/tosin2013/helmdeck/internal/session"
 	"github.com/tosin2013/helmdeck/internal/store"
 	"github.com/tosin2013/helmdeck/internal/vault"
+	"github.com/tosin2013/helmdeck/internal/vision"
 )
 
 // podcastTestExecutor stubs the session executor for the podcast
@@ -123,7 +124,20 @@ func vaultWithElevenKey(t *testing.T, key string) *vault.Store {
 // ExecutionContext. nil dispatcher means script-mode-only.
 func runPodcastGenerate(t *testing.T, v *vault.Store, ex session.Executor, input string) (json.RawMessage, error) {
 	t.Helper()
-	pack := PodcastGenerate(v, nil, nil)
+	return runPodcastGenerateWithDisp(t, v, ex, nil, input)
+}
+
+// runPodcastGenerateWithDisp wires a dispatcher into the pack
+// construction so the engagement-metadata path runs. Used by the
+// TestPodcastGenerate_Engagement_* tests below; otherwise prefer the
+// simpler runPodcastGenerate which matches the existing test scaffold.
+func runPodcastGenerateWithDisp(t *testing.T, v *vault.Store, ex session.Executor, disp *scriptedDispatcherWT, input string) (json.RawMessage, error) {
+	t.Helper()
+	var d vision.Dispatcher
+	if disp != nil {
+		d = disp
+	}
+	pack := PodcastGenerate(v, nil, d)
 	sessionID := "sess-test-podcast"
 	ec := &packs.ExecutionContext{
 		Pack:      pack,
@@ -274,6 +288,141 @@ func TestPodcastGenerate_ScriptMode_HappyPath(t *testing.T) {
 	}
 	if out.VoicesUsed["Alex"] != "v1" || out.VoicesUsed["Jordan"] != "v2" {
 		t.Errorf("voices_used = %+v", out.VoicesUsed)
+	}
+}
+
+// --- engagement metadata tests --------------------------------------------
+
+// engagementShapedReply is a podcast-engagement JSON shape that matches
+// the generatePodcastEngagementPrompt. Shared by the tests below.
+const engagementShapedReply = `{
+  "title": "Three Architectural Patterns That Outlast Hype Cycles",
+  "subtitle": "From scrappy startups to billion-dollar exits",
+  "summary": "In this episode Alex and Jordan dig into the architectural patterns that survive the rise and fall of language frameworks.",
+  "show_notes_md": "**Patterns that outlast hype.**\n\n- Pattern 1\n- Pattern 2\n- Pattern 3",
+  "chapters": [
+    {"startTime": 0, "title": "Cold open"},
+    {"startTime": 180, "title": "Pattern 1"},
+    {"startTime": 480, "title": "Pattern 2"}
+  ],
+  "hook_30s": "What if every framework you've shipped in is on a 7-year half-life?",
+  "cta": {"placement": "wrong-pre-roll", "copy": "Subscribe wherever you listen."}
+}`
+
+// TestPodcastGenerate_EngagementDefault — verifies that without an
+// explicit metadata_model the engagement object IS generated when a
+// dispatcher is wired (default-on behavior per v0.26.0). Also pins
+// the constant enrichment (format_ceiling_note, language) and the
+// defensive CTA placement override.
+func TestPodcastGenerate_EngagementDefault(t *testing.T) {
+	v := vaultWithElevenKey(t, "")
+	ex := &podcastTestExecutor{mp3Bytes: []byte("\xff\xfb\x90mp3")}
+	disp := &scriptedDispatcherWT{replies: []string{engagementShapedReply}}
+	raw, err := runPodcastGenerateWithDisp(t, v, ex, disp, `{
+		"speakers": {"Alex": "v1", "Jordan": "v2"},
+		"script": [
+			{"speaker":"Alex","text":"Welcome."},
+			{"speaker":"Jordan","text":"Today we discuss..."}
+		],
+		"theme": "deep-dive",
+		"allow_silent_output": true
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		Engagement            map[string]any `json:"engagement"`
+		EngagementArtifactKey string         `json:"engagement_artifact_key"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Engagement == nil {
+		t.Fatal("engagement absent — should default-on when dispatcher wired and metadata_model unset")
+	}
+	if out.EngagementArtifactKey == "" {
+		t.Error("engagement_artifact_key empty — sidecar artifact must be persisted")
+	}
+	if out.Engagement["title"] != "Three Architectural Patterns That Outlast Hype Cycles" {
+		t.Errorf("engagement.title = %v", out.Engagement["title"])
+	}
+	// Constant enrichment — server-side, not LLM-supplied.
+	if out.Engagement["format_ceiling_note"] == nil {
+		t.Error("format_ceiling_note missing")
+	}
+	if out.Engagement["language"] != "en" {
+		t.Errorf("language = %v, want en (default)", out.Engagement["language"])
+	}
+	// Defensive CTA placement override — LLM emitted "wrong-pre-roll"
+	// but the handler MUST force "mid-roll". This is the single line
+	// that prevents a future prompt drift from silently flipping the
+	// research-validated placement.
+	cta, ok := out.Engagement["cta"].(map[string]any)
+	if !ok {
+		t.Fatalf("cta not an object: %v", out.Engagement["cta"])
+	}
+	if cta["placement"] != "mid-roll" {
+		t.Errorf("cta.placement = %v, want mid-roll (defensive override)", cta["placement"])
+	}
+}
+
+// TestPodcastGenerate_EngagementDisabled — passing
+// "metadata_model":"" (empty, NOT absent) opts out of engagement gen.
+// Required for back-compat with operators who explicitly don't want
+// the extra LLM call.
+func TestPodcastGenerate_EngagementDisabled(t *testing.T) {
+	v := vaultWithElevenKey(t, "")
+	ex := &podcastTestExecutor{mp3Bytes: []byte("\xff\xfb\x90mp3")}
+	disp := &scriptedDispatcherWT{replies: []string{"SHOULD NOT BE CALLED"}}
+	raw, err := runPodcastGenerateWithDisp(t, v, ex, disp, `{
+		"speakers": {"Alex": "v1"},
+		"script": [{"speaker":"Alex","text":"Hi."}],
+		"metadata_model": "",
+		"allow_silent_output": true
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := out["engagement"]; present {
+		t.Errorf("engagement should be absent when metadata_model:\"\"; got %v", out["engagement"])
+	}
+	if disp.calls != 0 {
+		t.Errorf("dispatcher called %d times — engagement gate should have prevented any call", disp.calls)
+	}
+}
+
+// TestPodcastGenerate_EngagementCustomCTAStyle — operator can tune
+// CTA TONE via cta_style; the prompt receives it. Placement remains
+// "mid-roll" — non-overridable per research.
+func TestPodcastGenerate_EngagementCustomCTAStyle(t *testing.T) {
+	v := vaultWithElevenKey(t, "")
+	ex := &podcastTestExecutor{mp3Bytes: []byte("\xff\xfb\x90mp3")}
+	disp := &scriptedDispatcherWT{replies: []string{engagementShapedReply}}
+	_, err := runPodcastGenerateWithDisp(t, v, ex, disp, `{
+		"speakers": {"Alex": "v1"},
+		"script": [{"speaker":"Alex","text":"Hi."}],
+		"cta_style": "direct",
+		"language": "es",
+		"allow_silent_output": true
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	// The prompt should carry the operator-specified CTA tone; we
+	// inspect the captured request payload to confirm the wire shape.
+	if len(disp.captured) == 0 {
+		t.Fatal("no captured dispatcher requests")
+	}
+	userMsg := disp.captured[0].Messages[1].Content.Text()
+	if !strings.Contains(userMsg, `"direct"`) {
+		t.Errorf("prompt should carry cta_style=direct; got user message: %q", userMsg)
+	}
+	if !strings.Contains(userMsg, `"es"`) {
+		t.Errorf("prompt should carry language=es; got user message: %q", userMsg)
 	}
 }
 

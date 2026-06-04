@@ -164,9 +164,11 @@ func runScenario(t *testing.T, client *openRouterClient, sc Scenario, attempts i
 					Reason: truncate(err.Error(), 200),
 				})
 			}
-			// Inter-attempt sleep on errors helps when the failure
-			// is a 429 — gives the per-minute bucket time to drain.
-			time.Sleep(2 * time.Second)
+			// Inter-attempt sleep on errors. The client already
+			// retries 429 internally with 4s/8s/16s backoff; this
+			// extra pause covers the case where the *next* attempt
+			// is about to fire right after a quota window resets.
+			time.Sleep(3 * time.Second)
 			continue
 		}
 
@@ -184,10 +186,13 @@ func runScenario(t *testing.T, client *openRouterClient, sc Scenario, attempts i
 			}
 		}
 
-		// Inter-attempt sleep on success too — keeps us well under
-		// the ~20-req/min free-tier limit (50 attempts × 5 scenarios
-		// at 1.5s spacing is ~6 minutes total, plenty of margin).
-		time.Sleep(1500 * time.Millisecond)
+		// Inter-attempt sleep on success too. OpenRouter's free
+		// tier returns X-RateLimit-Limit: 16 (16 req/min observed
+		// in practice), so we need ≥3.75s between calls to stay
+		// under the bucket. 4s leaves a small margin. Total budget:
+		// 50 attempts × 4s ≈ 3.5min minimum, comfortably under
+		// the 20-min workflow timeout even with retry pauses.
+		time.Sleep(4 * time.Second)
 	}
 
 	res.Passed = res.Successes >= sc.Threshold

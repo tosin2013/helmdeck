@@ -85,12 +85,59 @@ type recoveryDecision struct {
 }
 
 // askForRecovery sends one (system, user) prompt to OpenRouter and
-// parses the response into a recoveryDecision. Errors split into two
-// classes: transport/api errors (network, 429, 5xx) — the caller
-// should retry after a backoff; and malformed-output errors (the
-// model returned non-JSON or a non-closed-set action) — the caller
-// counts the attempt as a recovery failure and moves on.
+// parses the response into a recoveryDecision. Internally retries on
+// 429 with exponential backoff because the free tier has TWO rate
+// limits stacked: OpenRouter account-level (16 req/min observed) AND
+// upstream provider-level (Kimi/Moonshot can throttle independently).
+// Up to 3 retries with 4s/8s/16s backoff covers both — a 429 burst
+// usually drains in one window, but the upstream provider sometimes
+// needs longer. After retries, the caller counts the attempt as a
+// recovery failure (which is itself reliability signal — if the model
+// can't be reached, the typed-error contract isn't being tested).
+//
+// Malformed-output errors (the model returned non-JSON or a non-
+// closed-set action) are NOT retried — they're scenario-level signal.
 func (c *openRouterClient) askForRecovery(ctx context.Context, system, user string) (*recoveryDecision, error) {
+	const maxRetries = 3
+	backoff := 4 * time.Second
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		decision, err := c.attemptOnce(ctx, system, user)
+		if err == nil {
+			return decision, nil
+		}
+		lastErr = err
+		// Retry only on 429 / transient. Decode errors (malformed
+		// JSON) and 4xx other than 429 are fail-fast.
+		if !shouldRetry(err) || attempt == maxRetries {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return nil, lastErr
+}
+
+// shouldRetry returns true for errors worth retrying — currently 429
+// rate-limit errors and 5xx server errors. The check is substring-
+// based because the error formatting wraps the response body; a
+// stronger typed approach would be a custom error type, but for the
+// 4-line check this keeps the file small.
+func shouldRetry(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "openrouter 429") ||
+		strings.Contains(msg, "openrouter 502") ||
+		strings.Contains(msg, "openrouter 503") ||
+		strings.Contains(msg, "openrouter 504")
+}
+
+// attemptOnce does the single-request work. askForRecovery wraps it
+// with the retry loop; this keeps the request-shape code uncluttered.
+func (c *openRouterClient) attemptOnce(ctx context.Context, system, user string) (*recoveryDecision, error) {
 	req := chatRequest{
 		Model: c.model,
 		Messages: []chatMessage{

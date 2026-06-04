@@ -111,12 +111,12 @@ jobs:
           fi
 
       - name: Run recovery scenarios
-        # Skip cleanly when the secret is missing (forks, first
-        # configuration). The test itself also skips on the env-var
-        # gate, so this `if` is belt-and-suspenders — without it the
-        # job would surface as "passed with all skips," which is
-        # technically true but obscures the missing-secret case.
-        if: env.OPENROUTER_API_KEY != '' || secrets.OPENROUTER_API_KEY != ''
+        # The test itself skips cleanly when OPENROUTER_API_KEY is
+        # empty (recovery_test.go's `envAPIKey` gate). We don't
+        # `if:` here on the secret because GitHub Actions doesn't
+        # allow the `secrets` context in step-level conditionals;
+        # the preflight step above prints a clear warning when the
+        # secret is missing instead.
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           HELMDECK_RECOVERY_MODEL: ${{ env.RECOVERY_MODEL }}

@@ -1,0 +1,118 @@
+name: model-discovery alerts
+
+# Chained off model-discovery.yml — opens (or comments on) a GitHub
+# issue when an observational model row went FULLY DARK on the last
+# matrix run. "Fully dark" means at least one scenario scored 0/N
+# successes, which signals the provider is deprecated, the model id
+# has rotated, or the upstream is unreachable. Below-threshold but
+# non-zero scores are NORMAL variance for observational rows and do
+# NOT trigger an alert.
+#
+# Why a separate workflow: this is the ONE workflow in helmdeck that
+# needs `issues: write`. Splitting it off confines the elevated
+# permission to ~50 lines of YAML and keeps model-discovery.yml at
+# `contents: read`. Smaller blast radius if either workflow is ever
+# compromised.
+#
+# Duplicate-issue avoidance: before opening, the workflow searches
+# for an open issue with the label `model-discovery-alert` AND the
+# offending model in the title. If found, it COMMENTS on the existing
+# issue with this week's result instead of opening a duplicate.
+# Maintainers close the issue once they swap the matrix pin or the
+# provider comes back up.
+
+on:
+  workflow_run:
+    workflows: ["model-discovery"]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  alert:
+    name: open issue on 0/N hard failure
+    runs-on: ubuntu-latest
+    # Skip when the discovery run was cancelled (not a real failure
+    # to report) or when it didn't even start (no artifacts to read).
+    if: ${{ github.event.workflow_run.conclusion != 'cancelled' && github.event.workflow_run.conclusion != 'skipped' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download per-model reports from the discovery run
+        uses: actions/download-artifact@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: reports/
+          pattern: recovery-report-*
+          merge-multiple: true
+
+      - name: Detect fully-dark observational rows + alert
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -d reports ] || [ -z "$(ls reports 2>/dev/null)" ]; then
+            echo "No per-model reports — discovery run may have failed before generating artifacts. Nothing to alert on."
+            exit 0
+          fi
+
+          # For each report, detect "fully dark" — at least one scenario
+          # with 0 successes. We deliberately ignore the threshold; this
+          # alert is for "provider is gone," not "model recovered weakly."
+          for f in reports/recovery-report-*.json; do
+            model=$(jq -r .model "$f")
+            any_zero=$(jq -r 'any(.scenarios[]; .successes == 0)' "$f")
+            if [ "$any_zero" != "true" ]; then
+              echo "$model: no fully-dark scenarios — no alert needed."
+              continue
+            fi
+
+            dark_scenarios=$(jq -r '[.scenarios[] | select(.successes == 0) | .name] | join(", ")' "$f")
+            echo "$model: fully dark on [$dark_scenarios] — opening or commenting on issue"
+
+            # Title carries the model id so duplicate-issue search is
+            # exact-match against the title. Label is the scope tag.
+            title="[model-discovery] $model fully dark"
+            label="model-discovery-alert"
+
+            # Existing open issue with same title?
+            existing=$(gh issue list --repo "$REPO" --label "$label" --state open \
+              --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+
+            body=$(cat <<MARKDOWN
+          The weekly model-discovery matrix reported \`$model\` as **fully dark** — at least one scenario produced 0 successes across all attempts. Affected scenarios: \`$dark_scenarios\`.
+
+          [Discovery run]($RUN_URL)
+
+          ### What this means
+
+          - Either OpenRouter has deprecated/rotated \`$model\`,
+          - the model is unreachable from GitHub Actions,
+          - or the upstream provider is throttling so aggressively every attempt fails.
+
+          ### What to do
+
+          1. Check OpenRouter's free-tier catalog: https://openrouter.ai/models?supported_parameters=free
+          2. If \`$model\` is no longer listed: swap the row in \`.github/workflows/model-discovery.yml\` to a current free model, bump \`MODEL_LAST_VERIFIED\`/\`MODEL_NEXT_REVIEW_DUE\`, and close this issue.
+          3. If the model is listed but failing: open OpenRouter's status page; the failure may be transient. Re-trigger \`model-discovery.yml\` via \`workflow_dispatch\` to confirm.
+          4. If \`$model\` is the \`required\` tier (pinned regression backstop), the workflow already failed — this issue is informational.
+
+          ---
+          *Auto-opened by \`.github/workflows/model-discovery-alert.yml\`. Comment-add on repeat detections; the issue stays open across weekly runs until manually closed.*
+          MARKDOWN
+          )
+
+            if [ -n "$existing" ]; then
+              echo "  → commenting on existing issue #$existing"
+              gh issue comment "$existing" --repo "$REPO" --body "**Repeat detection** (run $RUN_URL) — $model still fully dark on \`$dark_scenarios\`."
+            else
+              echo "  → opening new issue"
+              gh issue create --repo "$REPO" --title "$title" --label "$label" --body "$body"
+            fi
+          done

@@ -33,6 +33,15 @@ const (
 	envAPIKey   = "OPENROUTER_API_KEY"
 	envModel    = "HELMDECK_RECOVERY_MODEL"
 	envAttempts = "HELMDECK_RECOVERY_ATTEMPTS"
+	// envThresholdModifier shifts each scenario's pass threshold
+	// (v0.26.0 multi-model matrix). Negative values lower the bar
+	// for weaker / higher-variance observational models so we can
+	// still produce useful data without setting unrealistic floors.
+	// Positive values raise the bar — currently unused but supported
+	// in case a future workflow wants to stress-test a strong model.
+	// Default 0 preserves the v0.25.0 single-pinned-model behavior;
+	// the resulting threshold is floored at 1.
+	envThresholdModifier = "HELMDECK_RECOVERY_THRESHOLD_MODIFIER"
 
 	defaultModel    = "moonshotai/kimi-k2.6:free"
 	defaultAttempts = 10
@@ -132,10 +141,19 @@ func TestModelRecoveryScenarios(t *testing.T) {
 // much as one that picks the wrong action.
 func runScenario(t *testing.T, client *openRouterClient, sc Scenario, attempts int) scenarioResult {
 	t.Helper()
+	// Apply the optional global threshold modifier. The matrix
+	// workflow sets a per-model modifier — e.g. -1 for a 31B model
+	// where every scenario's bar drops one tick. Floor at 1 so even
+	// the most accommodating row still demands "model emitted a
+	// usable recovery at least once" — anything else is empty signal.
+	threshold := sc.Threshold + thresholdModifier()
+	if threshold < 1 {
+		threshold = 1
+	}
 	res := scenarioResult{
 		Name:        sc.Name,
 		Description: sc.Description,
-		Threshold:   sc.Threshold,
+		Threshold:   threshold,
 		Attempts:    attempts,
 		ActionDist:  map[string]int{},
 	}
@@ -203,8 +221,26 @@ func runScenario(t *testing.T, client *openRouterClient, sc Scenario, attempts i
 		time.Sleep(12 * time.Second)
 	}
 
-	res.Passed = res.Successes >= sc.Threshold
+	res.Passed = res.Successes >= res.Threshold
 	return res
+}
+
+// thresholdModifier reads HELMDECK_RECOVERY_THRESHOLD_MODIFIER as a
+// signed integer to shift each scenario's pass threshold. Empty /
+// malformed values default to 0 (no shift). The matrix workflow
+// (v0.26.0 model-discovery.yml) sets per-model modifiers so weaker
+// observational models can have honest lower thresholds without
+// globally weakening the reliability bet.
+func thresholdModifier() int {
+	v := os.Getenv(envThresholdModifier)
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // formatUserPrompt builds the per-scenario user message. The shape

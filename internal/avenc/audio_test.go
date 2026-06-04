@@ -113,8 +113,11 @@ func TestConcatAudio_HealthyWithLibmp3lame(t *testing.T) {
 	if len(scripts) == 0 || !strings.Contains(scripts[0], "libmp3lame") {
 		t.Errorf("ConcatAudio default codec must be libmp3lame; got %q", scripts)
 	}
-	if !strings.Contains(scripts[0], "-b:a 128k") {
-		t.Errorf("ConcatAudio default bitrate must be 128k; got %q", scripts[0])
+	if !strings.Contains(scripts[0], "-b:a 192k") {
+		t.Errorf("ConcatAudio default bitrate must be 192k (matches ElevenLabs Creator-tier source); got %q", scripts[0])
+	}
+	if !strings.Contains(scripts[0], "-ar 44100") {
+		t.Errorf("ConcatAudio must pin -ar 44100 (avoid 44100→48000 resampling artifacts); got %q", scripts[0])
 	}
 }
 
@@ -191,6 +194,9 @@ func TestConcatVideoMP4s_VideoStreamCopyAudioReencode(t *testing.T) {
 	}
 	if !strings.Contains(scripts[0], "-b:a 192k") {
 		t.Errorf("ConcatVideoMP4s default audio bitrate must be 192k; got %q", scripts[0])
+	}
+	if !strings.Contains(scripts[0], "-ar 44100") {
+		t.Errorf("ConcatVideoMP4s must pin -ar 44100 (matches the 44100 TTS source so no resampling at final concat); got %q", scripts[0])
 	}
 	if strings.Contains(scripts[0], "-c copy ") || strings.HasSuffix(scripts[0], "-c copy") {
 		t.Errorf("ConcatVideoMP4s must NOT use legacy `-c copy` (stream-copies both streams, reintroduces dropouts); got %q", scripts[0])

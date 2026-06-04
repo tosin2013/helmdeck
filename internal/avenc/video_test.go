@@ -49,6 +49,9 @@ func TestEncodeVideoSegment_HappyPath(t *testing.T) {
 	if !strings.Contains(scripts[0], "-b:a 192k") {
 		t.Errorf("default AudioBitrate must be 192k; got %q", scripts[0])
 	}
+	if !strings.Contains(scripts[0], "-ar 44100") {
+		t.Errorf("per-segment encode must pin -ar 44100 (matches the TTS source so libswresample doesn't introduce 44100→48000 aliasing); got %q", scripts[0])
+	}
 	if !strings.Contains(scripts[0], "-tune stillimage") {
 		t.Errorf("must use stillimage tune for static-slide encode; got %q", scripts[0])
 	}

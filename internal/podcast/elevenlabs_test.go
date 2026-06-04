@@ -55,8 +55,8 @@ func TestElevenLabsEngine_Synthesize_HappyPath(t *testing.T) {
 	if !strings.Contains(captured.body, `"model_id":"eleven_turbo_v2_5"`) {
 		t.Errorf("body missing model_id: %q", captured.body)
 	}
-	if !strings.Contains(captured.query, "output_format=mp3_44100_128") {
-		t.Errorf("query missing output_format: %q", captured.query)
+	if !strings.Contains(captured.query, "output_format=mp3_44100_192") {
+		t.Errorf("query missing output_format (expect Creator-tier 192k default): %q", captured.query)
 	}
 }
 
@@ -112,5 +112,24 @@ func TestElevenLabsEngine_Name(t *testing.T) {
 	eng := &ElevenLabsEngine{}
 	if eng.Name() != "elevenlabs" {
 		t.Errorf("name = %q", eng.Name())
+	}
+}
+
+// TestElevenLabsFormat_EnvVarOverride pins the Starter-tier escape
+// hatch: operators on the ElevenLabs Starter subscription cap out at
+// mp3_44100_128 and would get 4xx from the Creator-tier default
+// without this. The env var ladder must take precedence over the
+// 192k built-in default.
+func TestElevenLabsFormat_EnvVarOverride(t *testing.T) {
+	t.Setenv("HELMDECK_ELEVENLABS_FORMAT", "mp3_44100_128")
+	if got := elevenLabsFormat(); got != "mp3_44100_128" {
+		t.Errorf("HELMDECK_ELEVENLABS_FORMAT must win over the 192k default; got %q", got)
+	}
+}
+
+func TestElevenLabsFormat_DefaultWhenUnset(t *testing.T) {
+	t.Setenv("HELMDECK_ELEVENLABS_FORMAT", "")
+	if got := elevenLabsFormat(); got != "mp3_44100_192" {
+		t.Errorf("unset env must fall back to Creator-tier mp3_44100_192; got %q", got)
 	}
 }

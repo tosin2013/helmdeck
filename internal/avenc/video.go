@@ -132,7 +132,7 @@ func runSegmentEncode(
 	}
 	cmd := fmt.Sprintf(
 		"ffmpeg -y -loop 1 -i %s -i %s -c:v libx264 -threads %s %s-tune stillimage "+
-			"-c:a aac -b:a %dk -vf '%s' -pix_fmt yuv420p -shortest %s",
+			"-c:a aac -b:a %dk -ar 44100 -vf '%s' -pix_fmt yuv420p -shortest %s",
 		shellQuote(imagePath), shellQuote(audioPath), opts.Threads, presetFlag,
 		opts.AudioBitrateKbps, opts.VideoFilter, shellQuote(outPath),
 	)

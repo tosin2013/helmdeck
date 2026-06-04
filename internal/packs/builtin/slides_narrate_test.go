@@ -603,7 +603,7 @@ func TestElevenLabsTTS_Stub(t *testing.T) {
 		"model_id": "eleven_multilingual_v2",
 	})
 	req, _ := http.NewRequestWithContext(context.Background(),
-		http.MethodPost, srv.URL+"/v1/text-to-speech/voice-001?output_format=mp3_44100_128",
+		http.MethodPost, srv.URL+"/v1/text-to-speech/voice-001?output_format=mp3_44100_192",
 		strings.NewReader(string(reqBody)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("xi-api-key", "test-key")
@@ -1371,6 +1371,15 @@ func TestSlidesNarrate_ConcatReencodesAudio(t *testing.T) {
 	}
 	if !strings.Contains(concatScript, "-b:a 192k") {
 		t.Errorf("concat audio bitrate must match per-segment 192k; got %q", concatScript)
+	}
+	// Sample-rate pin: the per-segment encode and the concat
+	// re-encode must both emit at 44100 Hz (matching the ElevenLabs
+	// TTS source). Without -ar 44100, ffmpeg defaults to 48000 Hz
+	// for AAC-in-MP4 and the 44100→48000 ratio is the worst-case
+	// non-integer libswresample path — audible high-frequency
+	// aliasing. PR (audio quality v0.26.0 follow-on).
+	if !strings.Contains(concatScript, "-ar 44100") {
+		t.Errorf("concat must pin -ar 44100 to match the TTS source (no 44100→48000 resampling artifacts); got %q", concatScript)
 	}
 	// The legacy `-c copy` (which would stream-copy both streams)
 	// must NOT appear — the operator-reported bug shape.

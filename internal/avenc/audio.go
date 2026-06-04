@@ -35,9 +35,11 @@ func GenerateSilence(ctx context.Context, exec Executor, seconds float64, outPat
 }
 
 // ConcatAudioOpts configures audio-only concat. Bitrate is in kbps;
-// 0 means "use the codec's default" (libmp3lame ≈ 128k).
+// 0 means "use the avenc default" (192k — matches the
+// ElevenLabs Creator-tier source so the re-encode at concat boundaries
+// has headroom for libmp3lame's psychoacoustic loss).
 type ConcatAudioOpts struct {
-	BitrateKbps int    // 0 → codec default
+	BitrateKbps int    // 0 → 192 (matches ElevenLabs Creator-tier source)
 	Codec       string // "" → libmp3lame; "aac" for AAC concat output
 }
 
@@ -64,10 +66,10 @@ func ConcatAudio(ctx context.Context, exec Executor, listPath, outPath string, o
 	}
 	bitrate := opts.BitrateKbps
 	if bitrate == 0 {
-		bitrate = 128
+		bitrate = 192
 	}
 	cmd := fmt.Sprintf(
-		"ffmpeg -y -f concat -safe 0 -i %s -acodec %s -b:a %dk %s",
+		"ffmpeg -y -f concat -safe 0 -i %s -acodec %s -b:a %dk -ar 44100 %s",
 		shellQuote(listPath), codec, bitrate, shellQuote(outPath),
 	)
 	res, err := exec(ctx, session.ExecRequest{Cmd: []string{"sh", "-c", cmd}})
@@ -110,7 +112,7 @@ func ConcatVideoMP4s(ctx context.Context, exec Executor, listPath, outPath strin
 		bitrate = 192
 	}
 	cmd := fmt.Sprintf(
-		"ffmpeg -y -f concat -safe 0 -i %s -c:v copy -c:a aac -b:a %dk %s",
+		"ffmpeg -y -f concat -safe 0 -i %s -c:v copy -c:a aac -b:a %dk -ar 44100 %s",
 		shellQuote(listPath), bitrate, shellQuote(outPath),
 	)
 	res, err := exec(ctx, session.ExecRequest{Cmd: []string{"sh", "-c", cmd}})
@@ -164,7 +166,7 @@ func PadAudioToMin(ctx context.Context, exec Executor, inPath, scratchDir, slotI
 	} else if res.ExitCode != 0 {
 		return exitCodeError(label+": pad write-list", res.ExitCode, res.Stderr)
 	}
-	if err := ConcatAudio(ctx, exec, listPath, mergedPath, ConcatAudioOpts{BitrateKbps: 128}, label+": pad concat"); err != nil {
+	if err := ConcatAudio(ctx, exec, listPath, mergedPath, ConcatAudioOpts{}, label+": pad concat"); err != nil {
 		return err
 	}
 	mv := fmt.Sprintf("mv %s %s", shellQuote(mergedPath), shellQuote(inPath))

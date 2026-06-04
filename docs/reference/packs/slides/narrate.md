@@ -63,6 +63,18 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 
 **`elevenlabs-key`** — type `api_key`, host pattern `api.elevenlabs.io`. **Optional** — without it the pack still ships an MP4, just silent.
 
+## TTS quality knob (`HELMDECK_ELEVENLABS_FORMAT`)
+
+The pack requests **192 kbps MP3 at 44.1 kHz** from ElevenLabs by default (`mp3_44100_192`, Creator-tier or above). The downstream avenc pipeline is sample-rate-matched to that source so the per-segment encode and final concat re-encode don't introduce 44.1 → 48 kHz resampling artifacts (audible high-frequency aliasing under libswresample).
+
+If your ElevenLabs subscription is on the **Starter tier** (capped at `mp3_44100_128`), set this environment variable on the helmdeck process to downgrade so the API doesn't reject the request:
+
+```bash
+export HELMDECK_ELEVENLABS_FORMAT=mp3_44100_128
+```
+
+The env var also covers PCM upgrades on higher tiers (e.g. `pcm_44100`) when you want to eliminate source-side MP3 loss entirely.
+
 ## Use it from your agent (OpenClaw chat-UI worked example)
 
 > 📌 **The transcript below shows the narrated path** (`has_narration: true`) — the `elevenlabs-key` is in the vault, ElevenLabs synthesized 2 slides of speech, and ffmpeg encoded them into a 199 KB MP4. The same prompt without the key in the vault produces a silent 47 KB MP4 (`has_narration: false`); the silent-fallback transcript was the original capture for this page. The transcript is also a clean reference for the **async polling pattern** (`pack.start → pack.status × N → pack.result`).

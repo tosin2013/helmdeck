@@ -136,11 +136,13 @@ func Concat(ctx context.Context, ex session.Executor, sessionID string, turns []
 	// the silence segment may have a slightly different frame-size
 	// from ElevenLabs' MP3s and `-c copy` would splice at wrong
 	// boundaries (PR #404's lesson for the video path applies here
-	// too). 128 kbps libmp3lame matches the per-turn ElevenLabs
-	// baseline.
+	// too). Bitrate (192 kbps) and sample rate (44100 Hz) come from
+	// avenc.ConcatAudio's defaults — matched to the ElevenLabs
+	// Creator-tier source so the re-encode doesn't bottleneck below
+	// the source quality.
 	finalPath := concatTempDir + "/final.mp3"
 	if err := avenc.ConcatAudio(ctx, avencExec, listPath, finalPath,
-		avenc.ConcatAudioOpts{Codec: "libmp3lame", BitrateKbps: 128},
+		avenc.ConcatAudioOpts{Codec: "libmp3lame"},
 		"podcast concat"); err != nil {
 		return nil, 0, fmt.Errorf("ffmpeg concat: %w", err)
 	}

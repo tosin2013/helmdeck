@@ -10,13 +10,21 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
 const (
-	elevenLabsBaseURL       = "https://api.elevenlabs.io"
-	elevenLabsDefaultFormat = "mp3_44100_128"
+	elevenLabsBaseURL = "https://api.elevenlabs.io"
+	// elevenLabsDefaultFormat is the fallback ElevenLabs output_format
+	// when HELMDECK_ELEVENLABS_FORMAT is unset. mp3_44100_192 is the
+	// Creator-tier bitrate (192 kbps MP3, 44.1 kHz sample rate matched
+	// to the in-tree avenc pipeline so no resampling happens). The
+	// Starter tier caps at mp3_44100_128 — those operators must set
+	// HELMDECK_ELEVENLABS_FORMAT=mp3_44100_128 in their environment to
+	// stay within their subscription. See docs/howto/configure-llm-providers.md.
+	elevenLabsDefaultFormat = "mp3_44100_192"
 	elevenLabsDefaultModel  = "eleven_turbo_v2_5"
 	elevenLabsResponseCap   = 32 << 20 // 32 MiB per turn — big enough for ~30 min of 128 kbps mp3
 	elevenLabsRequestTOut   = 60 * time.Second
@@ -48,6 +56,20 @@ var ErrNoAPIKey = fmt.Errorf("podcast/elevenlabs: no API key configured")
 
 // Name returns "elevenlabs".
 func (e *ElevenLabsEngine) Name() string { return "elevenlabs" }
+
+// elevenLabsFormat resolves the ElevenLabs output_format the TTS
+// request should ask for. The env var HELMDECK_ELEVENLABS_FORMAT
+// wins when set (operator-level override); the default fires
+// otherwise. Same ladder shape as the slides_narrate.go variant —
+// kept package-local rather than shared to avoid an internal/podcast
+// → internal/packs/builtin import. Documented in
+// docs/howto/configure-llm-providers.md.
+func elevenLabsFormat() string {
+	if v := strings.TrimSpace(os.Getenv("HELMDECK_ELEVENLABS_FORMAT")); v != "" {
+		return v
+	}
+	return elevenLabsDefaultFormat
+}
 
 // Synthesize converts one turn to MP3 bytes. Voice + model come from
 // opts. When APIKey is empty, returns ErrNoAPIKey — the pack handler
@@ -85,7 +107,7 @@ func (e *ElevenLabsEngine) Synthesize(ctx context.Context, turn Turn, opts Synth
 		base = elevenLabsBaseURL
 	}
 	url := fmt.Sprintf("%s/v1/text-to-speech/%s?output_format=%s",
-		base, opts.VoiceID, elevenLabsDefaultFormat)
+		base, opts.VoiceID, elevenLabsFormat())
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {

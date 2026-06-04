@@ -51,7 +51,14 @@ import (
 const (
 	elevenLabsBaseURL        = "https://api.elevenlabs.io"
 	elevenLabsDefaultModelID = "eleven_multilingual_v2"
-	elevenLabsDefaultFormat  = "mp3_44100_128"
+	// elevenLabsDefaultFormat is the fallback ElevenLabs output_format
+	// when HELMDECK_ELEVENLABS_FORMAT is unset. mp3_44100_192 is the
+	// Creator-tier bitrate (192 kbps MP3, 44.1 kHz sample rate matched
+	// to the in-tree avenc pipeline so no resampling happens). The
+	// Starter tier caps at mp3_44100_128 — those operators must set
+	// HELMDECK_ELEVENLABS_FORMAT=mp3_44100_128 in their environment to
+	// stay within their subscription. See docs/howto/configure-llm-providers.md.
+	elevenLabsDefaultFormat = "mp3_44100_192"
 
 	defaultSlideDuration = 5.0       // seconds for slides without narration
 	maxVideoSize         = 256 << 20 // 256 MiB cap on final video
@@ -791,6 +798,26 @@ func computeSlideTTSChars(slides []slideContent) (map[string]int, int) {
 
 // --- ElevenLabs helpers --------------------------------------------------
 
+// elevenLabsFormat resolves the ElevenLabs output_format the TTS
+// request should ask for. The env var HELMDECK_ELEVENLABS_FORMAT
+// wins when set (operator-level override); the default
+// elevenLabsDefaultFormat fires otherwise. Same ladder shape as
+// resolveElevenLabsKey's env fallback in elevenlabs_creds.go.
+//
+// Why an env var, not a pack input: most operators set TTS tier once
+// per deployment (their ElevenLabs subscription is fixed). A pack
+// input would clutter every pipeline definition with a quality
+// choice the operator doesn't change call-to-call. Operators on
+// the Starter tier (capped at mp3_44100_128) set
+// HELMDECK_ELEVENLABS_FORMAT=mp3_44100_128 to stay within their
+// subscription. See docs/howto/configure-llm-providers.md.
+func elevenLabsFormat() string {
+	if v := strings.TrimSpace(os.Getenv("HELMDECK_ELEVENLABS_FORMAT")); v != "" {
+		return v
+	}
+	return elevenLabsDefaultFormat
+}
+
 // elevenLabsTTS calls the ElevenLabs text-to-speech endpoint and
 // returns the raw audio bytes (MP3).
 func elevenLabsTTS(ctx context.Context, apiKey, voiceID, modelID, text string) ([]byte, error) {
@@ -803,7 +830,7 @@ func elevenLabsTTS(ctx context.Context, apiKey, voiceID, modelID, text string) (
 		},
 	})
 	url := fmt.Sprintf("%s/v1/text-to-speech/%s?output_format=%s",
-		elevenLabsBaseURL, voiceID, elevenLabsDefaultFormat)
+		elevenLabsBaseURL, voiceID, elevenLabsFormat())
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {

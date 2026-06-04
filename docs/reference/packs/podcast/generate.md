@@ -93,6 +93,18 @@ For mode C with `source_url`, the Firecrawl overlay must be enabled (`HELMDECK_F
 
 `elevenlabs-key` for day-1 ElevenLabs engine (same as `slides.narrate`). **Optional** — silent fallback when missing.
 
+## TTS quality knob (`HELMDECK_ELEVENLABS_FORMAT`)
+
+The pack requests **192 kbps MP3 at 44.1 kHz** from ElevenLabs by default (`mp3_44100_192`, Creator-tier or above). The downstream `internal/avenc.ConcatAudio` re-encode is sample-rate-pinned to 44.1 kHz so the silence-segment splice doesn't resample.
+
+If your ElevenLabs subscription is on the **Starter tier** (capped at `mp3_44100_128`), set this environment variable on the helmdeck process to downgrade:
+
+```bash
+export HELMDECK_ELEVENLABS_FORMAT=mp3_44100_128
+```
+
+Same knob as `slides.narrate`; setting it once covers both packs.
+
 ## Use it from your agent (OpenClaw chat-UI worked example)
 
 <!-- TODO(maintainer): paste an OpenClaw chat-UI transcript here.

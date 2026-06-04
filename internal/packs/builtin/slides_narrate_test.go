@@ -1381,6 +1381,14 @@ func TestSlidesNarrate_ConcatReencodesAudio(t *testing.T) {
 	if !strings.Contains(concatScript, "-ar 44100") {
 		t.Errorf("concat must pin -ar 44100 to match the TTS source (no 44100→48000 resampling artifacts); got %q", concatScript)
 	}
+	// Streaming-playback regression guard: ffprobe of a v0.25.x
+	// artifact showed the moov atom at 97% into the file — players
+	// could not begin playback before the entire file streamed in,
+	// manifesting as a dropout at a deterministic timestamp on every
+	// replay. Diagnosed in the audio-playback-dropouts PR.
+	if !strings.Contains(concatScript, "+faststart") {
+		t.Errorf("slides.narrate concat must produce a faststart MP4 (moov at the head, not the tail) so streaming players can begin playback; got %q", concatScript)
+	}
 	// The legacy `-c copy` (which would stream-copy both streams)
 	// must NOT appear — the operator-reported bug shape.
 	if strings.Contains(concatScript, "-c copy") {

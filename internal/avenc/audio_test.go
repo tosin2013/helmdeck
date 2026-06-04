@@ -198,6 +198,17 @@ func TestConcatVideoMP4s_VideoStreamCopyAudioReencode(t *testing.T) {
 	if !strings.Contains(scripts[0], "-ar 44100") {
 		t.Errorf("ConcatVideoMP4s must pin -ar 44100 (matches the 44100 TTS source so no resampling at final concat); got %q", scripts[0])
 	}
+	// Streaming-playback regression guard. Without +faststart, the
+	// moov atom lands at the file tail (mp4 muxer default) and
+	// browsers / HTML5 <video> / OpenClaw's inline preview cannot
+	// begin playback until the full file downloads — manifests as a
+	// dropout at a deterministic timestamp on every replay even
+	// though the on-disk audio is healthy. ffprobe-diagnosed; one
+	// flag is the fix. The legacy "-movflags faststart" without "+"
+	// also works but the canonical form is "+faststart".
+	if !strings.Contains(scripts[0], "+faststart") {
+		t.Errorf("ConcatVideoMP4s must pass -movflags +faststart so streaming players can begin playback before download completes; got %q", scripts[0])
+	}
 	if strings.Contains(scripts[0], "-c copy ") || strings.HasSuffix(scripts[0], "-c copy") {
 		t.Errorf("ConcatVideoMP4s must NOT use legacy `-c copy` (stream-copies both streams, reintroduces dropouts); got %q", scripts[0])
 	}

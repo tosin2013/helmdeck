@@ -74,6 +74,7 @@ declare -A FLOORS=(
   ["internal/packs"]=87
   ["internal/api"]=80
   ["internal/pipelines"]=80
+  ["internal/mcp"]=81
 )
 
 # Compute statement-weighted coverage for one package prefix.

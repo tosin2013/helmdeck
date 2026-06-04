@@ -51,7 +51,18 @@ env:
   # — pick the strongest current free weak-model option, swap
   # RECOVERY_MODEL, bump MODEL_LAST_VERIFIED to today, push
   # MODEL_NEXT_REVIEW_DUE 3 months out.
-  RECOVERY_MODEL: moonshotai/kimi-k2.6:free
+  # First-run history: moonshotai/kimi-k2.6:free was the initial
+  # pin (selected for the "weakest possible model" framing of the
+  # cheap-model bet). When the test ran, the model nailed the
+  # action whenever calls landed — but Moonshot's free-tier infra
+  # combined two problems: aggressive upstream throttling without
+  # Retry-After, and >90s per-call latency that hit the per-attempt
+  # context deadline. Swapped to openai/gpt-oss-120b:free on
+  # 2026-06-04: still firmly in the weak-model cohort the bet is
+  # about (120B is small by current standards), but OpenAI's
+  # infra delivers responses faster and with stronger JSON-mode
+  # adherence (fewer malformed-output failures).
+  RECOVERY_MODEL: openai/gpt-oss-120b:free
   MODEL_LAST_VERIFIED: 2026-06-04
   MODEL_NEXT_REVIEW_DUE: 2026-09-04
   HELMDECK_RECOVERY_TESTS: '1'
@@ -62,7 +73,7 @@ jobs:
     # interpolate workflow-level env into jobs.<id>.name. If the
     # model pin changes, also update this label so the Actions page
     # shows what's actually running.
-    name: model recovery (kimi-k2.6:free)
+    name: model recovery (gpt-oss-120b:free)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

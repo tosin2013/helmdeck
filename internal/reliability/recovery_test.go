@@ -145,9 +145,13 @@ func runScenario(t *testing.T, client *openRouterClient, sc Scenario, attempts i
 	}
 
 	for i := 0; i < attempts; i++ {
-		// Per-attempt context — 90s ceiling per call (the client's
-		// HTTP timeout is 60s; the extra 30s covers connect/DNS).
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		// Per-attempt context — 60s ceiling per call. Faster
+		// free-tier providers (openai/gpt-oss-120b:free) return
+		// well under 30s; if a call sits past 60s the provider is
+		// effectively unavailable and retrying is cheaper than
+		// holding the slot. The first-run pin (moonshotai/kimi-k2.6:free)
+		// regularly hit even 90s — that was the signal to swap pins.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		decision, err := client.askForRecovery(ctx, systemPrompt, formatUserPrompt(sc))
 		cancel()
 

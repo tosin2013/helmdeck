@@ -303,7 +303,10 @@ func TestPackServerAsyncToolLifecycle(t *testing.T) {
 
 	// 2. Poll pack.status until done (echo finishes synchronously
 	// the moment the goroutine is scheduled, but we still go through
-	// the polling path to exercise it).
+	// the polling path to exercise it). A short inter-poll sleep
+	// gives the engine's goroutine room to schedule under -race —
+	// without it, the test's hot polling loop can finish all 50
+	// iterations before the handler's "completed" write lands.
 	var statusResp string
 	for i := 0; i < 50; i++ {
 		write(`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"pack.status","arguments":{"job_id":"` + jobID + `"}}}`)
@@ -311,6 +314,7 @@ func TestPackServerAsyncToolLifecycle(t *testing.T) {
 		if strings.Contains(statusResp, `\"state\":\"completed\"`) {
 			break
 		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if !strings.Contains(statusResp, `\"state\":\"completed\"`) {
 		t.Fatalf("job never reached done state: %s", statusResp)
@@ -410,7 +414,11 @@ func TestPackServerTasksGetLifecycle(t *testing.T) {
 	tail := resp[idx+len(`"taskId":"`):]
 	taskID := tail[:strings.Index(tail, `"`)]
 
-	// Poll tasks/get until the task reaches a terminal state.
+	// Poll tasks/get until the task reaches a terminal state. A
+	// short inter-poll sleep gives the engine's async-handler
+	// goroutine room to schedule — without it, on fast runners
+	// (especially under -race) all 50 polling iterations finish
+	// before the goroutine ever writes the "completed" status.
 	var got string
 	for i := 0; i < 50; i++ {
 		write(`{"jsonrpc":"2.0","id":31,"method":"tasks/get","params":{"taskId":"` + taskID + `"}}`)
@@ -418,6 +426,7 @@ func TestPackServerTasksGetLifecycle(t *testing.T) {
 		if strings.Contains(got, `"status":"completed"`) {
 			break
 		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if !strings.Contains(got, `"status":"completed"`) {
 		t.Fatalf("tasks/get never returned completed: %s", got)

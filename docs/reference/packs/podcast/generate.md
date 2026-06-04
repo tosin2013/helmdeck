@@ -61,6 +61,9 @@ For mode C with `source_url`, the Firecrawl overlay must be enabled (`HELMDECK_F
 | `cover_image` | `boolean` | no | `false` | When `true`, the pack auto-generates the cover via `image.generate` and surfaces `cover_image_artifact_key` in the output. Uses the same prompt as `generate_cover_prompt`. Honored only outside `dry_run`. Added v0.12.0 (#146). |
 | `cover_image_model` | `string` | no | `"fal-ai/flux/schnell"` | fal.ai model used when `cover_image:true`. Browse choices via the `helmdeck://image-models` MCP resource. |
 | `credential` | `string` | no | `"elevenlabs-key"` | Vault credential name. |
+| `metadata_model` | `string` | no | `"openrouter/auto"` | Provider/model for the engagement-metadata LLM call. **Default-on** (the v0.26.0 distinction vs `slides.narrate`, which stays opt-in). Pass `""` (empty string, NOT missing) to disable. Adds one LLM call per podcast run (~$0.001 on `openrouter/auto`). |
+| `cta_style` | `string` | no | `"natural"` | CTA tone: `natural` / `direct` / `none`. Placement is fixed at mid-roll (research-validated). |
+| `language` | `string` | no | `"en"` | ISO 639 language code. Operator input is authoritative — overrides whatever the LLM emits. |
 
 **Validation:**
 - Exactly one of `script` / `prompt` / (`source_url` OR `source_text`)
@@ -88,6 +91,28 @@ For mode C with `source_url`, the Firecrawl overlay must be enabled (`HELMDECK_F
 | `cover_image_prompt` | `string` | Only when `generate_cover_prompt: true`. |
 | `cover_image_artifact_key` | `string` | Only when `cover_image: true`. Namespaced under `podcast.generate/`. Resolve via `/api/v1/artifacts/<key>`. |
 | `cover_image_model_used` | `string` | Only when `cover_image: true`. Echoes the model that actually generated the cover. |
+| `engagement` | `object` | Default-on when a dispatcher is wired (set `metadata_model:""` to disable). Apple Podcasts + Podcasting 2.0 shape: `{title, subtitle, summary, show_notes_md, chapters: [{startTime, title}], hook_30s, cta: {placement, copy}, language, format_ceiling_note, title_char_count}`. `chapters[0].startTime` is always `0`, `cta.placement` is always `"mid-roll"` — both server-side defensive overrides regardless of what the LLM emitted. |
+| `engagement_artifact_key` | `string` | Present only when engagement metadata was generated. JSON sidecar file mirroring the inline `engagement` object. |
+
+### Engagement metadata — what's baked in vs operator-overridable
+
+| Bucket | Field | Rule |
+|---|---|---|
+| **Non-overridable** (enforced by prompt + server) | First chapter | Always `startTime=0`. |
+| Non-overridable | Chapter floor | ≥3 chapters when episode > 10 min, each ≥120s, titles ≤45 chars (Apple Podcasts guidance). |
+| Non-overridable | Title shape | 60-80 chars, takeaway-first. |
+| Non-overridable | CTA placement | Always `"mid-roll"` — research-validated; defensive server-side override even if LLM tries something else. |
+| Non-overridable | Hook structure | Cold-open hook lands by second 15, no housekeeping. |
+| **Operator-tunable** | `cta_style` | CTA copy tone: `natural` / `direct` / `none`. |
+| Operator-tunable | `language` | Server-side-authoritative. |
+
+### Honest scope (`format_ceiling_note`)
+
+The `engagement.format_ceiling_note` field — always present when engagement is enabled — carries this constant string:
+
+> *Engagement metadata defaults follow Apple/Spotify spec and Buzzsprout 2025 retention data. Solo vs co-hosted retention is execution-dependent — neither format dominates; this pack supports both. CTA placement is fixed at mid-roll (research-validated); the tone (cta_style) is operator-tunable.*
+
+Unlike `slides.narrate`, the podcast format has no structural retention ceiling — both solo and co-hosted shows can succeed at scale. The honest caveat here is that good metadata still doesn't substitute for good content.
 
 ## Vault credentials needed
 

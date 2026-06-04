@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/podcast"
 	"github.com/tosin2013/helmdeck/internal/security"
@@ -103,6 +104,12 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 				"allow_silent_output":      "boolean",
 				"dry_run":                  "boolean",
 				"plan":                     "string",
+				// Engagement metadata knobs (default-on; pass
+				// metadata_model:"" to disable). cta_style is
+				// {natural,direct,none}. language is an ISO 639 code.
+				"metadata_model": "string",
+				"cta_style":      "string",
+				"language":       "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -123,6 +130,12 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 				"cover_image_prompt":       "string",
 				"cover_image_artifact_key": "string",
 				"cover_image_model_used":   "string",
+				// Engagement object follows Apple Podcasts +
+				// Podcasting 2.0 conventions: title, subtitle, summary,
+				// show_notes_md, chapters (JSON-chapters shape, NOT ID3),
+				// hook_30s, cta, language, format_ceiling_note.
+				"engagement":              "object",
+				"engagement_artifact_key": "string",
 				// Cost transparency — emitted by the handler; declared
 				// here so agents/pipeline authors see them in the catalog.
 				// tts_chars is a per-speaker breakdown map with a "_total"
@@ -159,6 +172,14 @@ type podcastGenerateInput struct {
 	AllowSilentOutput     bool              `json:"allow_silent_output"`
 	DryRun                bool              `json:"dry_run"`
 	Plan                  string            `json:"plan"`
+	// Engagement metadata fields. metadata_model is a string-ptr-shaped
+	// boolean: nil/absent → default to "openrouter/auto" (default-on per
+	// the engagement plan); empty string ("") → operator explicitly
+	// disabled engagement gen; non-empty → use the named model.
+	// CTAStyle: {natural,direct,none}. Empty → natural.
+	MetadataModelRaw *string `json:"metadata_model"`
+	CTAStyle         string  `json:"cta_style"`
+	Language         string  `json:"language"`
 }
 
 func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) packs.HandlerFunc {
@@ -457,6 +478,40 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 		if modelUsed != "" {
 			out["model_used"] = modelUsed
 		}
+
+		// Engagement metadata — default-on per the v0.26.0 plan
+		// (slides.narrate stays opt-in for back-compat; podcast
+		// defaults to "openrouter/auto"). Empty-string opt-out is
+		// distinguished from nil-not-specified via *string in the
+		// input struct.
+		var engagementModel string
+		switch {
+		case in.MetadataModelRaw == nil:
+			engagementModel = "openrouter/auto"
+		case *in.MetadataModelRaw == "":
+			engagementModel = "" // operator explicitly disabled
+		default:
+			engagementModel = *in.MetadataModelRaw
+		}
+		if d != nil && engagementModel != "" && len(script) > 0 {
+			ec.Report(98, "generating engagement metadata")
+			engagement, err := generatePodcastEngagement(ctx, d, engagementModel,
+				theme, durationS, in.Speakers, script, in)
+			if err != nil {
+				ec.Logger.Warn("podcast engagement generation failed", "err", err)
+			} else {
+				mdBytes, _ := json.MarshalIndent(engagement, "", "  ")
+				engArt, err := ec.Artifacts.Put(ctx, "podcast.generate", "engagement.json",
+					mdBytes, "application/json")
+				if err != nil {
+					ec.Logger.Warn("engagement artifact upload failed", "err", err)
+				} else {
+					out["engagement_artifact_key"] = engArt.Key
+				}
+				out["engagement"] = engagement
+			}
+		}
+
 		// Cover prompt is computed once (cheap, in-process) and either
 		// surfaced as `cover_image_prompt` (when generate_cover_prompt
 		// is set) or used internally to feed image.generate (when
@@ -492,6 +547,160 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 		}
 		return json.Marshal(out)
 	}
+}
+
+// formatCeilingNotePodcast is the constant honesty string for
+// podcast engagement output. Parallel structure to slides.narrate's
+// constant; the message differs because audio doesn't have the
+// "slide deck vs talking head" structural ceiling — the honest note
+// here is about solo-vs-cohost execution dependence.
+const formatCeilingNotePodcast = "Engagement metadata defaults follow Apple/Spotify spec and Buzzsprout 2025 retention data. Solo vs co-hosted retention is execution-dependent — neither format dominates; this pack supports both. CTA placement is fixed at mid-roll (research-validated); the tone (cta_style) is operator-tunable."
+
+// generatePodcastEngagementPrompt enforces research-validated podcast
+// engagement rules. Same posture as narrateEngagementPrompt — hard
+// rules in the prompt, soft enrichment in the helper.
+//
+// Citations:
+//   - Apple Podcasts chapters (≥3 per episode >10min, each ≥120s,
+//     titles ≤45 chars): podcasters.apple.com/support/5482
+//   - <itunes:summary> 4000-char limit / <itunes:subtitle> short:
+//     help.rss.com iTunes namespace docs
+//   - Mid-roll CTA placement (engaged-listener bias): industry data
+//   - Title 60-80 chars, takeaway-first: Buzzsprout planning guide
+const generatePodcastEngagementPrompt = `You are a podcast engagement-metadata writer. Produce ONE JSON object — no surrounding prose, no markdown fences — with exactly these fields:
+
+{
+  "title": "...",
+  "subtitle": "...",
+  "summary": "...",
+  "show_notes_md": "...",
+  "chapters": [{"startTime": 0, "title": "..."}, ...],
+  "hook_30s": "...",
+  "cta": {"placement": "mid-roll", "copy": "..."}
+}
+
+HARD RULES (the output is rejected by automated tests if violated):
+
+Title:
+- 60-80 characters, takeaway-first ("How to X" / "3 Patterns to Y" / "Why Z Changes Everything").
+- Plain text. Use power verbs. Numeric specificity if natural.
+
+Subtitle:
+- Short (under 100 characters) — this is the <itunes:subtitle> field for column display.
+
+Summary:
+- This is <itunes:summary>, up to 4000 characters. 2-4 paragraph episode summary.
+- Mention guests by name if present. List key topics. NO sexual or strong language regardless of episode rating.
+
+Show notes (show_notes_md):
+- Multi-paragraph markdown. Include:
+  - 1 paragraph episode hook (parallel to summary but punchier)
+  - Bulleted list of 3-7 key topics covered
+  - Bulleted list of references / links if present in source material
+- Plain markdown — no HTML.
+
+Chapters:
+- The FIRST chapter MUST have startTime=0.
+- Provide AT LEAST 3 chapters when total duration > 10 minutes; fewer is acceptable for shorter episodes but still aim for ≥2.
+- Minimum 120 seconds between consecutive chapter starts (Apple Podcasts guidance — chapters shorter than 2 minutes degrade UX).
+- Chapter titles ≤ 45 characters, descriptive (not "Intro" / "Part 1").
+- startTime is in SECONDS (integer), not M:SS strings.
+
+Hook (hook_30s):
+- A 2-4 sentence cold-open script the producer can adopt. Land the hook by second 15.
+- No housekeeping ("welcome to the show, today we're talking about..."). Open with a specific claim, question, or named tension.
+
+CTA:
+- placement is ALWAYS "mid-roll" — non-overridable, research-validated.
+- copy is a short (≤2 sentence) ask in the tone specified.`
+
+// generatePodcastEngagement is the podcast-side parallel to
+// slides_narrate's generateEngagement. Same shape (LLM call, tolerant
+// JSON parse, server-side enrichment) so a future maintainer reading
+// both sees the consistent pattern.
+func generatePodcastEngagement(
+	ctx context.Context,
+	d vision.Dispatcher,
+	model string,
+	theme string,
+	durationS float64,
+	speakers map[string]string,
+	script []podcast.Turn,
+	in podcastGenerateInput,
+) (map[string]any, error) {
+	maxTokens := 1800
+	var userMsg strings.Builder
+	fmt.Fprintf(&userMsg, "Podcast theme: %s. Duration: %.0f seconds (~%.1f minutes).\n",
+		theme, durationS, durationS/60)
+	fmt.Fprintf(&userMsg, "Speakers: %d (", len(speakers))
+	first := true
+	for name := range speakers {
+		if !first {
+			userMsg.WriteString(", ")
+		}
+		userMsg.WriteString(name)
+		first = false
+	}
+	userMsg.WriteString(")\n\nSCRIPT:\n\n")
+	for _, t := range script {
+		fmt.Fprintf(&userMsg, "%s: %s\n\n", t.Speaker, t.Text)
+	}
+
+	ctaStyle := strings.TrimSpace(in.CTAStyle)
+	if ctaStyle == "" {
+		ctaStyle = "natural"
+	}
+	language := strings.TrimSpace(in.Language)
+	if language == "" {
+		language = "en"
+	}
+	fmt.Fprintf(&userMsg, "\nCTA tone: %q. Language: %q.\nGenerate the engagement metadata JSON now.\n",
+		ctaStyle, language)
+
+	req := gateway.ChatRequest{
+		Model:     model,
+		MaxTokens: &maxTokens,
+		Messages: []gateway.Message{
+			{Role: "system", Content: gateway.TextContent(generatePodcastEngagementPrompt)},
+			{Role: "user", Content: gateway.TextContent(userMsg.String())},
+		},
+	}
+	resp, err := d.Dispatch(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("model returned no choices")
+	}
+	raw := strings.TrimSpace(resp.Choices[0].Message.Content.Text())
+
+	var md map[string]any
+	if err := json.Unmarshal([]byte(raw), &md); err != nil {
+		if obj := extractFirstJSONObject(raw); obj != "" {
+			if err2 := json.Unmarshal([]byte(obj), &md); err2 != nil {
+				return nil, fmt.Errorf("parse engagement JSON: %w", err2)
+			}
+		} else {
+			return nil, fmt.Errorf("no parseable JSON in engagement response")
+		}
+	}
+
+	// Enrichment: language is operator-authoritative; format_ceiling_note
+	// is constant; cta.placement is force-set to mid-roll regardless of
+	// what the LLM emitted (the prompt says mid-roll, but a defensive
+	// override means a future prompt drift can't silently change it).
+	md["language"] = language
+	md["format_ceiling_note"] = formatCeilingNotePodcast
+	if cta, ok := md["cta"].(map[string]any); ok {
+		cta["placement"] = "mid-roll"
+		md["cta"] = cta
+	} else {
+		md["cta"] = map[string]any{"placement": "mid-roll", "copy": ""}
+	}
+	if title, ok := md["title"].(string); ok {
+		md["title_char_count"] = len(title)
+	}
+	return md, nil
 }
 
 // computeTTSChars sums the per-turn text length per speaker and

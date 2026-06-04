@@ -165,10 +165,11 @@ func runScenario(t *testing.T, client *openRouterClient, sc Scenario, attempts i
 				})
 			}
 			// Inter-attempt sleep on errors. The client already
-			// retries 429 internally with 4s/8s/16s backoff; this
-			// extra pause covers the case where the *next* attempt
-			// is about to fire right after a quota window resets.
-			time.Sleep(3 * time.Second)
+			// retries 429 internally with 15/30/60/120s backoff;
+			// this extra pause covers the case where the *next*
+			// attempt is about to fire right after a quota window
+			// resets — 5s gives the bucket clean room.
+			time.Sleep(5 * time.Second)
 			continue
 		}
 
@@ -186,13 +187,16 @@ func runScenario(t *testing.T, client *openRouterClient, sc Scenario, attempts i
 			}
 		}
 
-		// Inter-attempt sleep on success too. OpenRouter's free
-		// tier returns X-RateLimit-Limit: 16 (16 req/min observed
-		// in practice), so we need ≥3.75s between calls to stay
-		// under the bucket. 4s leaves a small margin. Total budget:
-		// 50 attempts × 4s ≈ 3.5min minimum, comfortably under
-		// the 20-min workflow timeout even with retry pauses.
-		time.Sleep(4 * time.Second)
+		// Inter-attempt sleep. The bottleneck isn't OpenRouter's
+		// account quota (~16 req/min) — it's the upstream provider
+		// throttle at Moonshot for kimi-k2.6:free, which doesn't
+		// publish a rate but empirically delivers ~1 successful
+		// call per 30s. We pace at 12s base and let the client's
+		// 15/30/60/120s backoff cover the residual throttles. At
+		// 12s base, best case is 50×12s=10min; worst case with
+		// every call retrying once is ~17min, comfortably under
+		// the 40m workflow timeout.
+		time.Sleep(12 * time.Second)
 	}
 
 	res.Passed = res.Successes >= sc.Threshold

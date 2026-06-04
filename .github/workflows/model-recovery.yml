@@ -122,7 +122,17 @@ jobs:
           HELMDECK_RECOVERY_MODEL: ${{ env.RECOVERY_MODEL }}
           HELMDECK_RECOVERY_ATTEMPTS: ${{ github.event.inputs.attempts || '10' }}
         run: |
-          go test -v -tags=recovery -count=1 -timeout=20m ./internal/reliability/...
+          # 40m timeout: 5 scenarios × 10 attempts × 12s base pacing
+          # = 10min minimum. With the client's 15/30/60/120s retry
+          # backoff on upstream throttle (kimi-k2.6:free's Moonshot
+          # provider rate-limits independently from OpenRouter's
+          # account quota, and the throttle doesn't publish a
+          # Retry-After), a fully-throttled run can take ~35min.
+          # 40m leaves headroom without burning the runner-minutes
+          # budget. If runs consistently hit timeout, the upstream
+          # quota has tightened — swap RECOVERY_MODEL and update
+          # MODEL_LAST_VERIFIED + MODEL_NEXT_REVIEW_DUE.
+          go test -v -tags=recovery -count=1 -timeout=40m ./internal/reliability/...
 
       - name: Summarize per-scenario report
         # Always run the summary step so a failed test still posts

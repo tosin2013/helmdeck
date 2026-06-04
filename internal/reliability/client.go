@@ -98,8 +98,15 @@ type recoveryDecision struct {
 // Malformed-output errors (the model returned non-JSON or a non-
 // closed-set action) are NOT retried — they're scenario-level signal.
 func (c *openRouterClient) askForRecovery(ctx context.Context, system, user string) (*recoveryDecision, error) {
-	const maxRetries = 3
-	backoff := 4 * time.Second
+	// Backoff schedule: 15s → 30s → 60s → 120s. The upstream
+	// provider error "moonshotai/kimi-k2.6:free is temporarily
+	// rate-limited upstream" does not carry a Retry-After header,
+	// so we can't be precise — we just give the provider plenty of
+	// time to drain. The 4-retry ceiling means total wait per failed
+	// call can be 15+30+60+120 = 225s; even a fully-throttled run
+	// fits in the 40m workflow timeout.
+	const maxRetries = 4
+	backoff := 15 * time.Second
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		decision, err := c.attemptOnce(ctx, system, user)

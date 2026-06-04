@@ -311,6 +311,142 @@ func TestSlidesNarrate_EngagementHashtagCountClamp(t *testing.T) {
 	}
 }
 
+// --- captions tests -------------------------------------------------------
+
+// TestSlidesNarrate_CaptionsSidecar_DefaultOn — without any
+// captions_* input the handler emits a non-empty captions_artifact_key
+// and persists captions.srt to the artifact store. Regression guard
+// against silent default-on flip (someone adds an inverse-default
+// pointer-bool dereference) and against the artifact-store call
+// shape drifting away from the engagement-metadata pattern.
+func TestSlidesNarrate_CaptionsSidecar_DefaultOn(t *testing.T) {
+	exec := &narrateExecScript{}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# Slide 1\n\n<!-- First narration -->\n\n---\n\n# Slide 2\n\n<!-- Second -->",
+		"allow_silent_output": true
+	}`
+	raw, err := runNarrate(t, nil, nil, exec, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		CaptionsArtifactKey string `json:"captions_artifact_key"`
+		CaptionsBurnedIn    bool   `json:"captions_burned_in"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.CaptionsArtifactKey == "" {
+		t.Error("captions_artifact_key empty — sidecar should default-on")
+	}
+	if out.CaptionsBurnedIn {
+		t.Error("captions_burned_in should be false (burn-in opt-in, not set)")
+	}
+}
+
+// TestSlidesNarrate_CaptionsSidecar_ExplicitOff — explicit false on
+// the pointer-bool input suppresses the sidecar. Together with the
+// default-on test above this pins the Mermaid-style pointer-bool
+// shape: nil ⇒ on, &false ⇒ off.
+func TestSlidesNarrate_CaptionsSidecar_ExplicitOff(t *testing.T) {
+	exec := &narrateExecScript{}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# Slide 1\n\n<!-- Narr -->",
+		"allow_silent_output": true,
+		"captions_sidecar": false
+	}`
+	raw, err := runNarrate(t, nil, nil, exec, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		CaptionsArtifactKey string `json:"captions_artifact_key"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.CaptionsArtifactKey != "" {
+		t.Errorf("captions_artifact_key = %q, want empty (sidecar explicitly off)", out.CaptionsArtifactKey)
+	}
+}
+
+// TestSlidesNarrate_CaptionsBurnIn_WiresFilter — captions_burn_in:true
+// MUST wire ',subtitles=/tmp/captions.srt' into the per-segment vf
+// chain. This is the load-bearing assertion that the burn-in feature
+// actually does anything; without it the input would be accepted
+// silently and operators would discover no captions only by playing
+// the MP4. Captures the ffmpeg argv via the existing narrateExecScript
+// .calls slice.
+func TestSlidesNarrate_CaptionsBurnIn_WiresFilter(t *testing.T) {
+	exec := &narrateExecScript{}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# Slide 1\n\n<!-- Narr -->",
+		"allow_silent_output": true,
+		"captions_burn_in": true
+	}`
+	raw, err := runNarrate(t, nil, nil, exec, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		CaptionsBurnedIn bool `json:"captions_burned_in"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.CaptionsBurnedIn {
+		t.Error("captions_burned_in should be true when captions_burn_in:true and write succeeded")
+	}
+	// Find the per-segment ffmpeg encode and assert the subtitles
+	// filter is in its argv. The narrateExecScript captures every
+	// exec call; the per-segment encode is the one with "-loop 1".
+	found := false
+	for _, c := range exec.calls {
+		if len(c.Cmd) < 3 {
+			continue
+		}
+		s := c.Cmd[2]
+		if strings.Contains(s, "-loop 1") && strings.Contains(s, "subtitles=/tmp/captions.srt") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected per-segment ffmpeg argv to contain ',subtitles=/tmp/captions.srt'; got %d exec calls",
+			len(exec.calls))
+		for i, c := range exec.calls {
+			if len(c.Cmd) >= 3 && strings.Contains(c.Cmd[2], "-loop 1") {
+				t.Logf("  call %d (loop): %s", i, c.Cmd[2])
+			}
+		}
+	}
+}
+
+// TestSlidesNarrate_CaptionsOutputSchemaValidates — round-trip the
+// new fields through OutputSchema.Validate. Closes the gap from
+// pack tests bypassing Engine.Execute validation: a future field
+// rename that doesn't update the schema would slip through every
+// other test in this file but fail this one. Mirrors the existing
+// TestSlidesNarrate_RealOutputMatchesSchema posture for the captions
+// surface.
+func TestSlidesNarrate_CaptionsOutputSchemaValidates(t *testing.T) {
+	schema := SlidesNarrate(nil, nil, nil).OutputSchema
+	exec := &narrateExecScript{}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# Slide 1\n\n<!-- Narr -->",
+		"allow_silent_output": true,
+		"captions_burn_in": true
+	}`
+	raw, err := runNarrate(t, nil, nil, exec, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if verr := schema.Validate(raw); verr != nil {
+		t.Errorf("output with new caption fields violates OutputSchema (Engine.Execute would reject): %v\noutput: %s",
+			verr, raw)
+	}
+}
+
 func TestSlidesNarrate_NoNotes(t *testing.T) {
 	exec := &narrateExecScript{}
 	input := `{

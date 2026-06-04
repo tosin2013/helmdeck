@@ -43,6 +43,8 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 | `hashtag_count` | `number` | no | `4` | Number of hashtags to request; clamped to `[3, 5]` server-side (the research-validated range). Out-of-range values silently snap to `4`. |
 | `category` | `string` | no | `"Science & Technology"` | YouTube category. Operator input is authoritative — overrides whatever the LLM emits. |
 | `language` | `string` | no | `"en"` | ISO 639 language code for the metadata. Operator input is authoritative. |
+| `captions_sidecar` | `boolean` | no | `true` | Emit a sidecar `captions.srt` artifact alongside the MP4. YouTube/Vimeo auto-import as the CC track (the research-cited ~12-13% view boost path). Default-on; pass explicit `false` to suppress. Mirrors the `mermaid` pointer-bool default-on shape. |
+| `captions_burn_in` | `boolean` | no | `false` | Render captions into every frame via ffmpeg's libass `subtitles=` filter — visible always-on subtitles. Required on platforms that don't surface CC tracks (Twitter/X embedded videos, LinkedIn embeds, raw MP4 downloads). Adds 5-50% per-segment encode wall-clock and 20-50 MB per encoder thread. On memory-tight hosts (3 GiB MemoryLimit) with large 1080p decks may trigger the OOM-retry path; if libass-with-1-thread also OOMs, the run fails. |
 | `webhook_url` | `string` | no | — | Push the result to this URL on completion (sync alternative to polling). |
 | `webhook_secret` | `string` | no | — | HMAC signature secret for the webhook callback. |
 | `hero_image_prompt` | `string` | no | — | When non-empty (v0.12.0 #146), the pack calls `image.generate` and inlines the resulting PNG INTO slide 1's content (no `---` separator) so the per-slide TTS pipeline still sees a narrated slide. Skipped automatically during `dry_run`. Fails loud on missing `fal-key` credential. |
@@ -60,7 +62,20 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 | `voice_used` | `string` | Voice ID that narrated. Empty when `has_narration: false`. |
 | `engagement_artifact_key` | `string` | Present only when `metadata_model` was set. JSON sidecar file with the engagement metadata. **v0.26.0 breaking change**: was `metadata_artifact_key` in v0.25.x. |
 | `engagement` | `object` | Same content as `engagement_artifact_key`'s JSON, inline for convenience. Shape: `{title, title_char_count, description, chapters: [{timestamp, title, seconds}], hashtags, tags, hook_30s, captions_recommended, category, language, format_ceiling_note}`. The structural rules (0:00 first chapter, title ≤ 60 chars, ≥3 chapters when video > 7min, 3-5 hashtags) are baked into the prompt as hard constraints; `category` and `language` are server-side-authoritative. **v0.26.0 breaking change**: was `metadata` in v0.25.x. |
+| `captions_artifact_key` | `string` | Sidecar SRT file (`captions.srt`). Default-present unless `captions_sidecar:false`. YouTube Studio "Subtitles → Upload file → With timing" auto-imports as the CC track. Empty string when the sidecar was suppressed or the artifact-store Put failed (Put failures are logged but don't fail the run). |
+| `captions_burned_in` | `boolean` | Always emitted (even when false) so consumers can branch on its presence. `true` only when `captions_burn_in:true` was passed AND the SRT was successfully written to the burn-in path. |
 | `hero_image_model_used` | `string` | Only when `hero_image_prompt` was set. Echoes the model that actually generated the hero. |
+
+### Captions
+
+| Output mode | Default | What it's for |
+|---|---|---|
+| **Sidecar SRT** (`captions.srt`) | On | YouTube/Vimeo auto-import → user-toggleable CC. Research-cited ~12-13% view boost. Essentially free (no encode cost). |
+| **Burned-in** | Off (opt-in) | Always-visible subtitles for Twitter/X embeds, LinkedIn, raw MP4 downloads where CC tracks don't surface. Adds 5-50% encode wall-clock + 20-50 MB libass overhead per encoder thread. |
+
+**Burn-in OOM caveat** — the existing per-segment OOM-retry path (primary `-threads 4 -preset medium` → retry `-threads 1 -preset veryfast`) gets less headroom when libass is in the chain. Large 1080p decks on a 3 GiB MemoryLimit host may push the primary into OOM and, with libass adding 20-50 MB per thread to the retry's working set, the retry can OOM too — at which point the entire encode fails. If you hit this, leave `captions_burn_in:false` and rely on the sidecar SRT (YouTube/Vimeo CC import handles the rest).
+
+**YouTube upload acceptance check**: after merge, regenerate a `builtin.repo-presentation` run, download the `captions_artifact_key` artifact, and upload it via YouTube Studio → Subtitles → "Upload file → With timing". YouTube must accept the file and auto-import as the `en` CC track. If it rejects, the SRT shape regressed and the format-precision tests in `slides_captions_test.go` need to be tightened.
 
 ### Engagement metadata — what's baked in vs operator-overridable
 

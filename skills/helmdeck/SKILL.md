@@ -4,27 +4,25 @@ description: Use helmdeck's 53 capability packs (browser, web scraping, content 
 metadata:
   openclaw:
     skillKey: helmdeck
-    helmdeckVersion: "v0.23.0"
+    helmdeckVersion: "v0.25.0"
     source: https://github.com/tosin2013/helmdeck/blob/main/skills/helmdeck/SKILL.md
 ---
 
 <!-- This SKILL.md is the canonical helmdeck agent skill. Stamped at
-     helmdeck v0.23.0 — reliability + consolidation release that
-     closes the slides.narrate failure surface end-to-end (Mermaid
-     blank renders, audio dropouts at concat boundaries, silent
-     ffmpeg failures, misclassified OOMs, sessions reaped mid-encode
-     by an inherited 5-minute watchdog, transport errors masquerading
-     as exit 0) AND moves every audio/video pattern PRs #379-#405
-     paid for into a shared internal/avenc/ package with 99.3% test
-     coverage. Also ships pipeline-run single-flight coalescing
-     (PR #397), pinned-session timeout extension (PR #401), the
-     5-PR ADR 051 routing-reliability arc (reasoning-token
-     stripping, calibration tooling, cause-typed errors, strict
-     JSON, prefix cache), and the new blog.append_cta pack (53rd
-     pack). In-tree catalog now sits at 53 packs + 4 meta-packs.
-     Re-run scripts/configure-openclaw.sh after this release so your
-     OpenClaw agent picks up blog.append_cta and the avenc-backed
-     reliability work. -->
+     helmdeck v0.25.0 — the reliability arc that ships the empirical
+     proof of the cheap-model bet. Eight PRs (A-H) closed: per-package
+     coverage gate + lint (PR A), schema + typed-error contract tests
+     (PR B), zero-coverage handler set + browser.interact null-fix
+     (PR C), property tests + nightly mutation workflow (PR D), S3
+     wire surface (PR E), engine audit + memory machinery (PR F),
+     internal/mcp ratchet to 81% (PR G), and the model-recovery
+     loop test against openai/gpt-oss-120b:free (PR H — passes
+     all 5 typed-error recovery scenarios at >=7/10). Catalog
+     unchanged at 53 packs + 4 meta-packs; this was a reliability
+     arc, not a feature release. To enable PR H's weekly recovery
+     test: add OPENROUTER_API_KEY as a GitHub repository secret.
+     Re-run scripts/configure-openclaw.sh after this release so
+     your OpenClaw agent picks up the v0.25.0-stamped skill. -->
 
 ## You are connected to helmdeck
 

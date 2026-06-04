@@ -1,0 +1,216 @@
+name: avbench
+
+# Audio/video bench — runs the slides.narrate + podcast.generate pipelines
+# end-to-end against a real ElevenLabs key and ffprobes the resulting
+# artifacts to catch container/audio regressions that unit tests
+# structurally cannot see.
+#
+# Motivating bug: PR #422 fixed an MP4 +faststart regression that had
+# silently shipped with every helmdeck-produced video since #379 (six
+# months). Unit tests pinned the ffmpeg argv shape — the broken file
+# had a valid-looking command line, so coverage % stayed green while
+# every operator's MP4 was streaming-broken. The only test that would
+# have caught it is one that runs the real pipeline and ffprobes the
+# output. This is that test.
+#
+# Why monthly: ElevenLabs costs ~$0.06–0.10 per run at Creator-tier
+# rates and the bug class (encoder drift, container muxing flag
+# regression, ElevenLabs API-shape change) doesn't benefit from
+# sub-week detection. Monthly = 12 data points per year, $1/yr in
+# ElevenLabs credits, and a deterministic "did the av pipeline drift?"
+# signal in the maintainer's inbox.
+#
+# To enable: add these repository secrets (Settings → Secrets and
+# variables → Actions):
+#   - ELEVENLABS_API_KEY  — TTS provider, the load-bearing seam
+#   - OPENROUTER_API_KEY  — LLM provider for slides.outline / podcast
+#                            scripting (builtin.repo-presentation +
+#                            builtin.repo-readme-podcast both route
+#                            their LLM step through openrouter/auto)
+# Without either secret the preflight emits a clear warning and skips
+# the run.
+
+on:
+  schedule:
+    # First Sunday of every month at 04:00 UTC. cron's day-of-week vs
+    # day-of-month interaction is OR, not AND, but the day-of-month
+    # range (1-7) combined with day-of-week (Sun) means "any Sunday
+    # AND any of the first 7 days of the month" — i.e. the first
+    # Sunday. Different time-of-day from model-recovery (06:00) and
+    # model-discovery (06:00 Wed) so the three workflows don't compete
+    # for runner-pool slots on the same hour.
+    - cron: '0 4 1-7 * 0'
+  workflow_dispatch:
+    inputs:
+      repo_url:
+        description: 'Public GitHub repo to use as the av source (default: tosin2013/helmdeck)'
+        required: false
+        default: 'https://github.com/tosin2013/helmdeck'
+
+permissions:
+  contents: read
+
+# Cancel an in-flight monthly if a new commit lands; the scheduled
+# run always starts from main HEAD anyway.
+concurrency:
+  group: avbench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  avbench:
+    name: av-bench (slides.narrate + podcast.generate)
+    runs-on: ubuntu-latest
+    # 60m budget: ~5m for stack bring-up, ~3m for each of the two
+    # pipelines (LLM outline + ElevenLabs TTS for ~5 slides + ffmpeg
+    # encode), 5m for the deep ffprobe asserts, and headroom for the
+    # ElevenLabs API to slow-walk a request.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      # ffmpeg/ffprobe back the mp4:av and mp3:av deep asserts in
+      # pipelines-smoke.sh. Without these the asserts degrade to size
+      # checks only — same posture as pdf_pages requiring pdfinfo.
+      # The asserts call out "ffprobe absent, audio NOT verified"
+      # so a missing install is loud, not silent.
+      - name: Install ffmpeg + universal-ctags
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg universal-ctags
+
+      - name: Preflight — required secrets
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          missing=()
+          [ -z "${ELEVENLABS_API_KEY:-}" ] && missing+=("ELEVENLABS_API_KEY")
+          [ -z "${OPENROUTER_API_KEY:-}" ] && missing+=("OPENROUTER_API_KEY")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::warning::avbench skipped — required secret(s) not set: ${missing[*]}. Add them in Settings → Secrets and variables → Actions to enable the monthly run."
+            echo "SKIP_RUN=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+      # Provision .env.local for the compose stack. install.sh would
+      # auto-generate this on a fresh box; we pre-populate it so the
+      # vault key + admin password are deterministic across runs and
+      # the ElevenLabs key lands in HELMDECK_ELEVENLABS_API_KEY (the
+      # env-var-fallback path resolveElevenLabsKey reads when no
+      # vault entry is present).
+      - name: Provision .env.local
+        if: env.SKIP_RUN != '1'
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          # Vault key + admin password — random per-run; only this job
+          # accesses the resulting stack. Avoids the "credentials in
+          # argv/logs" boundary by writing directly to .env.local
+          # without printing.
+          vault_key=$(openssl rand -hex 32)
+          admin_pass=$(openssl rand -hex 16)
+          {
+            echo "HELMDECK_VAULT_KEY=$vault_key"
+            echo "HELMDECK_ADMIN_PASSWORD=$admin_pass"
+            echo "HELMDECK_KEYSTORE_KEY=$vault_key"
+            echo "HELMDECK_ELEVENLABS_API_KEY=$ELEVENLABS_API_KEY"
+            echo "HELMDECK_OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
+            # ElevenLabs format pinned to Creator-tier 192k — same as
+            # the in-tree default. If avbench starts failing only on
+            # this row, suspect a tier downgrade on the test account.
+            echo "HELMDECK_ELEVENLABS_FORMAT=mp3_44100_192"
+            # OpenRouter routing: openrouter/auto is currently the
+            # observational pin in model-discovery; using it here
+            # cross-validates the routing layer at the same time.
+            echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
+          } > deploy/compose/.env.local
+          chmod 0600 deploy/compose/.env.local
+
+      # Build + bring up the stack from CURRENT SOURCE (the build
+      # overlay is what makes install.sh build locally instead of
+      # pulling pre-built images). --no-smoke skips the post-install
+      # smoke test that install.sh runs by default — avbench runs its
+      # own deeper smoke a few steps below. --no-embeddings skips the
+      # Ollama embedding sidecar (not exercised by the av pipelines).
+      - name: Bring up helmdeck stack from source
+        if: env.SKIP_RUN != '1'
+        run: |
+          bash scripts/install.sh --no-smoke --no-embeddings 2>&1 | tail -50
+          # Wait for control-plane to report healthy before kicking off
+          # pipelines. install.sh exits before the stack is fully ready
+          # so we re-check here.
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/healthz >/dev/null 2>&1; then
+              echo "control-plane healthy after ${i}s"; break
+            fi
+            sleep 2
+          done
+
+      # Run the smoke suite. The repo-presentation + repo-readme-podcast
+      # cases are gated on the elevenlabs gate inside the script;
+      # the preflight above confirmed the key is set, so they'll run.
+      # The script exits non-zero on the first deep-assert failure,
+      # which fails the job.
+      - name: Run av-bench pipelines
+        if: env.SKIP_RUN != '1'
+        env:
+          AVBENCH_REPO_URL: ${{ github.event.inputs.repo_url || 'https://github.com/tosin2013/helmdeck' }}
+          # RUN_TIMEOUT_SECS bumped from the script default (180s) to
+          # accommodate the LLM outline step which can take 60-90s on
+          # openrouter/auto's slower providers.
+          RUN_TIMEOUT_SECS: '420'
+        run: |
+          set -o pipefail
+          bash scripts/pipelines-smoke.sh 2>&1 | tee avbench.log
+
+      # Upload the failing artifacts so a maintainer can ffprobe them
+      # locally. Always-runs so a successful run still uploads the log
+      # (small, useful for diffing across months). The artifacts the
+      # script downloaded live in a mktemp dir that gets cleaned on
+      # script exit, so we fish them out of the docker artifact store
+      # via the API instead.
+      - name: Upload av-bench artifacts
+        if: always() && env.SKIP_RUN != '1'
+        uses: actions/upload-artifact@v7
+        with:
+          name: avbench-artifacts
+          path: |
+            avbench.log
+            /tmp/avbench-artifact-*.bin
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # Compose down so docker volumes don't carry across runs.
+      # `always()` so a failed pipelines-smoke still cleans up.
+      - name: Tear down stack
+        if: always() && env.SKIP_RUN != '1'
+        run: |
+          docker compose -f deploy/compose/compose.yaml \
+            --env-file deploy/compose/.env.local down -v 2>&1 | tail -10 || true
+
+      # Run-page summary so the maintainer sees pass/fail without
+      # clicking into logs.
+      - name: Summarize result
+        if: always() && env.SKIP_RUN != '1'
+        run: |
+          {
+            echo "## avbench result"
+            echo ""
+            if grep -qE 'pipelines-smoke PASSED' avbench.log 2>/dev/null; then
+              echo "**✓ PASS** — slides.narrate + podcast.generate output verified"
+            else
+              echo "**✗ FAIL** — see job log + uploaded artifacts"
+            fi
+            echo ""
+            echo "Each case asserts on the actual artifact, not just the run-status:"
+            echo "- MP4 cases: faststart layout, audio packet contiguity, RMS sanity, codec/sample-rate pin"
+            echo "- MP3 cases: audio packet contiguity, RMS sanity, codec/sample-rate pin"
+            echo ""
+            echo "If this run fails, the relevant unit tests almost certainly still pass — the bug shape this catches is invisible to argv-shape pins."
+          } >> "$GITHUB_STEP_SUMMARY"

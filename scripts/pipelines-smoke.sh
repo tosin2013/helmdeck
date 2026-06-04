@@ -76,9 +76,10 @@ integration_enabled() {
 
 gate_ok() {
   case "$1" in
-    always)   return 0 ;;
-    firecrawl) integration_enabled HELMDECK_FIRECRAWL_ENABLED ;;
-    docling)   integration_enabled HELMDECK_DOCLING_ENABLED ;;
+    always)     return 0 ;;
+    firecrawl)  integration_enabled HELMDECK_FIRECRAWL_ENABLED ;;
+    docling)    integration_enabled HELMDECK_DOCLING_ENABLED ;;
+    elevenlabs) elevenlabs_enabled ;;
     *) return 1 ;;
   esac
 }
@@ -154,11 +155,108 @@ has_magic() {  # file, hex-or-ascii prefix matcher
   head -c 8 "$f" | grep -qa "$want"
 }
 
+# Integration gate for ElevenLabs-dependent cases. Returns 0 if a key
+# is reachable to the control-plane via either env-var fallback or the
+# vault entry the packs read at handler entry. False otherwise.
+elevenlabs_enabled() {
+  local val=""
+  val=$(docker exec "$HELMDECK_CONTAINER" sh -c "printf '%s' \"\${HELMDECK_ELEVENLABS_API_KEY:-}\"" 2>/dev/null || true)
+  if [[ -z "$val" && -f "$HELMDECK_ENV_FILE" ]]; then
+    val=$(grep '^HELMDECK_ELEVENLABS_API_KEY=' "$HELMDECK_ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+  fi
+  # Vault path: a successful test call from the running stack proves the
+  # vault-stored key works; skip the credential probe and let the
+  # pipeline run surface "no key" failures through its existing error path.
+  [[ -n "$val" ]]
+}
+
+# ── ffprobe-based av asserts (mp4:av + mp3:av) ────────────────────
+# Catches container layout regressions (moov-at-end / no-faststart),
+# silent-region drift (TTS silent-fallback hitting unexpectedly),
+# packet-truncation cascades (ElevenLabs 200-OK-no-audio), and codec
+# / sample-rate / bitrate drift.
+#
+# All checks degrade to a yellow note (and SKIP that specific check)
+# when ffprobe isn't present on the host — same posture pdf_pages
+# takes for pdfinfo. The faststart check is pure Python (no ffprobe)
+# so it always runs.
+
+ffprobe_present() { command -v ffprobe >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; }
+
+# mp4_faststart_ok <file>
+# Reads the first ~64 KiB looking for the moov atom; faststart requires
+# moov to appear BEFORE mdat in the byte stream so streaming players
+# can begin playback before download completes. Pure Python — no
+# external dep; runs even when ffprobe is absent.
+mp4_faststart_ok() {
+  python3 - "$1" <<'PY'
+import sys
+data = open(sys.argv[1], "rb").read()
+moov = data.find(b"moov")
+mdat = data.find(b"mdat")
+sys.exit(0 if (0 < moov < mdat) else 1)
+PY
+}
+
+# audio_packets_contiguous <file>
+# Walks the audio packet timeline; fails if any consecutive packet
+# gap > 0.5s. The 0.5s threshold lets normal between-slide pauses
+# through but catches mid-segment dropouts where packets simply stop.
+audio_packets_contiguous() {
+  ffprobe -v error -select_streams a -show_packets -of csv=p=0 "$1" 2>/dev/null \
+    | awk -F',' '
+        NR==1 { prev=$4+$8; next }
+        { if ($4 - prev > 0.5) exit 2; prev = $4+$8 }
+      '
+}
+
+# audio_rms_above <file> <floor-db>
+# Samples 5 evenly-spaced 2-second windows across the audio duration;
+# fails if any window's mean RMS is below floor-db (default -45 dB —
+# threshold that lets normal pauses through but catches a silent
+# slide). Detects the "TTS silent-fallback fired for slide N" failure
+# mode that the existing unit tests can't see.
+audio_rms_above() {
+  local f="$1" floor="$2" dur t rms
+  dur=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$f" 2>/dev/null)
+  if [[ -z "$dur" ]] || awk -v d="$dur" 'BEGIN{exit (d<5)?0:1}'; then
+    return 2  # too short to sample meaningfully — skip
+  fi
+  for i in 1 2 3 4 5; do
+    t=$(awk -v d="$dur" -v i="$i" 'BEGIN{printf "%.2f", d*i/6}')
+    rms=$(ffmpeg -ss "$t" -t 2 -i "$f" -af volumedetect -vn -sn -dn -f null - 2>&1 \
+           | awk '/mean_volume:/ {print $5}')
+    if [[ -z "$rms" ]]; then return 3; fi
+    if awk -v rms="$rms" -v floor="$floor" 'BEGIN{exit (rms<floor)?0:1}'; then
+      printf 'FAIL_AT t=%s rms=%s floor=%s\n' "$t" "$rms" "$floor"
+      return 1
+    fi
+  done
+}
+
+# audio_codec_params_ok <file> <expected_codec> <expected_rate>
+# Verifies the audio codec and sample rate match. Catches encoder
+# drift (codec swap, sample-rate not pinned).
+audio_codec_params_ok() {
+  local f="$1" want_codec="$2" want_rate="$3" codec rate
+  codec=$(ffprobe -v error -select_streams a -show_entries stream=codec_name -of default=nw=1:nk=1 "$f" 2>/dev/null)
+  rate=$(ffprobe -v error -select_streams a -show_entries stream=sample_rate -of default=nw=1:nk=1 "$f" 2>/dev/null)
+  [[ "$codec" == "$want_codec" && "$rate" == "$want_rate" ]]
+}
+
 PASS=0; FAIL=0; SKIP=0; FAILED=()
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
 # assert_artifact <name> <assert-spec> <run-json-file>
-#   assert-spec: pdf | pdf:N | mp4 | mp3 | blog
+#   assert-spec: pdf | pdf:N | mp4 | mp4:av | mp3 | mp3:av | blog
+#
+# The :av variants add ffprobe-based deep checks on top of the basic
+# shape/magic verification: faststart container layout, audio packet
+# contiguity, RMS sanity at evenly-spaced sample points, and codec /
+# sample-rate verification. These are the checks that would have
+# caught the faststart bug (#422) which silently shipped with every
+# helmdeck-produced MP4 from #379 onward — the basic mp4 spec missed
+# it because the ffmpeg argv looked fine and the file size was sane.
 assert_artifact() {
   local name="$1" spec="$2" runfile="$3"
   local key art; key=$(terminal_artifact_key <"$runfile")
@@ -187,9 +285,55 @@ assert_artifact() {
     mp4)
       if ! has_magic "$art" 'ftyp' && [[ "$size" -lt 1000 ]]; then red "  ✗ $name: not a plausible MP4 (size=$size)"; return 1; fi
       green "  ✓ $name: MP4 ok (size=$size)"; return 0 ;;
+    mp4:av)
+      if ! has_magic "$art" 'ftyp' && [[ "$size" -lt 1000 ]]; then red "  ✗ $name: not a plausible MP4 (size=$size)"; return 1; fi
+      # Faststart: pure-Python check, always runs.
+      if ! mp4_faststart_ok "$art"; then
+        red "  ✗ $name: MP4 moov atom AFTER mdat — streaming players cannot begin playback before full download (#422 regression)"; return 1
+      fi
+      if ! ffprobe_present; then
+        yellow "  ! $name: MP4 faststart ok (size=$size) — ffprobe absent, audio packet / RMS / codec NOT verified"
+        return 0
+      fi
+      if ! audio_packets_contiguous "$art"; then
+        red "  ✗ $name: audio packet timeline has a gap > 0.5s (possible TTS truncation cascading into the concat)"; return 1
+      fi
+      local rms_out
+      rms_out=$(audio_rms_above "$art" -45)
+      case $? in
+        0) ;;  # all sample points above -45 dB
+        1) red "  ✗ $name: silent region detected — $rms_out (TTS silent-fallback fired unexpectedly?)"; return 1 ;;
+        2) yellow "  ! $name: too short to sample RMS — skipping" ;;
+        3) red "  ✗ $name: ffmpeg RMS probe failed unexpectedly"; return 1 ;;
+      esac
+      if ! audio_codec_params_ok "$art" aac 44100; then
+        red "  ✗ $name: audio codec/rate drifted from aac+44100 (encoder regression)"; return 1
+      fi
+      green "  ✓ $name: MP4 ok (size=$size, faststart, audio contiguous, RMS ≥ -45dB, aac@44100)"; return 0 ;;
     mp3)
       if [[ "$size" -lt 1000 ]]; then red "  ✗ $name: MP3 too small (size=$size)"; return 1; fi
       green "  ✓ $name: MP3 ok (size=$size)"; return 0 ;;
+    mp3:av)
+      if [[ "$size" -lt 1000 ]]; then red "  ✗ $name: MP3 too small (size=$size)"; return 1; fi
+      if ! ffprobe_present; then
+        yellow "  ! $name: MP3 size ok (size=$size) — ffprobe absent, audio packet / RMS / codec NOT verified"
+        return 0
+      fi
+      if ! audio_packets_contiguous "$art"; then
+        red "  ✗ $name: audio packet timeline has a gap > 0.5s (possible TTS truncation cascading into the concat)"; return 1
+      fi
+      local rms_out_mp3
+      rms_out_mp3=$(audio_rms_above "$art" -45)
+      case $? in
+        0) ;;
+        1) red "  ✗ $name: silent region detected — $rms_out_mp3 (TTS silent-fallback fired unexpectedly?)"; return 1 ;;
+        2) yellow "  ! $name: too short to sample RMS — skipping" ;;
+        3) red "  ✗ $name: ffmpeg RMS probe failed unexpectedly"; return 1 ;;
+      esac
+      if ! audio_codec_params_ok "$art" mp3 44100; then
+        red "  ✗ $name: audio codec/rate drifted from mp3+44100 (encoder regression)"; return 1
+      fi
+      green "  ✓ $name: MP3 ok (size=$size, audio contiguous, RMS ≥ -45dB, mp3@44100)"; return 0 ;;
     blog)
       if ! grep -qa '\[source\](' "$art" && [[ "$size" -lt 20 ]]; then
         red "  ✗ $name: blog body empty / no citations (size=$size)"; return 1
@@ -242,6 +386,20 @@ run_case "grounded-deck"  "builtin.grounded-deck"  "firecrawl" "pdf:5" "{\"markd
 run_case "scrape-deck"    "builtin.scrape-deck"    "firecrawl" "pdf"   "{\"url\":\"https://example.com\"}"
 run_case "grounded-blog"  "builtin.grounded-blog"  "firecrawl" "blog"  "{\"markdown\":\"# Post\n\nWebAssembly is fast.\",\"title\":\"Smoke\"}"
 run_case "doc-ground-blog" "builtin.doc-ground-blog" "docling"  "blog"  "{\"source_url\":\"https://example.com\",\"title\":\"Smoke\"}"
+
+# AV-bench cases — gated on ElevenLabs because TTS is the load-
+# bearing seam these exercise. Each produces a ~1–2 minute artifact
+# whose container layout, audio packet continuity, RMS levels, and
+# codec params are deep-verified by the mp4:av / mp3:av asserts above.
+# The bug class these were added to catch: every helmdeck-produced
+# MP4 from #379 through #422 shipped with the moov atom at the file
+# tail, breaking streaming playback in ways unit tests can't see.
+# We use a tiny public repo as the input so runtime stays predictable;
+# the avbench.yml workflow can override REPO_URL via env if a more
+# realistic input is wanted.
+AVBENCH_REPO_URL="${AVBENCH_REPO_URL:-https://github.com/tosin2013/helmdeck}"
+run_case "repo-presentation" "builtin.repo-presentation" "elevenlabs" "mp4:av" "{\"repo_url\":\"$AVBENCH_REPO_URL\"}"
+run_case "repo-readme-podcast" "builtin.repo-readme-podcast" "elevenlabs" "mp3:av" "{\"repo_url\":\"$AVBENCH_REPO_URL\"}"
 
 # ── results ───────────────────────────────────────────────────────
 echo

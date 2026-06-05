@@ -14,5 +14,9 @@ Every Capability Pack must define a closed set of error codes in its output sche
 **Positive:** weak models can branch on errors with high reliability; agent retry logic becomes deterministic; observability dashboards group failures by code.
 **Negative:** pack authors lose flexibility to bubble raw errors; mapping logic adds work in every handler.
 
+## Amendment (2026-06-05, [ADR 052](052-av-output-validation-post-step.md))
+
+The `av.validate` pack and its default-on integration on `slides.narrate` / `podcast.generate` introduce a per-check **severity** axis (`pass` / `warn` / `fail`) that lives on the pack's `validation` output field, NOT on the pack's error code. The two surfaces stay deliberately separate. A failed check ("the script ran, the artifact has a 27.9-second duration mismatch") returns success at the runtime layer because the operation proceeded; the caller reads the `validation` field to decide what to do. A typed error code ("the script crashed because ffprobe was missing") returns `CodeHandlerFailed` because the operation didn't proceed. Pack handlers that need fail-fast semantics on validation findings opt in via `av.validate`'s `strict:true` input, which translates `fail`-severity check failures into `CodeArtifactFailed` — the bridge from the severity axis back to the typed-error vocabulary, used at CI publish gates. This keeps the closed-set error vocabulary closed while letting quality findings flow through as data.
+
 ## Related PRD Sections
 §10 Security Model (Typed Error Codes table), §6.6 Capability Packs, §18 Success Metrics

@@ -9,12 +9,28 @@
 #   docker compose \
 #     -f deploy/compose/compose.yaml \
 #     -f deploy/compose/compose.build.yaml \
-#     --env-file deploy/compose/.env.local up -d
+#     --env-file deploy/compose/.env.local up -d --build
 #
 # When `build:` is present alongside `image:`, Compose builds the
 # image locally and tags it with the `image:` reference from the base
 # file — so the build output gets a sensible name without overriding
 # the version tag in production deploys.
+#
+# Sidecar image override: in build mode the session runtime MUST use
+# the locally-built sidecar (not the GHCR-published one). Without
+# this, Dockerfile changes only land after a release to GHCR —
+# defeating the whole point of building from source. The control-
+# plane gets HELMDECK_SIDECAR_IMAGE set to a local tag, and
+# sidecar-warm is repurposed to BUILD that tag instead of PULLing
+# from GHCR. Surfaced as a missing-script bug on the first
+# slides.narrate run after the validation arc shipped (PR #430): the
+# COPY directive was in the Dockerfile, the locally-built image had
+# /usr/local/bin/av-validate.sh, but the runtime was launching session
+# containers from the stale GHCR-cached :latest image — so the script
+# wasn't there at exec time. Phase 3's soft-surface contract caught
+# it (logged warn, shipped the artifact anyway per ADR 052), but the
+# underlying image mismatch was silently masking every Dockerfile
+# change made under the build overlay.
 #
 # scripts/install.sh layers this overlay by default. Pass --image-mode
 # to scripts/install.sh (or omit this overlay manually) to skip the
@@ -25,3 +41,29 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/control-plane.Dockerfile
+    environment:
+      # Point sessions at the locally-built sidecar tag (built by the
+      # overridden sidecar-warm service below). Without this, the
+      # runtime falls back to internal/session/docker/runtime.go:47's
+      # defaultImage (ghcr.io/.../helmdeck-sidecar:latest), masking
+      # local sidecar changes during dev iteration.
+      HELMDECK_SIDECAR_IMAGE: helmdeck-sidecar:local
+
+  # In build mode, repurpose sidecar-warm to BUILD the sidecar image
+  # locally instead of PULLing from GHCR. Same end goal (the sidecar
+  # tag is in the local docker cache before the control-plane starts
+  # launching sessions), inverted mechanism. The image: tag matches
+  # the HELMDECK_SIDECAR_IMAGE env override above so the runtime's
+  # imageOverride resolution path picks it up.
+  #
+  # Compose builds the image when `build:` is present and tags it
+  # with the `image:` reference; the container then runs the no-op
+  # entrypoint and exits, leaving the freshly-built image in the
+  # local cache for subsequent session launches.
+  sidecar-warm:
+    image: helmdeck-sidecar:local
+    build:
+      context: ../..
+      dockerfile: deploy/docker/sidecar.Dockerfile
+    entrypoint: ["true"]
+    command: []

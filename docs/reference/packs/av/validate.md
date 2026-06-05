@@ -7,7 +7,7 @@ title: av.validate
 
 Structured validation for `slides.narrate` / `podcast.generate` AV artifacts. Runs a focused check set (faststart, codec pin, packet contiguity, RMS sweep, loudness LUFS, audio/video duration parity, SRT format compliance, etc.) and returns a typed `validation` object the agent can read in ~200 tokens rather than re-deriving a ~3,000-token ffprobe diagnostic each time.
 
-This pack is Phase 2 of a 4-phase validation arc. Phase 1 shipped the standalone [`scripts/av-validate.sh`](https://github.com/tosin2013/helmdeck/blob/main/scripts/av-validate.sh) in PR #428. Phase 3 will wire this pack as a default-on post-step on `slides.narrate` + `podcast.generate`. Phase 4 captures the architecture in ADR-052.
+This pack is **Phase 2 of a 4-phase validation arc**, now complete. Phase 1 shipped the standalone [`scripts/av-validate.sh`](https://github.com/tosin2013/helmdeck/blob/main/scripts/av-validate.sh) in [PR #428](https://github.com/tosin2013/helmdeck/pull/428). Phase 3 ([PR #432](https://github.com/tosin2013/helmdeck/pull/432)) wired this pack as a default-on post-step on `slides.narrate` and `podcast.generate`. Phase 4 captured the architecture in [ADR 052](../../adrs/052-av-output-validation-post-step.md), including the per-tool rationale for what we chose (ffprobe + libavfilter) and what we rejected (GPAC, Bento4, QCTools, MediaConch, mp3val, untrunc).
 
 ## When to use
 
@@ -122,7 +122,8 @@ The response carries the `validation` field. `validation.all_passed: true` for a
 
 ## Related
 
-- PR #428 — Phase 1 standalone script
-- Phase 3 (TBD) — default-on integration on `slides.narrate` / `podcast.generate`
-- Phase 4 (TBD) — ADR-052 captures the architectural decisions
-- Issue [#429](https://github.com/tosin2013/helmdeck/issues/429) — the `PadAudioToMin` duration-stretch bug that gates promotion of `consistency:audio_video_duration` back to `fail` severity
+- [PR #428](https://github.com/tosin2013/helmdeck/pull/428) — Phase 1 standalone script
+- [PR #430](https://github.com/tosin2013/helmdeck/pull/430) — Phase 2 (this pack)
+- [PR #431](https://github.com/tosin2013/helmdeck/pull/431) — `PadAudioToMin` apad swap (closed #429; promoted `consistency:audio_video_duration` back to `fail` severity)
+- [PR #432](https://github.com/tosin2013/helmdeck/pull/432) — Phase 3 default-on integration on `slides.narrate` / `podcast.generate`
+- [ADR 052](../../adrs/052-av-output-validation-post-step.md) — Phase 4 architecture record (tool selection rationale, severity model, demotion lifecycle, soft-surface contract, scope boundary)

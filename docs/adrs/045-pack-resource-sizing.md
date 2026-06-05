@@ -60,9 +60,14 @@ The docker runtime translates `CPULimit` into `HostConfig.NanoCpus`. A Kubernete
 
 **Out of scope.** A `ProfileMemory` (memory-heavy, modest CPU) — `MemoryLimit` is already explicit on every pack that cares, so a profile would just be a synonym. A per-pack scheduling priority (nice/yield) — Linux cgroup CPU caps already give us the isolation we need. Heterogeneous-host scheduling (give compute packs to fat nodes, IO packs to slim nodes) — that's a Kubernetes-tier concern handled by KEDA + node selectors, not by the pack abstraction.
 
+## Amendment (2026-06-05, [ADR 052](052-av-output-validation-post-step.md))
+
+Phase 3 of the validation arc ([PR #432](https://github.com/tosin2013/helmdeck/pull/432)) added a default-on null-muxer decode pass to every `slides.narrate` and `podcast.generate` run. The pass (`ffmpeg -xerror -err_detect crccheck+bitstream+buffer -f null -`) peaks around **~600 MB** of resident memory on a 1080p × 11-minute video — the worst case observed during the arc's acceptance testing. This sits on top of the encoder's existing peak (libx264 + libass + per-segment ffmpeg processes), so a deck encode that previously fit in 800–900 MB now needs ~1 GB headroom under load. Operators on memory-tight Compose hosts should set `SessionSpec.MemoryLimit: 1g` for the validating packs; the Kubernetes runtime applies the same value to `resources.limits.memory` (and `requests.memory` at the same value, per the existing translation rule). The validation step is **CPU-bound short-burst**, not parallel-heavy, so it does NOT change the `ProfileCompute` resolution — the existing `clamp(host_cores - 1, 1, 6)` cap is still right. Operators who hit memory pressure with validation enabled have an opt-out via the `validate:false` pointer-bool input — preferable to bumping `MemoryLimit` system-wide, since the pressure is per-run rather than per-pack-instance.
+
 ## See also
 
 - ADR 002 — Golang control plane (where `session.Spec` lives).
 - ADR 009 — Dual-tier deployment (Compose + Kubernetes).
 - ADR 011 — Tiered isolation (Docker / gVisor / Firecracker).
+- [ADR 052](052-av-output-validation-post-step.md) — AV validation post-step (motivates the +600 MB memory amendment).
 - `docs/reference/hardware-sizing.md` — operator-facing numbers and override env vars.

@@ -179,7 +179,7 @@ roadmap.
 
 ## Built-in Capability Packs
 
-52 packs ship in the box (42 without an AI gateway configured). Each one hides a multi-step workflow
+53 packs ship in the box (43 without an AI gateway configured). Each one hides a multi-step workflow
 behind a single typed JSON-Schema call so weak open-weight models
 can drive it as reliably as frontier models. The full input/output
 contract for every pack lives in [`docs/PACKS.md`](docs/PACKS.md).
@@ -196,7 +196,8 @@ The highlights:
 | `content.ground` | Parses a markdown file for claims, finds authoritative sources, inserts real `[link](url)` citations in place |
 | **Document & vision** | |
 | `slides.render` | Marp + Chromium + format flags |
-| `slides.narrate` | Narrated MP4 video (ElevenLabs TTS per slide) + auto-generated YouTube metadata |
+| `slides.narrate` | Narrated MP4 video (ElevenLabs TTS per slide) + YouTube engagement metadata + sidecar SRT captions + structured `validation` field (default-on post-step) |
+| `av.validate` | Structured AV-artifact validation (faststart, codec pin, packet contiguity, RMS sweep, LUFS, duration parity, SRT format) — default-on as a post-step on `slides.narrate`/`podcast.generate`; standalone for ad-hoc checks |
 | `doc.parse` | Docling layout-aware parse — PDF tables, multi-format, OCR fallback |
 | `doc.ocr` | Tesseract fallback for simple images |
 | `desktop.run_app_and_screenshot` | Xvfb + xdotool + scrot + window focus |

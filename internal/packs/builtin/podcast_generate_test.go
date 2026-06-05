@@ -309,6 +309,66 @@ const engagementShapedReply = `{
   "cta": {"placement": "wrong-pre-roll", "copy": "Subscribe wherever you listen."}
 }`
 
+// TestPodcastGenerate_ValidationDefaultOn — Phase 3 of the validation
+// arc: validate is default-on (pointer-bool nil → run); the handler
+// invokes av-validate.sh via session exec post-concat. The script
+// stub here doesn't match the av-validate command pattern so the
+// script-exec path hits a JSON-parse failure → soft-surface fallback
+// → output ships without a validation field. Regression guard
+// against accidentally flipping default-on to off OR converting
+// validation failures into hard errors that block artifact ship.
+func TestPodcastGenerate_ValidationDefaultOn(t *testing.T) {
+	v := vaultWithElevenKey(t, "")
+	ex := &podcastTestExecutor{mp3Bytes: []byte("\xff\xfb\x90mp3")}
+	if _, err := runPodcastGenerate(t, v, ex, `{
+		"speakers": {"Alex": "v1"},
+		"script": [{"speaker":"Alex","text":"Hi."}],
+		"allow_silent_output": true,
+		"metadata_model": ""
+	}`); err != nil {
+		t.Fatalf("handler: %v — validation script-exec failure must NOT fail the pack", err)
+	}
+	// Confirm the handler attempted to invoke av-validate.sh.
+	attempted := false
+	for _, c := range ex.calls {
+		for _, a := range c.Cmd {
+			if strings.Contains(a, "av-validate.sh") {
+				attempted = true
+				break
+			}
+		}
+		if attempted {
+			break
+		}
+	}
+	if !attempted {
+		t.Errorf("validate default-on; handler must invoke av-validate.sh; got %d exec calls", len(ex.calls))
+	}
+}
+
+// TestPodcastGenerate_ValidationExplicitlyDisabled — validate:false
+// suppresses the av-validate.sh invocation entirely.
+func TestPodcastGenerate_ValidationExplicitlyDisabled(t *testing.T) {
+	v := vaultWithElevenKey(t, "")
+	ex := &podcastTestExecutor{mp3Bytes: []byte("\xff\xfb\x90mp3")}
+	if _, err := runPodcastGenerate(t, v, ex, `{
+		"speakers": {"Alex": "v1"},
+		"script": [{"speaker":"Alex","text":"Hi."}],
+		"allow_silent_output": true,
+		"metadata_model": "",
+		"validate": false
+	}`); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	for _, c := range ex.calls {
+		for _, a := range c.Cmd {
+			if strings.Contains(a, "av-validate.sh") {
+				t.Errorf("validate:false must suppress av-validate.sh; got call %v", c.Cmd)
+			}
+		}
+	}
+}
+
 // TestPodcastGenerate_EngagementDefault — verifies that without an
 // explicit metadata_model the engagement object IS generated when a
 // dispatcher is wired (default-on behavior per v0.26.0). Also pins

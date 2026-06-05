@@ -157,6 +157,152 @@ type scriptReport struct {
 	AllPassed    bool          `json:"all_passed"`
 }
 
+// runAVValidationOpts is the input contract for runAVValidation.
+// Reusable from av.validate's handler AND from chained-pack callers
+// (slides.narrate, podcast.generate) that already have the artifact
+// in session /tmp and want validation as a post-step.
+//
+// Paths are used verbatim — fetching from the artifact store is the
+// av.validate handler's concern, not this function's. Empty paths
+// are dropped from the script argv; at least one of VideoPath /
+// AudioPath must be set (validated at the call site since chained
+// packs have stronger guarantees about which modality exists).
+//
+// ArtifactNamespace controls where the validation.json sidecar
+// persists. The av.validate handler uses "av.validate"; chained
+// packs typically use their own pack name ("slides.narrate" etc.)
+// so the sidecar lives alongside the producing pack's other
+// artifacts.
+type runAVValidationOpts struct {
+	VideoPath         string
+	AudioPath         string
+	CaptionsPath      string
+	EBUR128Target     float64
+	SkipChecks        string
+	ArtifactNamespace string
+}
+
+// runAVValidation invokes the av-validate.sh script against the
+// supplied paths, parses the JSON output, applies the known-issue
+// demotions, persists a validation.json sidecar, and returns the
+// final report + artifact key.
+//
+// This is the shared core between av.validate's handler and the
+// Phase 3 chained-pack callers. The caller decides strict-mode
+// behavior + output marshaling.
+//
+// Errors are typed:
+//   - CodeInvalidInput: neither video nor audio path supplied
+//   - CodeHandlerFailed: script-invocation transport failure, exit
+//     code 2 (usage/dep), or JSON parse failure
+//   - returns nil error for any "validation ran and reported
+//     findings" outcome — including all-checks-failed. The caller
+//     reads report.AllPassed / report.Failed to decide what to do.
+//
+// The sidecar artifact key is empty when ec.Artifacts is unwired
+// (test contexts without a store) or when the Put failed (logged
+// as a warning); the rest of the report is unaffected.
+func runAVValidation(ctx context.Context, ec *packs.ExecutionContext, opts runAVValidationOpts) (scriptReport, string, error) {
+	if opts.VideoPath == "" && opts.AudioPath == "" {
+		return scriptReport{}, "", &packs.PackError{
+			Code:    packs.CodeInvalidInput,
+			Message: "runAVValidation: at least one of VideoPath or AudioPath must be supplied",
+		}
+	}
+	namespace := strings.TrimSpace(opts.ArtifactNamespace)
+	if namespace == "" {
+		namespace = "av.validate"
+	}
+
+	args := []string{avValidateScriptPath, "--json"}
+	if opts.VideoPath != "" {
+		args = append(args, "--video", opts.VideoPath)
+	}
+	if opts.AudioPath != "" {
+		args = append(args, "--audio", opts.AudioPath)
+	}
+	if opts.CaptionsPath != "" {
+		args = append(args, "--captions", opts.CaptionsPath)
+	}
+	if opts.EBUR128Target != 0 {
+		args = append(args, "--ebur128-target",
+			strconv.FormatFloat(opts.EBUR128Target, 'f', -1, 64))
+	}
+	if strings.TrimSpace(opts.SkipChecks) != "" {
+		args = append(args, "--skip-checks", opts.SkipChecks)
+	}
+
+	res, err := ec.Exec(ctx, session.ExecRequest{Cmd: args})
+	if err != nil {
+		return scriptReport{}, "", &packs.PackError{
+			Code:    packs.CodeHandlerFailed,
+			Message: "av-validate.sh exec failed: " + err.Error(),
+			Cause:   err,
+		}
+	}
+	if res.ExitCode == 2 {
+		return scriptReport{}, "", &packs.PackError{
+			Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("av-validate.sh exited 2 (usage/dep error): %s",
+				truncForMessage(string(res.Stderr), 512)),
+		}
+	}
+
+	var report scriptReport
+	if err := json.Unmarshal(res.Stdout, &report); err != nil {
+		return scriptReport{}, "", &packs.PackError{
+			Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("parse av-validate.sh JSON: %v (stdout=%q)",
+				err, truncForMessage(string(res.Stdout), 512)),
+		}
+	}
+
+	// Apply known-issue demotions.
+	for i := range report.Checks {
+		c := &report.Checks[i]
+		if c.Pass {
+			continue
+		}
+		ref, known := knownIssueDemotions[c.Name]
+		if !known || c.Severity != "fail" {
+			continue
+		}
+		c.Severity = "warn"
+		c.Detail = fmt.Sprintf("%s (known issue, tracked in %s)", c.Detail, ref)
+	}
+	// Recompute counters after demotion. Don't trust the script's
+	// counters once we've mutated severities.
+	report.Passed, report.Failed, report.Warnings = 0, 0, 0
+	for _, c := range report.Checks {
+		switch {
+		case c.Pass:
+			report.Passed++
+		case c.Severity == "fail":
+			report.Failed++
+		default:
+			report.Warnings++
+		}
+	}
+	report.AllPassed = report.Failed == 0
+
+	// Persist validation.json sidecar under the caller's namespace.
+	// Failures are logged but don't fail the validation — the report
+	// is the value, the sidecar is convenience.
+	validationBytes, _ := json.MarshalIndent(report, "", "  ")
+	var validationKey string
+	if ec.Artifacts != nil {
+		art, aerr := ec.Artifacts.Put(ctx, namespace, "validation.json",
+			validationBytes, "application/json")
+		if aerr != nil {
+			ec.Logger.Warn("validation artifact upload failed",
+				"namespace", namespace, "err", aerr)
+		} else {
+			validationKey = art.Key
+		}
+	}
+	return report, validationKey, nil
+}
+
 func avValidateHandler() packs.HandlerFunc {
 	return func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
 		var in avValidateInput
@@ -164,10 +310,6 @@ func avValidateHandler() packs.HandlerFunc {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
 		}
 
-		// Validate input: must have at least one of video / audio,
-		// either as an artifact key or as a direct path. Captions
-		// alone aren't enough — the SRT checks need an audio stream
-		// to compare against for coverage.
 		videoPath, audioPath, captionsPath, err := resolveAVPaths(ctx, ec, in)
 		if err != nil {
 			return nil, err
@@ -180,105 +322,16 @@ func avValidateHandler() packs.HandlerFunc {
 			}
 		}
 
-		// Build the script argv. Path args are passed verbatim; the
-		// script handles the --video / --audio / --captions flag
-		// dispatch. --json is mandatory — this pack consumes JSON.
-		args := []string{avValidateScriptPath, "--json"}
-		if videoPath != "" {
-			args = append(args, "--video", videoPath)
-		}
-		if audioPath != "" {
-			args = append(args, "--audio", audioPath)
-		}
-		if captionsPath != "" {
-			args = append(args, "--captions", captionsPath)
-		}
-		if in.EBUR128Target != 0 {
-			args = append(args, "--ebur128-target", strconv.FormatFloat(in.EBUR128Target, 'f', -1, 64))
-		}
-		if strings.TrimSpace(in.SkipChecks) != "" {
-			args = append(args, "--skip-checks", in.SkipChecks)
-		}
-
-		// Invoke. The script exits non-zero on any fail-severity
-		// failure — we capture stdout regardless because the
-		// structured JSON output is the truth, not the exit code.
-		res, err := ec.Exec(ctx, session.ExecRequest{Cmd: args})
+		report, validationKey, err := runAVValidation(ctx, ec, runAVValidationOpts{
+			VideoPath:         videoPath,
+			AudioPath:         audioPath,
+			CaptionsPath:      captionsPath,
+			EBUR128Target:     in.EBUR128Target,
+			SkipChecks:        in.SkipChecks,
+			ArtifactNamespace: "av.validate",
+		})
 		if err != nil {
-			return nil, &packs.PackError{
-				Code:    packs.CodeHandlerFailed,
-				Message: "av-validate.sh exec failed: " + err.Error(),
-				Cause:   err,
-			}
-		}
-		// Exit code 2 is "usage error or missing dependency" — that's
-		// a real runtime failure, not a check finding. Surface as a
-		// typed error so the operator knows the validation didn't
-		// run, not "validation ran and reported issues."
-		if res.ExitCode == 2 {
-			return nil, &packs.PackError{
-				Code: packs.CodeHandlerFailed,
-				Message: fmt.Sprintf("av-validate.sh exited 2 (usage/dep error): %s",
-					truncForMessage(string(res.Stderr), 512)),
-			}
-		}
-
-		var report scriptReport
-		if err := json.Unmarshal(res.Stdout, &report); err != nil {
-			return nil, &packs.PackError{
-				Code: packs.CodeHandlerFailed,
-				Message: fmt.Sprintf("parse av-validate.sh JSON: %v (stdout=%q)",
-					err, truncForMessage(string(res.Stdout), 512)),
-			}
-		}
-
-		// Apply known-issue demotions. Walk the checks; if a check's
-		// name is in knownIssueDemotions AND it failed, demote
-		// severity to "warn" and append the issue ref to its detail
-		// so consumers can navigate to the tracking ticket.
-		demoted := 0
-		for i := range report.Checks {
-			c := &report.Checks[i]
-			if c.Pass {
-				continue
-			}
-			ref, known := knownIssueDemotions[c.Name]
-			if !known || c.Severity != "fail" {
-				continue
-			}
-			c.Severity = "warn"
-			c.Detail = fmt.Sprintf("%s (known issue, tracked in %s)", c.Detail, ref)
-			demoted++
-		}
-		// Recompute counters after demotion. Don't trust the script's
-		// counters once we've mutated severities.
-		report.Passed, report.Failed, report.Warnings = 0, 0, 0
-		for _, c := range report.Checks {
-			switch {
-			case c.Pass:
-				report.Passed++
-			case c.Severity == "fail":
-				report.Failed++
-			default:
-				report.Warnings++
-			}
-		}
-		report.AllPassed = report.Failed == 0
-
-		// Persist validation.json sidecar (mirrors engagement.json /
-		// captions.srt pattern from #424 / #425). Operators reading
-		// from the artifact store get the full structured report
-		// without re-running validation.
-		validationBytes, _ := json.MarshalIndent(report, "", "  ")
-		var validationKey string
-		if ec.Artifacts != nil {
-			art, aerr := ec.Artifacts.Put(ctx, "av.validate", "validation.json",
-				validationBytes, "application/json")
-			if aerr != nil {
-				ec.Logger.Warn("validation artifact upload failed", "err", aerr)
-			} else {
-				validationKey = art.Key
-			}
+			return nil, err
 		}
 
 		// Strict mode: if any fail-severity check survived demotion

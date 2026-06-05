@@ -116,7 +116,7 @@ The discovery step is intentionally manual — there's no helmdeck cron job watc
 - [`internal/llmcontext/budgets.go`](../../internal/llmcontext/budgets.go) — the tier table
 - ADR 050 — Retrieval-augmented tool selection (the cascade the tier table drives)
 - ADR 051 — Failure-mode-aware dispatch (PR #1 reasoning-token strip + tier additions; PR #2 introduces the capability flags this guide references)
-- [ADR 053](/adrs/053-tier-aware-plan-prompt-variants) — tier-aware `PromptVariant` for `helmdeck.plan`; what `Budget.PromptVariant` does when a calibration entry sets it
+- [ADR 053](/adrs/tier-aware-plan-prompt-variants) — tier-aware `PromptVariant` for `helmdeck.plan`; what `Budget.PromptVariant` does when a calibration entry sets it
 - The Berkeley Function-Calling Leaderboard (`gorilla.cs.berkeley.edu/leaderboard.html`)
 - The Aider polyglot edit-format leaderboard (`aider.chat/docs/leaderboards`)
 - Artificial Analysis (`artificialanalysis.ai/models`)

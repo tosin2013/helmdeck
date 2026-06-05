@@ -74,4 +74,4 @@ If `catalog_entries_kept` is small and the plan missed an obviously-relevant pac
 - [Models reference](/reference/models) — operator-facing tier table; the per-model entries this guide refers to abstractly.
 - [`helmdeck.plan` reference](../reference/packs/helmdeck/plan.md); [MCP resources](../reference/mcp-resources.md) — `context-budgets`, `my-plans`.
 - ADR 050 — LLM Context Manager for Catalog-Heavy Packs.
-- [ADR 053](/adrs/053-tier-aware-plan-prompt-variants) — `PromptVariantSinglePick` for Tier C models; why `helmdeck.plan` now emits one step at a time on Tier C.
+- [ADR 053](/adrs/tier-aware-plan-prompt-variants) — `PromptVariantSinglePick` for Tier C models; why `helmdeck.plan` now emits one step at a time on Tier C.

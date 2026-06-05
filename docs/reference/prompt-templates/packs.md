@@ -398,7 +398,7 @@ Use helmdeck__av-validate to validate {{ARTIFACT_KEY}}.
 **Variables**
 - `{{ARTIFACT_KEY}}` — the video or audio artifact key (input `video_artifact_key` for MP4 or `audio_artifact_key` for MP3). Direct paths (`video_path` / `audio_path`) also work for chained-pack scenarios where the file is already in the session `/tmp`.
 
-**Notes** — 13-check set covering faststart, codec pin, packet contiguity, RMS sweep, LUFS, audio/video duration parity, SRT format. Default **soft-surface** — failed checks land in the `validation` field, pack returns success; pass `strict:true` to surface `fail`-severity failures as a typed error (CI publish-gate use case). Already runs default-on as a post-step on `slides.narrate` + `podcast.generate`, so direct invocation is mostly for ad-hoc validation of artifacts produced outside those packs OR for the CI strict-mode gate. See [ADR 052](/adrs/052-av-output-validation-post-step) for the architecture.
+**Notes** — 13-check set covering faststart, codec pin, packet contiguity, RMS sweep, LUFS, audio/video duration parity, SRT format. Default **soft-surface** — failed checks land in the `validation` field, pack returns success; pass `strict:true` to surface `fail`-severity failures as a typed error (CI publish-gate use case). Already runs default-on as a post-step on `slides.narrate` + `podcast.generate`, so direct invocation is mostly for ad-hoc validation of artifacts produced outside those packs OR for the CI strict-mode gate. See [ADR 052](/adrs/av-output-validation-post-step) for the architecture.
 
 ---
 

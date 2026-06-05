@@ -215,6 +215,53 @@ func TestSlidesNarrate_HappyPathWithNarration(t *testing.T) {
 	}
 }
 
+// TestSlidesNarrate_AudioPadDur_WiresApadFilter — #429 regression
+// guard. The handler MUST pass AudioPadDur=durations[i] to
+// encodeSegment for every slide, which materializes as
+// `-af 'apad=whole_dur=N.NNN'` AND `-t N.NNN` in the per-segment
+// ffmpeg argv. The legacy `-shortest` flag MUST NOT appear in the
+// padded-segment case — `-t` controls termination instead.
+//
+// If a future refactor accidentally drops the AudioPadDur threading
+// or reverts to the avenc.PadAudioToMin pre-encode pattern, this
+// test fails with a clear diagnostic. The check matches the same
+// posture PR #404 introduced for the no-`-c copy` audio-concat
+// guard.
+func TestSlidesNarrate_AudioPadDur_WiresApadFilter(t *testing.T) {
+	exec := &narrateExecScript{}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# Slide 1\n\n<!-- Narration -->",
+		"allow_silent_output": true
+	}`
+	if _, err := runNarrate(t, nil, nil, exec, input); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	// Find the per-segment ffmpeg encode (the call with `-loop 1`).
+	var segCmd string
+	for _, c := range exec.calls {
+		if len(c.Cmd) < 3 {
+			continue
+		}
+		s := c.Cmd[2]
+		if strings.Contains(s, "-loop 1") && strings.Contains(s, "ffmpeg") {
+			segCmd = s
+			break
+		}
+	}
+	if segCmd == "" {
+		t.Fatal("no per-segment ffmpeg encode observed")
+	}
+	if !strings.Contains(segCmd, "-af 'apad=whole_dur=") {
+		t.Errorf("per-segment encode must wire `-af 'apad=whole_dur=...'` when AudioPadDur > 0 (#429 fix); got:\n%s", segCmd)
+	}
+	if !strings.Contains(segCmd, "-t ") {
+		t.Errorf("per-segment encode must use `-t N.NNN` to pin duration when AudioPadDur > 0; got:\n%s", segCmd)
+	}
+	if strings.Contains(segCmd, "-shortest") {
+		t.Errorf("per-segment encode must NOT use `-shortest` when AudioPadDur > 0 — `-t` controls termination; got:\n%s", segCmd)
+	}
+}
+
 // TestSlidesNarrate_EngagementDisabled — without metadata_model the
 // handler emits NO engagement object and no sidecar artifact key.
 // This is the back-compat path: existing pipelines that don't ask for

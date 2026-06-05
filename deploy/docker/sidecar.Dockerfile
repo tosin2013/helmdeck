@@ -182,7 +182,13 @@ RUN groupadd --system --gid 1000 helmdeck \
  && chown -R helmdeck:helmdeck /home/helmdeck
 
 COPY deploy/docker/sidecar-entrypoint.sh /usr/local/bin/helmdeck-entrypoint
-RUN chmod +x /usr/local/bin/helmdeck-entrypoint
+# av-validate.sh is invoked by the av.validate pack handler via
+# session exec. Lives in /usr/local/bin so the handler can call it by
+# a stable path without negotiating a working directory. ffprobe/
+# ffmpeg/python3 (already installed above) are the only deps; the
+# script's shebang is /usr/bin/env bash.
+COPY scripts/av-validate.sh /usr/local/bin/av-validate.sh
+RUN chmod +x /usr/local/bin/helmdeck-entrypoint /usr/local/bin/av-validate.sh
 
 USER helmdeck
 WORKDIR /home/helmdeck

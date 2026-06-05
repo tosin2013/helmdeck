@@ -65,6 +65,11 @@ const sidebars: SidebarsConfig = {
         'reference/prompt-templates/pipelines',
       ],
     },
+    {
+      type: 'category',
+      label: 'Cookbook',
+      items: ['cookbook/intent-to-prompt'],
+    },
     'PACKS',
     'integrations/SKILLS',
     'integrations/README',
@@ -206,6 +211,11 @@ const sidebars: SidebarsConfig = {
           type: 'category',
           label: 'image',
           items: ['reference/packs/image/generate'],
+        },
+        {
+          type: 'category',
+          label: 'av',
+          items: ['reference/packs/av/validate'],
         },
       ],
     },

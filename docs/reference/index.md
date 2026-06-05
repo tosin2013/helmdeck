@@ -16,7 +16,8 @@ Information-oriented lookup. These pages are precise, complete, and dry — opti
 
 - **[PACKS](../PACKS.md)** — input/output contract for every shipped capability pack.
 - **[Per-pack reference](./packs/)** — one deep page per pack family (CLI invocation, error codes, session chaining).
-- **[Prompt templates](./prompt-templates/index.md)** — copy-and-fill prompts for every pack and pipeline.
+- **[Prompt templates](./prompt-templates/index.md)** — copy-and-fill prompts for every pack and pipeline (pack-first index).
+- **[Cookbook — intent → prompt](../cookbook/intent-to-prompt.md)** — common natural-language intents mapped to the OpenClaw prompt + direct invocation underneath (intent-first index over the templates).
 - **[MCP resources](./mcp-resources.md)** — read-only resources for catalog discovery, routing, learned defaults, memory, and context budgets.
 - **[Agent memory](./agent-memory.md)** — the per-caller memory delivery layer (ADR 039) packs opt into.
 - **[SKILLS](../integrations/SKILLS.md)** — agent-facing reference. Load this into your MCP client's system prompt so the LLM knows how to use all 52 packs, retry transient errors, and chain sessions.

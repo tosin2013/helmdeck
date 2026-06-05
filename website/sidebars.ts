@@ -56,6 +56,7 @@ const sidebars: SidebarsConfig = {
     'reference/index',
     'reference/architecture',
     'reference/agent-memory',
+    'reference/models',
     {
       type: 'category',
       label: 'Prompt templates',

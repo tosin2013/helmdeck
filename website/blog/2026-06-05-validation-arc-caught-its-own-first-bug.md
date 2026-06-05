@@ -22,7 +22,7 @@ What followed was a four-phase arc, each phase provable against real artifacts b
 - **Phase 1 — [PR #428](https://github.com/tosin2013/helmdeck/pull/428):** `scripts/av-validate.sh`, a standalone bash + python3 + ffprobe + libavfilter validator. The executable spec. 13 checks across container/audio/video/SRT modalities with a `pass`/`warn`/`fail` severity model where `fail` is reserved for checks that match a shipped bug fix.
 - **Phase 2 — [PR #430](https://github.com/tosin2013/helmdeck/pull/430):** `av.validate` pack — a thin handler that invokes the script and returns the structured report. Strict-mode opt-in for CI gates; soft-surface by default.
 - **Phase 3 — [PR #432](https://github.com/tosin2013/helmdeck/pull/432):** default-on integration as a post-step on `slides.narrate` and `podcast.generate`. Every successful run now embeds the structured `validation` field in its output.
-- **Phase 4 — [PR #433](https://github.com/tosin2013/helmdeck/pull/433) + [ADR 052](/adrs/052-av-output-validation-post-step):** the architecture record, plus focused amendments to [ADRs 008](/adrs/008-typed-error-codes-for-weak-model-reliability) / [015](/adrs/015-pack-slides-video) / [045](/adrs/045-pack-resource-sizing) / [051](/adrs/051-failure-mode-aware-dispatch).
+- **Phase 4 — [PR #433](https://github.com/tosin2013/helmdeck/pull/433) + [ADR 052](/adrs/av-output-validation-post-step):** the architecture record, plus focused amendments to [ADRs 008](/adrs/typed-error-codes-for-weak-model-reliability) / [015](/adrs/pack-slides-video) / [045](/adrs/pack-resource-sizing) / [051](/adrs/failure-mode-aware-dispatch).
 
 We also shipped the apad fix for #429 itself ([PR #431](https://github.com/tosin2013/helmdeck/pull/431)) with same-PR coupling: the fix removed the demotion entry, the check returned to its natural `fail` severity, and the regression guard travelled with the upstream fix.
 
@@ -44,7 +44,7 @@ WARN  av.validate run failed; output ships without validation field
                      no such file or directory")
 ```
 
-The MP4 artifact still shipped. The pack returned success. The pipeline didn't break. But the validation report wasn't in the output — the soft-surface contract had fired exactly as designed by [ADR 052](/adrs/052-av-output-validation-post-step).
+The MP4 artifact still shipped. The pack returned success. The pipeline didn't break. But the validation report wasn't in the output — the soft-surface contract had fired exactly as designed by [ADR 052](/adrs/av-output-validation-post-step).
 
 Root cause took ~200 tokens to identify because the log line was structured. The compose build overlay (`deploy/compose/compose.build.yaml`) only declared a `build:` directive for `control-plane`. The `sidecar-warm` service in the base `compose.yaml` ran:
 
@@ -81,7 +81,7 @@ Two failure modes, both textbook: `finish_reason: length` hit at the 600-token o
 
 The same intent class on `openrouter/auto` worked cleanly: 2 calls, 2 stops, 15–34s latency, 776–1782 completion tokens. Same prompt. Same catalog. Different model class. **The architectural finding isn't that Nemotron is bad. It's that Nemotron's failure profile is the wrong tool for the *output shape* of a multi-step plan, and our planner has one prompt template for every tier.**
 
-Inside `helmdeck.plan`, the catalog projection is already tier-aware (Tier C gets the aggressive trim per [ADR 050](/adrs/050-retrieval-augmented-tool-selection)). The output token budget is tier-aware (600 tokens for Tier C). Strict JSON mode is gated on tier ([ADR 051 PR #3](/adrs/051-failure-mode-aware-dispatch)). Prefix-cache routing is gated on tier ([ADR 051 PR #4](/adrs/051-failure-mode-aware-dispatch)). **The prompt template itself is not.**
+Inside `helmdeck.plan`, the catalog projection is already tier-aware (Tier C gets the aggressive trim per [ADR 050](/adrs/llm-context-manager)). The output token budget is tier-aware (600 tokens for Tier C). Strict JSON mode is gated on tier ([ADR 051 PR #3](/adrs/failure-mode-aware-dispatch)). Prefix-cache routing is gated on tier ([ADR 051 PR #4](/adrs/failure-mode-aware-dispatch)). **The prompt template itself is not.**
 
 Portkey ships this as a first-class feature in their "Smart Fallback with Model-Optimized Prompts" [^2] — different `prompt_id` per entry in a fallback `targets` array. DSPy goes further: it compiles a different prompt per LM from one signature [^3]. The research that fed our cost-savings thesis (BFCL multi-turn collapse — xLAM-2-1B at 8.38% multi-turn vs 53.97% overall [^4]; PLAN-TUNING [^5]; the "small models benefit from decomposed planning" Pre-Act result [^6]) all converges on the same point: small models can't reliably emit multi-step plans in one shot, but they can reliably make one pack-pick decision per turn.
 
@@ -108,8 +108,8 @@ The PRs are linked above. The cookbook of intent → prompt recipes that helps u
 
 - The full validation arc: PRs [#428](https://github.com/tosin2013/helmdeck/pull/428), [#430](https://github.com/tosin2013/helmdeck/pull/430), [#431](https://github.com/tosin2013/helmdeck/pull/431), [#432](https://github.com/tosin2013/helmdeck/pull/432), [#433](https://github.com/tosin2013/helmdeck/pull/433)
 - The deployment-bug fix the arc caught: [PR #434](https://github.com/tosin2013/helmdeck/pull/434)
-- Architecture: [ADR 052 — AV output validation as a default-on post-step](/adrs/052-av-output-validation-post-step)
-- The tier model: [ADR 051 — failure-mode-aware dispatch for mixed-tier deployments](/adrs/051-failure-mode-aware-dispatch)
+- Architecture: [ADR 052 — AV output validation as a default-on post-step](/adrs/av-output-validation-post-step)
+- The tier model: [ADR 051 — failure-mode-aware dispatch for mixed-tier deployments](/adrs/failure-mode-aware-dispatch)
 - Cookbook: [Intent → prompt](/cookbook/intent-to-prompt) — recipes that skip the planner when your model can't be trusted with one
 - Reference: [Why helmdeck](/explanation/why-helmdeck) — token-cost comparisons, validation arc as worked example
 

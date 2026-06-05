@@ -118,6 +118,81 @@ type Budget struct {
 	// 0 means "no caching" or "unknown." Populated from Artificial
 	// Analysis and per-provider pricing pages.
 	CachedInputCostUSDPerMTok float64
+
+	// PromptVariant overrides the tier-default prompt strategy used
+	// by helmdeck.plan. Empty string defaults to the tier mapping:
+	// Tier A/B → PromptVariantFullSteps (emit the complete pipeline
+	// in one shot); Tier C → PromptVariantSinglePick (emit one step
+	// at a time; agent re-calls helmdeck.plan for the next step).
+	// See ADR 053 for the architectural rationale + the empirical
+	// data from the 2026-06-05 Nemotron-3-super-120b-a12b:free
+	// observation that motivated the split.
+	//
+	// Set explicitly on a budget entry to override the tier default
+	// — useful when a model defies its tier (e.g. a Tier B model
+	// trained specifically for tool calling that handles multi-step
+	// plans reliably and should get FullSteps despite the tier
+	// default suggesting otherwise).
+	PromptVariant PromptVariant
+}
+
+// PromptVariant selects which helmdeck.plan system-prompt template
+// fires for a given model. The variant controls what the model is
+// ASKED to produce, not the output schema — both variants emit the
+// same {steps:[], complexity, reasoning} shape so the handler doesn't
+// need to parse two different response formats. SinglePick instructs
+// the model to emit ONE step at a time + a more_steps_likely flag;
+// the agent re-calls helmdeck.plan for the next step. FullSteps is
+// today's behavior — the complete pipeline emitted in one shot.
+//
+// The architectural rationale is in ADR 053: small models that
+// reliably make ONE pack-pick decision in 50–200 tokens can fail at
+// emitting a 1,500-token multi-step plan. SinglePick matches the
+// output shape to what those models can reliably produce; the agent
+// loop pattern (call plan → run step → call plan again) naturally
+// composes with the per-step decisions.
+type PromptVariant string
+
+const (
+	// PromptVariantUnset means "use the tier default" via
+	// Budget.ResolvePromptVariant. Acts as the zero value so
+	// existing Budget literals without an explicit PromptVariant
+	// continue to work and inherit tier-default behavior.
+	PromptVariantUnset PromptVariant = ""
+
+	// PromptVariantFullSteps emits the complete pipeline JSON in
+	// one shot — today's behavior, used by Tier A/B models that
+	// can reliably produce 500–2000 tokens of nested JSON.
+	PromptVariantFullSteps PromptVariant = "full_steps"
+
+	// PromptVariantSinglePick emits ONE step at a time with a
+	// more_steps_likely flag. Tier C default. Output schema is the
+	// same {steps:[], complexity, reasoning} as FullSteps but the
+	// steps array contains exactly one element; the agent re-calls
+	// helmdeck.plan with updated context to plan the next step.
+	PromptVariantSinglePick PromptVariant = "single_pick"
+)
+
+// ResolvePromptVariant returns the prompt-variant to use for this
+// budget. When PromptVariant is explicitly set on the entry, that
+// wins. When unset, falls back to tier defaults: Tier A/B →
+// FullSteps; Tier C (and unknown) → SinglePick.
+//
+// The fallback for unknown models (Tier C default) is the
+// conservative choice — if we don't know enough about the model to
+// classify it, assume it might struggle with multi-step output and
+// route to the safer single-pick path. Operators who know better
+// override on the per-entry PromptVariant field.
+func (b Budget) ResolvePromptVariant() PromptVariant {
+	if b.PromptVariant != PromptVariantUnset {
+		return b.PromptVariant
+	}
+	switch b.Tier {
+	case TierA, TierB:
+		return PromptVariantFullSteps
+	default:
+		return PromptVariantSinglePick
+	}
 }
 
 // tierC is the conservative fallback for unknown models. Free

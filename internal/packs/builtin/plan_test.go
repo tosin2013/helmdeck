@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tosin2013/helmdeck/internal/llmcontext"
 	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
 )
@@ -728,5 +729,66 @@ func TestPlan_FilterFailsFallsBackToLexical(t *testing.T) {
 				t.Errorf("filter failure should NOT add llm_filter entry; got %v", out.Compaction.Dropped)
 			}
 		}
+	}
+}
+
+// TestSelectPlanSystemPrompt — ADR 053 regression guard. The variant
+// selected for a budget MUST map deterministically to one of the two
+// system-prompt templates. Tier A/B → planSystemPrompt (full_steps);
+// Tier C → planSystemPromptSinglePick (single_pick). Empty tier
+// (unknown) falls back to single_pick per the conservative default.
+//
+// Asserted by template-content marker presence so a future template
+// rename or content change has to consciously update this test (the
+// rule-with-test pattern PR #404 introduced).
+func TestSelectPlanSystemPrompt(t *testing.T) {
+	cases := []struct {
+		name        string
+		budget      llmcontext.Budget
+		wantMarker  string
+		notMarker   string
+	}{
+		{
+			name:       "Tier A → full_steps template",
+			budget:     llmcontext.Budget{Tier: llmcontext.TierA},
+			wantMarker: "ORDERED sequence of tool/pipeline calls",
+			notMarker:  "Emit EXACTLY ONE step in the steps array",
+		},
+		{
+			name:       "Tier B → full_steps template",
+			budget:     llmcontext.Budget{Tier: llmcontext.TierB},
+			wantMarker: "ORDERED sequence of tool/pipeline calls",
+			notMarker:  "Emit EXACTLY ONE step in the steps array",
+		},
+		{
+			name:       "Tier C → single_pick template",
+			budget:     llmcontext.Budget{Tier: llmcontext.TierC},
+			wantMarker: "Emit EXACTLY ONE step in the steps array",
+			notMarker:  "ORDERED sequence of tool/pipeline calls",
+		},
+		{
+			name:       "explicit FullSteps override on Tier C → full_steps template",
+			budget:     llmcontext.Budget{Tier: llmcontext.TierC, PromptVariant: llmcontext.PromptVariantFullSteps},
+			wantMarker: "ORDERED sequence of tool/pipeline calls",
+			notMarker:  "Emit EXACTLY ONE step in the steps array",
+		},
+		{
+			name:       "explicit SinglePick override on Tier A → single_pick template",
+			budget:     llmcontext.Budget{Tier: llmcontext.TierA, PromptVariant: llmcontext.PromptVariantSinglePick},
+			wantMarker: "Emit EXACTLY ONE step in the steps array",
+			notMarker:  "ORDERED sequence of tool/pipeline calls",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := selectPlanSystemPrompt(c.budget)
+			if !strings.Contains(got, c.wantMarker) {
+				t.Errorf("template should contain %q for this tier+variant; got first 100 chars: %q",
+					c.wantMarker, got[:100])
+			}
+			if strings.Contains(got, c.notMarker) {
+				t.Errorf("template should NOT contain %q for this tier+variant", c.notMarker)
+			}
+		})
 	}
 }

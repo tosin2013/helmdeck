@@ -139,20 +139,22 @@ const script429JSON = `{
   "passed": 1, "failed": 1, "warnings": 0, "all_passed": false
 }`
 
-// TestAVValidate_KnownIssue_DemotedToWarn — the #429 known issue
-// MUST be demoted from fail to warn server-side. Pipelines reading
-// validation.all_passed should see true; validation.warnings should
-// be 1; the failing check's detail should mention the issue ref.
-func TestAVValidate_KnownIssue_DemotedToWarn(t *testing.T) {
+// TestAVValidate_NoDemotionsInForce — knownIssueDemotions is empty
+// after the #429 fix landed in the same PR as the av-validate.sh
+// apad swap. A fail-severity check now surfaces at its natural
+// severity (fail), not demoted to warn. This guards against
+// accidentally re-adding a demotion entry without filing the
+// tracking issue, AND against the demotion mechanism breaking
+// silently in a way that lets known bugs through.
+func TestAVValidate_NoDemotionsInForce(t *testing.T) {
 	exec := &avValidateExec{scriptStdout: []byte(script429JSON), scriptExit: 1}
 	raw, err := runAVValidate(t, exec, `{"video_path":"/tmp/v.mp4"}`)
 	if err != nil {
-		t.Fatalf("handler: %v — known issues should NOT fail the pack", err)
+		t.Fatalf("handler: %v", err)
 	}
 	var out struct {
 		Validation struct {
 			Checks    []map[string]any `json:"checks"`
-			Passed    int              `json:"passed"`
 			Failed    int              `json:"failed"`
 			Warnings  int              `json:"warnings"`
 			AllPassed bool             `json:"all_passed"`
@@ -161,30 +163,24 @@ func TestAVValidate_KnownIssue_DemotedToWarn(t *testing.T) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !out.Validation.AllPassed {
-		t.Errorf("all_passed should be true after #429 demotion")
+	if out.Validation.AllPassed {
+		t.Errorf("all_passed should be FALSE — no demotion is active, the consistency check should land as fail")
 	}
-	if out.Validation.Failed != 0 {
-		t.Errorf("failed should be 0 after demotion, got %d", out.Validation.Failed)
+	if out.Validation.Failed != 1 {
+		t.Errorf("failed should be 1 (natural severity preserved), got %d", out.Validation.Failed)
 	}
-	if out.Validation.Warnings != 1 {
-		t.Errorf("warnings should be 1, got %d", out.Validation.Warnings)
-	}
-	// The demoted check's detail string should append the issue ref.
-	var found bool
+	// The consistency check's natural severity is `fail`. Confirm it
+	// did NOT get demoted to `warn` AND the detail string does NOT
+	// carry a stale #429 reference appended by the demotion path.
 	for _, c := range out.Validation.Checks {
 		if c["name"] == "consistency:audio_video_duration" {
-			if c["severity"] != "warn" {
-				t.Errorf("demoted check severity = %v, want warn", c["severity"])
+			if c["severity"] != "fail" {
+				t.Errorf("severity should be fail (natural); got %v", c["severity"])
 			}
-			if !strings.Contains(c["detail"].(string), "#429") {
-				t.Errorf("demoted check detail %q should mention #429", c["detail"])
+			if strings.Contains(c["detail"].(string), "known issue") {
+				t.Errorf("detail should NOT carry a known-issue ref after #429 was fixed; got %q", c["detail"])
 			}
-			found = true
 		}
-	}
-	if !found {
-		t.Errorf("demoted check not in output")
 	}
 }
 

@@ -71,11 +71,7 @@ The pack **overrides** the script's severity for checks listed in the internal `
 
 The demotion is coupled to the tracking issue, not to a release calendar. When the fix lands, the **same PR** removes the entry from `knownIssueDemotions` — bumping severity back to `fail` together with the underlying fix. The same-PR coupling makes the regression guard impossible to silently leave behind.
 
-Current demotions (v0.27.0-pre):
-
-| Check | Tracking issue | Reason |
-|---|---|---|
-| `consistency:audio_video_duration` | [#429](https://github.com/tosin2013/helmdeck/issues/429) | `PadAudioToMin` produces duration-stretched AAC packets at slide boundaries. Audio plays correctly; container metadata over-claims by ~26s on typical decks. Fix: replace `GenerateSilence + ConcatAudio` pad with an `-af apad` filter in `runSegmentEncode`. |
+**Currently no demotions are in force.** The `consistency:audio_video_duration` demotion was removed in the same PR that landed the apad-swap fix in `encodeSegment` (issue [#429](https://github.com/tosin2013/helmdeck/issues/429) closed). Fresh `slides.narrate` outputs now produce content-accurate audio stream durations; the check runs at its natural `fail` severity again. New demotion entries added in the future follow the same lifecycle: file the tracking issue first, add the entry with the issue reference, remove it in the same PR that ships the upstream fix.
 
 ## Strict mode (`strict: true`)
 

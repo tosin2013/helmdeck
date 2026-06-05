@@ -56,15 +56,16 @@ const avValidateScriptPath = "/usr/local/bin/av-validate.sh"
 //
 // Document each entry inline so a future maintainer can audit drift
 // without re-reading the original PRs.
-var knownIssueDemotions = map[string]string{
-	// PadAudioToMin produces duration-stretched AAC packets at slide
-	// boundaries when narration is shorter than min_turn_duration_s.
-	// The audio PLAYS correctly (665s narration + 26s inter-slide
-	// pauses = 691s timeline) but the container metadata over-claims
-	// by ~26s. Fix: replace GenerateSilence + ConcatAudio pad with
-	// an -af apad filter in runSegmentEncode. Tracked in #429.
-	"consistency:audio_video_duration": "#429",
-}
+//
+// Currently empty: the #429 demotion was removed in the same PR that
+// landed the apad-swap fix in encodeSegment (`internal/packs/builtin/
+// slides_narrate.go`). Fresh slides.narrate outputs now produce
+// content-accurate audio stream durations; consistency:audio_video_
+// duration runs at its natural `fail` severity again. New entries
+// added here should follow the same lifecycle: file the tracking
+// issue first, add the entry with the issue reference, remove it in
+// the same PR that ships the upstream fix.
+var knownIssueDemotions = map[string]string{}
 
 // AVValidate constructs the pack. No external dependencies — the
 // script is in the sidecar image; the handler just invokes it via

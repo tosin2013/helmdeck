@@ -1,6 +1,7 @@
 ---
-id: av-validate
 title: av.validate
+description: Structured AV-artifact validation (faststart, codec pin, packet contiguity, RMS sweep, LUFS, audio/video duration parity, SRT format). Default soft-surface; strict-mode opt-in for CI publish gates. Default-on as a post-step on slides.narrate and podcast.generate per ADR 052.
+keywords: [helmdeck, av, validate, ffprobe, faststart, mp4, mp3, mcp]
 ---
 
 # `av.validate`

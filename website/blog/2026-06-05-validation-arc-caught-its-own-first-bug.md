@@ -6,7 +6,7 @@ tags: [friction, agent-architecture, weak-models]
 description: A four-phase validation arc shipped across PRs #428–#433. The first time we ran it production-shaped, it caught a Dockerfile/runtime image mismatch that had been silently masking changes for months. Plus what a 120B free-tier model did to our planner.
 image: /img/social-card.png
 date: 2026-06-05
-draft: true
+draft: false
 ---
 
 ## Hook

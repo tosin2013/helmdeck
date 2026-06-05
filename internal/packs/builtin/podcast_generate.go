@@ -110,6 +110,10 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 				"metadata_model": "string",
 				"cta_style":      "string",
 				"language":       "string",
+				// validate (default-on, pointer-bool) runs av.validate
+				// as a post-concat step. Phase 3 of the validation arc.
+				// Mirrors slides.narrate's validate input.
+				"validate": "boolean",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -136,6 +140,12 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 				// hook_30s, cta, language, format_ceiling_note.
 				"engagement":              "object",
 				"engagement_artifact_key": "string",
+				// validation is the av.validate structured report
+				// inlined as a post-concat step (Phase 3). Shape
+				// mirrors av.validate's output. Present when validate
+				// is not explicitly false.
+				"validation":              "object",
+				"validation_artifact_key": "string",
 				// Cost transparency — emitted by the handler; declared
 				// here so agents/pipeline authors see them in the catalog.
 				// tts_chars is a per-speaker breakdown map with a "_total"
@@ -180,6 +190,10 @@ type podcastGenerateInput struct {
 	MetadataModelRaw *string `json:"metadata_model"`
 	CTAStyle         string  `json:"cta_style"`
 	Language         string  `json:"language"`
+	// Validate (default-on, pointer-bool) runs av.validate as a
+	// post-concat step. nil → on, &false → off. Mirrors slides.narrate's
+	// pattern. Phase 3 of the validation arc.
+	Validate *bool `json:"validate,omitempty"`
 }
 
 func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) packs.HandlerFunc {
@@ -477,6 +491,35 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 		}
 		if modelUsed != "" {
 			out["model_used"] = modelUsed
+		}
+
+		// Validation (Phase 3 of the validation arc). Default-on via
+		// the Validate pointer-bool. Audio-only validation: the
+		// script's mp4:* and consistency:audio_video_duration checks
+		// skip automatically (no --video), so only the audio:* and
+		// (when supplied) srt:* checks run. Runs against the final
+		// MP3 still in the sidecar tmpfs at /tmp/helmdeck-podcast/
+		// final.mp3 (see internal/podcast/concat.go).
+		//
+		// Failure to RUN (script missing, dep error, transport failure)
+		// is logged but does NOT fail the pack — the artifact still
+		// ships. Validation findings (checks at any severity) similarly
+		// never fail the pack; the caller reads validation.all_passed.
+		// Matches the soft-surface contract from av.validate.
+		validateOn := in.Validate == nil || *in.Validate
+		if validateOn {
+			ec.Report(97, "validating output")
+			rep, key, verr := runAVValidation(ctx, ec, runAVValidationOpts{
+				AudioPath:         "/tmp/helmdeck-podcast/final.mp3",
+				ArtifactNamespace: "podcast.generate",
+			})
+			if verr != nil {
+				ec.Logger.Warn("av.validate run failed; output ships without validation field",
+					"err", verr)
+			} else if len(rep.Checks) > 0 {
+				out["validation"] = rep
+				out["validation_artifact_key"] = key
+			}
 		}
 
 		// Engagement metadata — default-on per the v0.26.0 plan

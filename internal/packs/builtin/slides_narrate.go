@@ -217,6 +217,12 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				// memory + large decks.
 				"captions_sidecar": "boolean",
 				"captions_burn_in": "boolean",
+				// validate (default-on, pointer-bool) runs av.validate
+				// as a post-concat step and embeds the structured
+				// result in the output's `validation` field. Phase 3
+				// of the validation arc. Pass false to skip on
+				// benchmarks where cost matters.
+				"validate": "boolean",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -245,6 +251,14 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				// that backs the research-cited ~12-13% view boost.
 				// Empty string when captions_sidecar:false.
 				"captions_artifact_key": "string",
+				// validation is the av.validate structured report
+				// inlined as a post-concat step (Phase 3 of the
+				// validation arc). Present when validate is not
+				// explicitly false. Shape mirrors av.validate's
+				// output: {checks[], passed, failed, warnings,
+				// all_passed}.
+				"validation":              "object",
+				"validation_artifact_key": "string",
 				// captions_burned_in reflects whether the libass
 				// subtitles= filter ran during per-segment encode.
 				// Operator-opt-in via captions_burn_in:true; the field
@@ -355,6 +369,15 @@ type slidesNarrateInput struct {
 	// decks may trigger the OOM-retry path — and if libass-with-1-
 	// thread also OOMs, the run fails. See pack Description.
 	CaptionsBurnIn bool `json:"captions_burn_in,omitempty"`
+	// Validate (default-on, pointer-bool) runs av.validate as a
+	// post-concat step. Mirrors the CaptionsSidecar pointer-bool
+	// default-on pattern from PR #425 — nil → on, &false → off.
+	// Phase 3 of the validation arc. Adds ~5-15s wall-clock for the
+	// null-muxer decode pass on a 1080p × 11-min video. The
+	// validation result lands in the output as a `validation` field;
+	// the structured report is also persisted as a
+	// `validation.json` sidecar artifact.
+	Validate *bool `json:"validate,omitempty"`
 }
 
 func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuard) packs.HandlerFunc {
@@ -681,7 +704,8 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 		// are auxiliary, and failing a 3-minute encode over an
 		// artifact-store hiccup is worse than degraded output.
 		sidecarOn := in.CaptionsSidecar == nil || *in.CaptionsSidecar
-		var captionsKey, captionsBurnPath string
+		validateOn := in.Validate == nil || *in.Validate
+		var captionsKey, captionsBurnPath, captionsValidatePath string
 		var captionsBurnedIn bool
 		if sidecarOn || in.CaptionsBurnIn {
 			srtBytes := buildSRT(slides, durations)
@@ -702,6 +726,22 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 					captionsBurnPath = ""
 				} else {
 					captionsBurnedIn = true
+					captionsValidatePath = captionsBurnPath
+				}
+			}
+			// Phase 3 of the validation arc: when validate is enabled
+			// AND the SRT wasn't already written for burn-in, write it
+			// to /tmp so the post-concat av.validate step can run the
+			// srt:* + consistency:captions_coverage checks. The write
+			// is ~10 KB and only happens when both sidecar and validate
+			// are on; failures are logged + ignored (validation just
+			// skips the SRT checks).
+			if captionsValidatePath == "" && validateOn && sidecarOn {
+				captionsValidatePath = "/tmp/captions-validate.srt"
+				if _, werr := execWithStdin(ctx, ec, captionsValidatePath, srtBytes); werr != nil {
+					ec.Logger.Warn("captions validate-path write failed; SRT checks will skip",
+						"err", werr)
+					captionsValidatePath = ""
 				}
 			}
 		}
@@ -874,6 +914,39 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 				Message: fmt.Sprintf("upload video: %v", err), Cause: err}
 		}
 
+		// 9b. Validation (Phase 3 of the validation arc). Default-on
+		// via the Validate pointer-bool — see input struct doc. Runs
+		// av-validate.sh against /tmp/final.mp4 (still on disk in the
+		// sidecar) and the optional /tmp/captions{-validate}.srt. The
+		// result lands in the pack output's `validation` field; a
+		// validation.json sidecar artifact is also persisted under
+		// the slides.narrate namespace.
+		//
+		// Validation failure to RUN (script missing, dep error,
+		// transport failure) is logged but does NOT fail the pack —
+		// the artifact still ships. Validation findings (checks at
+		// any severity) similarly never fail the pack; the caller
+		// reads validation.all_passed and reasons over it. This
+		// matches the soft-surface contract documented on av.validate
+		// itself.
+		var validationReport scriptReport
+		var validationKey string
+		if validateOn {
+			ec.Report(97, "validating output")
+			rep, key, verr := runAVValidation(ctx, ec, runAVValidationOpts{
+				VideoPath:         "/tmp/final.mp4",
+				CaptionsPath:      captionsValidatePath,
+				ArtifactNamespace: "slides.narrate",
+			})
+			if verr != nil {
+				ec.Logger.Warn("av.validate run failed; output ships without validation field",
+					"err", verr)
+			} else {
+				validationReport = rep
+				validationKey = key
+			}
+		}
+
 		// 10. YouTube engagement metadata (optional — opt-in via
 		// metadata_model on slides.narrate; default-on for podcast.generate).
 		var totalDuration float64
@@ -925,6 +998,11 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			// Put succeeded.
 			"captions_artifact_key": captionsKey,
 			"captions_burned_in":    captionsBurnedIn,
+			// validation_artifact_key is empty when validate is
+			// false, the script invocation failed, or the artifact
+			// store wasn't wired. Always emitted so consumers can
+			// branch on its presence.
+			"validation_artifact_key": validationKey,
 			// #145: cost transparency on real runs too. Mirrors the
 			// dry_run shape so callers can rely on the same fields
 			// regardless of mode.
@@ -937,6 +1015,12 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 		}
 		if heroImageModelUsed != "" {
 			out["hero_image_model_used"] = heroImageModelUsed
+		}
+		// validation is only set when validate is enabled AND the
+		// script ran successfully. Absent field signals "not run"
+		// vs zero-checks; same convention as engagement.
+		if validateOn && len(validationReport.Checks) > 0 {
+			out["validation"] = validationReport
 		}
 		return json.Marshal(out)
 	}

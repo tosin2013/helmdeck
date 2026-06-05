@@ -215,6 +215,74 @@ func TestSlidesNarrate_HappyPathWithNarration(t *testing.T) {
 	}
 }
 
+// TestSlidesNarrate_ValidationDefaultOn — Phase 3 of the validation
+// arc: validate is default-on (pointer-bool nil → run); the handler
+// invokes av-validate.sh via session exec and either embeds the
+// result in the output's `validation` field or logs+continues if the
+// script invocation failed. Regression guard against accidentally
+// flipping the default to off, OR dropping the run-on-failure
+// soft-surface behavior (the pack should NOT fail when validation
+// script fails — only when the artifact itself can't be produced).
+//
+// The narrateExecScript stub returns empty/unmatched output for any
+// av-validate.sh call (which hits the JSON parse failure path); the
+// handler must log + continue and the output must NOT carry a
+// validation field. That's the soft-surface fallback — the most
+// important regression guard, ensuring validation never blocks
+// artifact ship.
+func TestSlidesNarrate_ValidationDefaultOn(t *testing.T) {
+	exec := &narrateExecScript{}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# Slide 1\n\n<!-- Narration -->",
+		"allow_silent_output": true
+	}`
+	raw, err := runNarrate(t, nil, nil, exec, input)
+	if err != nil {
+		t.Fatalf("handler: %v — validation script-exec failure must NOT fail the pack", err)
+	}
+	attempted := false
+	for _, c := range exec.calls {
+		for _, a := range c.Cmd {
+			if strings.Contains(a, "av-validate.sh") {
+				attempted = true
+				break
+			}
+		}
+		if attempted {
+			break
+		}
+	}
+	if !attempted {
+		t.Errorf("validate is default-on; handler must invoke av-validate.sh; got %d exec calls", len(exec.calls))
+	}
+	if verr := SlidesNarrate(nil, nil, nil).OutputSchema.Validate(raw); verr != nil {
+		t.Errorf("output schema validates even when validation soft-failed: %v\noutput: %s", verr, raw)
+	}
+}
+
+// TestSlidesNarrate_ValidationExplicitlyDisabled — passing
+// validate:false must suppress the av-validate.sh invocation
+// entirely. Mirrors the captions_sidecar:false test (PR #425) for
+// the same default-on-pointer-bool pattern.
+func TestSlidesNarrate_ValidationExplicitlyDisabled(t *testing.T) {
+	exec := &narrateExecScript{}
+	input := `{
+		"markdown": "---\nmarp: true\n---\n\n# Slide 1\n\n<!-- Narration -->",
+		"allow_silent_output": true,
+		"validate": false
+	}`
+	if _, err := runNarrate(t, nil, nil, exec, input); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	for _, c := range exec.calls {
+		for _, a := range c.Cmd {
+			if strings.Contains(a, "av-validate.sh") {
+				t.Errorf("validate:false must suppress av-validate.sh; got call %v", c.Cmd)
+			}
+		}
+	}
+}
+
 // TestSlidesNarrate_AudioPadDur_WiresApadFilter — #429 regression
 // guard. The handler MUST pass AudioPadDur=durations[i] to
 // encodeSegment for every slide, which materializes as

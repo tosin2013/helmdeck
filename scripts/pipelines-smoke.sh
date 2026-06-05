@@ -384,6 +384,49 @@ print(out.get("captions_artifact_key") or "")
   echo "OK: size=$size, SRT format valid"
 }
 
+# validation_assert <runfile>
+# Phase 3 of the validation arc: slides.narrate + podcast.generate
+# now embed the av.validate result in their output as a `validation`
+# field (default-on via the validate pointer-bool input). This helper
+# reads the field and asserts all_passed:true.
+#
+# Returns:
+#   - VALIDATION_ABSENT (exit 0): the field isn't in the output —
+#     either validate:false was explicitly passed, or the pack was
+#     called before Phase 3 shipped (avbench monthly cadence makes
+#     this possible during the cutover window). Caller falls back
+#     to the legacy inline ffprobe checks.
+#   - OK:<detail> (exit 0): all_passed:true; surfaces counts.
+#   - FAIL:<detail> (exit 1): all_passed:false; names the failing
+#     checks so the maintainer can navigate without re-running the
+#     diagnostic.
+validation_assert() {
+  local runfile="$1"
+  python3 - "$runfile" <<'PY'
+import sys, json
+run = json.load(open(sys.argv[1]))
+steps = run.get("steps") or []
+if not steps:
+    print("VALIDATION_ABSENT"); sys.exit(0)
+out = steps[-1].get("output") or {}
+if isinstance(out, str):
+    try: out = json.loads(out)
+    except Exception: out = {}
+v = out.get("validation")
+if not v:
+    print("VALIDATION_ABSENT"); sys.exit(0)
+passed = v.get("passed", 0)
+failed = v.get("failed", 0)
+warnings = v.get("warnings", 0)
+checks = v.get("checks") or []
+if failed > 0:
+    bad = [c.get("name") for c in checks if not c.get("pass") and c.get("severity") == "fail"]
+    print(f"FAIL: passed={passed} warnings={warnings} failed={failed} failing=[{', '.join(bad)}]")
+    sys.exit(1)
+print(f"OK: passed={passed} warnings={warnings}")
+PY
+}
+
 # terminal_step_duration_s <runfile> — extracts total_duration_s
 # (slides.narrate) or duration_s (podcast.generate) from the terminal
 # step's output. Empty string when absent.
@@ -444,6 +487,25 @@ assert_artifact() {
       green "  ✓ $name: MP4 ok (size=$size)"; return 0 ;;
     mp4:av)
       if ! has_magic "$art" 'ftyp' && [[ "$size" -lt 1000 ]]; then red "  ✗ $name: not a plausible MP4 (size=$size)"; return 1; fi
+      # Phase 3 of the validation arc: prefer the server-side
+      # validation field over re-running the same probes inline.
+      # slides.narrate / podcast.generate embed av.validate's report
+      # as a `validation` field in their output (default-on). When
+      # present, that's the authoritative signal; when absent
+      # (validate:false or pre-Phase-3 runs), fall back to the inline
+      # ffprobe checks below.
+      local val_out_mp4
+      val_out_mp4=$(validation_assert "$runfile")
+      case $? in
+        0)
+          case "$val_out_mp4" in
+            VALIDATION_ABSENT) ;; # fall through to inline checks
+            OK:*)
+              green "  ✓ $name: MP4 ok (size=$size, server-side validation $val_out_mp4)"
+              return 0 ;;
+          esac ;;
+        1) red "  ✗ $name: server-side validation reported failures — $val_out_mp4"; return 1 ;;
+      esac
       # Faststart: pure-Python check, always runs.
       if ! mp4_faststart_ok "$art"; then
         red "  ✗ $name: MP4 moov atom AFTER mdat — streaming players cannot begin playback before full download (#422 regression)"; return 1
@@ -500,6 +562,20 @@ assert_artifact() {
       green "  ✓ $name: MP3 ok (size=$size)"; return 0 ;;
     mp3:av)
       if [[ "$size" -lt 1000 ]]; then red "  ✗ $name: MP3 too small (size=$size)"; return 1; fi
+      # Phase 3: prefer server-side validation. See mp4:av branch
+      # above for the rationale.
+      local val_out_mp3
+      val_out_mp3=$(validation_assert "$runfile")
+      case $? in
+        0)
+          case "$val_out_mp3" in
+            VALIDATION_ABSENT) ;; # fall through to inline checks
+            OK:*)
+              green "  ✓ $name: MP3 ok (size=$size, server-side validation $val_out_mp3)"
+              return 0 ;;
+          esac ;;
+        1) red "  ✗ $name: server-side validation reported failures — $val_out_mp3"; return 1 ;;
+      esac
       if ! ffprobe_present; then
         yellow "  ! $name: MP3 size ok (size=$size) — ffprobe absent, audio packet / RMS / codec NOT verified"
         return 0

@@ -64,6 +64,7 @@ For mode C with `source_url`, the Firecrawl overlay must be enabled (`HELMDECK_F
 | `metadata_model` | `string` | no | `"openrouter/auto"` | Provider/model for the engagement-metadata LLM call. **Default-on** (the v0.26.0 distinction vs `slides.narrate`, which stays opt-in). Pass `""` (empty string, NOT missing) to disable. Adds one LLM call per podcast run (~$0.001 on `openrouter/auto`). |
 | `cta_style` | `string` | no | `"natural"` | CTA tone: `natural` / `direct` / `none`. Placement is fixed at mid-roll (research-validated). |
 | `language` | `string` | no | `"en"` | ISO 639 language code. Operator input is authoritative — overrides whatever the LLM emits. |
+| `validate` | `boolean` | no | `true` | Run [`av.validate`](../av/validate.md) as a post-concat step against the final MP3. The structured report lands in the output as a `validation` field; a sidecar `validation.json` artifact is also persisted. Default-on; pass `false` to skip. Audio-only checks run (codec, packet contiguity, RMS sweep, loudness LUFS, silence runs); the `mp4:*` and `consistency:audio_video_duration` checks skip automatically since this pack outputs MP3, not MP4. |
 
 **Validation:**
 - Exactly one of `script` / `prompt` / (`source_url` OR `source_text`)

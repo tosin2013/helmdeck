@@ -93,6 +93,54 @@ Output FORMAT — return exactly ONE JSON object, no prose around it, no code fe
 
 The handler will derive rewritten_prompt from your steps post-hoc — do NOT emit a rewritten_prompt field yourself. Keep rationales concrete (tool name + what it produces + how step N+1 consumes it).`
 
+// planSystemPromptSinglePick is the Tier-C variant of the planning
+// prompt (ADR 053). Instead of asking the model to emit the complete
+// pipeline JSON in one shot, it asks for ONE step at a time + a
+// more_steps_likely flag. The output schema is the same — steps[]
+// with one element — so the handler doesn't need to parse two
+// different shapes. The architectural rationale is that small models
+// can reliably pick ONE pack in ~50–200 tokens but fail at emitting
+// 1,500-token multi-step plans (BFCL multi-turn collapse measured
+// across the xLAM/Qwen3 small-model family; helmdeck's 2026-06-05
+// Nemotron-3-super-120b-a12b:free observation showed 50% success at
+// the multi-step task vs 100% at single-action class).
+const planSystemPromptSinglePick = `You are the planning agent for helmdeck, a library of capability "packs" (atomic tool actions) and "pipelines" (curated chains of packs exposed as one call).
+
+Your job: given a user's natural-language intent, return the SINGLE NEXT step to take — the one tool call that should run RIGHT NOW. The agent will call you again with updated context to plan the step after that. This is a one-step-at-a-time planner; do not try to emit the full plan in one shot.
+
+You will receive two blocks of context as part of the user message:
+  1. CATALOG (routing-guide JSON): every pack and pipeline plus its metadata (accepts/produces/intent_keywords/typical_use/limitations, plus supersedes on pipelines).
+  2. CALLER DEFAULTS (my-defaults JSON): the caller's most-used packs/pipelines and their most-common input values.
+
+Pipeline-aware rules (apply within the SINGLE step you emit):
+  P1. PIPELINE WINS when one fits the WHOLE intent. If a pipeline's metadata.accepts matches the source kind AND metadata.produces matches the target format, emit ONE step calling "helmdeck__pipeline-run" with args {"id": "<pipeline id>", "inputs": {...}} and set more_steps_likely:false — the pipeline does the rest internally.
+  P2. HONOR supersedes. A pipeline whose metadata.supersedes lists packs the user mentioned by name wins automatically.
+  P3. NO pipeline fits? Pick the SINGLE pack that should run FIRST and set more_steps_likely:true. Do not try to emit step 2.
+
+Step rules:
+  S1. NEVER hallucinate a tool id. step.tool MUST be either a pack name verbatim from CATALOG.packs[].name OR the literal string "helmdeck__pipeline-run".
+  S2. NEVER emit "helmdeck.plan" or "helmdeck__plan" as a step.tool — the planner cannot call itself.
+  S3. Pre-fill step.args from CALLER DEFAULTS common_inputs when relevant; leave args empty when nothing is learned.
+  S4. step.rationale is one short sentence explaining WHY this step at THIS position.
+
+Complexity classification (set complexity to exactly ONE of):
+  - "single-action" — the WHOLE intent is one tool call AND your step covers it. Set more_steps_likely:false.
+  - "pipeline-direct" — one step calling a pipeline that covers the whole intent. Set more_steps_likely:false.
+  - "pack-chain" — your step is the FIRST in a chain. Set more_steps_likely:true.
+
+Output FORMAT — return exactly ONE JSON object, no prose around it, no code fences:
+
+{
+  "steps": [
+    {"order": 1, "tool": "<exact id>", "args": { ... }, "rationale": "<one sentence>"}
+  ],
+  "complexity": "single-action" | "pipeline-direct" | "pack-chain",
+  "more_steps_likely": true | false,
+  "reasoning": "<1-3 sentences explaining WHY this step is the right first move>"
+}
+
+Emit EXACTLY ONE step in the steps array. The handler will return your step to the agent, the agent will run it and call you again with updated context for the next step. Keep your output under ~300 tokens — this prompt is sized for small models that hit output budgets fast.`
+
 // planInput is the schema agents call helmdeck.plan with.
 type planInput struct {
 	UserIntent string          `json:"user_intent"`
@@ -128,6 +176,19 @@ type planOutput struct {
 	Reasoning       string          `json:"reasoning,omitempty"`
 	Model           string          `json:"model"`
 	Compaction      *planCompaction `json:"compaction,omitempty"`
+	// PromptVariantUsed reports which prompt template fired for this
+	// call — "full_steps" (Tier A/B default) or "single_pick"
+	// (Tier C default). Surfaced so agents can detect when they're
+	// in the one-step-at-a-time loop and re-call helmdeck.plan after
+	// running the returned step. See ADR 053.
+	PromptVariantUsed string `json:"prompt_variant_used,omitempty"`
+	// MoreStepsLikely is set by the single_pick variant when the
+	// emitted step is the FIRST in a chain — signals the agent that
+	// it should call helmdeck.plan again after running this step to
+	// get the next one. Always false on full_steps (the full plan
+	// is already in steps[]). Omitted when false to keep the wire
+	// shape stable for callers that haven't migrated.
+	MoreStepsLikely bool `json:"more_steps_likely,omitempty"`
 }
 
 // planCompaction is the wire shape of llmcontext.Trim when surfaced
@@ -320,9 +381,10 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 		// returned PackError's Cause field; callers can errors.Is
 		// against the sentinels in json_response.go.
 		var raw struct {
-			Steps      []planStep `json:"steps"`
-			Complexity string     `json:"complexity"`
-			Reasoning  string     `json:"reasoning"`
+			Steps           []planStep `json:"steps"`
+			Complexity      string     `json:"complexity"`
+			Reasoning       string     `json:"reasoning"`
+			MoreStepsLikely bool       `json:"more_steps_likely"`
 		}
 		if perr := DecodeStructuredResponseWithCause(
 			chat.Choices[0].Message.Content.Text(),
@@ -335,12 +397,25 @@ func planHandler(d vision.Dispatcher, reg *packs.Registry, pipes PipelinesLister
 		steps := normalizePlanSteps(raw.Steps, validIDs)
 		complexity := normalizeComplexity(raw.Complexity, steps)
 
+		// Resolve the variant that fired so it can be surfaced to the
+		// caller. We re-resolve here (rather than threading it through
+		// from assemblePlanPrompt) so the value stays a function of
+		// the Budget — single source of truth.
+		variantUsed := budget.ResolvePromptVariant()
+
 		out := planOutput{
-			Steps:           steps,
-			RewrittenPrompt: renderRewrittenPrompt(intent, steps),
-			Complexity:      complexity,
-			Reasoning:       strings.TrimSpace(raw.Reasoning),
-			Model:           in.Model,
+			Steps:             steps,
+			RewrittenPrompt:   renderRewrittenPrompt(intent, steps),
+			Complexity:        complexity,
+			Reasoning:         strings.TrimSpace(raw.Reasoning),
+			Model:             in.Model,
+			PromptVariantUsed: string(variantUsed),
+			// MoreStepsLikely is only meaningful for SinglePick. On
+			// FullSteps the model emitted the complete plan in one
+			// shot; signaling "more likely" would confuse the agent
+			// into re-planning unnecessarily. Force false except when
+			// the variant explicitly opted into single-step output.
+			MoreStepsLikely: variantUsed == llmcontext.PromptVariantSinglePick && raw.MoreStepsLikely,
 		}
 		// Surface the Trim record to the agent ONLY when compaction
 		// actually fired (trim.Dropped non-empty). Tier A models pass
@@ -400,15 +475,32 @@ func buildPlanUserMessage(intent string, contextJSON json.RawMessage, catalog ca
 // wire bytes a pre-PR-4 call would have produced, so behavior on
 // non-caching providers is unchanged.
 func assemblePlanPrompt(budget llmcontext.Budget, catalog catalogProjection, defaults packs.Defaults, intent string, contextJSON json.RawMessage) (string, string) {
+	systemPrompt := selectPlanSystemPrompt(budget)
 	if budget.SupportsPrefixCache {
 		catBytes, _ := json.MarshalIndent(catalog, "", "  ")
 		var sb strings.Builder
-		sb.WriteString(planSystemPrompt)
+		sb.WriteString(systemPrompt)
 		sb.WriteString("\n\nCATALOG (helmdeck routing-guide):\n")
 		sb.Write(catBytes)
 		return sb.String(), buildPlanUserMessageNoCatalog(intent, contextJSON, defaults)
 	}
-	return planSystemPrompt, buildPlanUserMessage(intent, contextJSON, catalog, defaults)
+	return systemPrompt, buildPlanUserMessage(intent, contextJSON, catalog, defaults)
+}
+
+// selectPlanSystemPrompt picks the planning system prompt based on
+// the model's tier-resolved variant (ADR 053). FullSteps emits the
+// complete pipeline in one shot (today's behavior, Tier A/B);
+// SinglePick emits one step at a time + a more_steps_likely flag
+// (Tier C). The output schema is the same; only the model's TASK
+// changes. The handler reads the variant separately to set the
+// prompt_variant_used output field.
+func selectPlanSystemPrompt(budget llmcontext.Budget) string {
+	switch budget.ResolvePromptVariant() {
+	case llmcontext.PromptVariantSinglePick:
+		return planSystemPromptSinglePick
+	default:
+		return planSystemPrompt
+	}
 }
 
 // buildPlanUserMessageNoCatalog is the prefix-cache variant of the

@@ -95,6 +95,57 @@ func TestBudgetFor_EmptyModel(t *testing.T) {
 	}
 }
 
+// TestResolvePromptVariant_TierDefaults — ADR 053 contract: empty
+// PromptVariant resolves to tier defaults. Tier A and B → FullSteps
+// (frontier models reliably emit complete pipelines in one shot);
+// Tier C and unknown → SinglePick (small models can't reliably emit
+// 1,500-token multi-step plans — the Nemotron-3-super-120b-a12b:free
+// 50% failure rate at multi-step is the motivating evidence). The
+// fallback for unknown tiers is the conservative path.
+func TestResolvePromptVariant_TierDefaults(t *testing.T) {
+	cases := []struct {
+		name string
+		b    Budget
+		want PromptVariant
+	}{
+		{"Tier A default → full_steps", Budget{Tier: TierA}, PromptVariantFullSteps},
+		{"Tier B default → full_steps", Budget{Tier: TierB}, PromptVariantFullSteps},
+		{"Tier C default → single_pick", Budget{Tier: TierC}, PromptVariantSinglePick},
+		{"unknown tier → single_pick (conservative)", Budget{Tier: ""}, PromptVariantSinglePick},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.b.ResolvePromptVariant()
+			if got != c.want {
+				t.Errorf("ResolvePromptVariant = %q; want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestResolvePromptVariant_ExplicitOverride — a budget entry that
+// sets PromptVariant explicitly overrides the tier default. The
+// override is documented as the escape hatch for "a model defies its
+// tier" — e.g. a Tier B model trained specifically for tool calling
+// that should get FullSteps despite the tier suggesting otherwise.
+func TestResolvePromptVariant_ExplicitOverride(t *testing.T) {
+	// Tier C model with explicit FullSteps override — operator
+	// asserts this particular model handles multi-step output despite
+	// its tier classification.
+	b := Budget{Tier: TierC, PromptVariant: PromptVariantFullSteps}
+	if got := b.ResolvePromptVariant(); got != PromptVariantFullSteps {
+		t.Errorf("explicit override should win over tier default; got %q want full_steps", got)
+	}
+	// Tier A model with explicit SinglePick override — useful when
+	// an operator wants the agent loop pattern even on a frontier
+	// model (e.g. for cost reasons — single_pick output is much
+	// smaller per call).
+	b = Budget{Tier: TierA, PromptVariant: PromptVariantSinglePick}
+	if got := b.ResolvePromptVariant(); got != PromptVariantSinglePick {
+		t.Errorf("explicit override should win over tier default; got %q want single_pick", got)
+	}
+}
+
 // TestBudgetFor_LongestPrefixWins — when two prefix entries could
 // match, the longer one wins. Guards against the bug where
 // "openrouter/" would shadow "openrouter/anthropic/claude-" if order

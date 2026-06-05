@@ -12,7 +12,7 @@ changefreq: monthly
 
 ## The headline argument
 
-**Helmdeck lets a $0.10/1M-token model do work that otherwise needs a $3/1M-token model.** The mechanism is straightforward: helmdeck's 52 capability packs absorb the ambiguity that would otherwise burn LLM tokens. Deterministic Go code handles the side-effects (browser navigation, git operations, document parsing, file edits, vault credential resolution). The LLM only contributes orchestration — picking which pack to call and what arguments to pass.
+**Helmdeck lets a $0.10/1M-token model do work that otherwise needs a $3/1M-token model.** The mechanism is straightforward: helmdeck's 53 capability packs absorb the ambiguity that would otherwise burn LLM tokens. Deterministic Go code handles the side-effects (browser navigation, git operations, document parsing, file edits, vault credential resolution). The LLM only contributes orchestration — picking which pack to call and what arguments to pass.
 
 For workflows that are repetitive enough to have a pack — browser scraping, code edits, GitHub triage, document parsing, slide narration, desktop automation — this is a 5–60× per-task cost reduction depending on the workflow, plus the outputs are correct on first try more often.
 
@@ -93,7 +93,18 @@ Five canonical workflows. Each table compares the dominant alternative approache
 |---|---|---|
 | Manual orchestration in shell | **Engineering time + ElevenLabs + ffmpeg** | You wire Marp → ElevenLabs → ffmpeg → YouTube CLI yourself. Hours of glue. |
 | Pictory / Synthesia / Heygen SaaS | **$0.20–$2.00 / minute of video** | Per-minute video pricing on hosted slide-narration services. |
-| **Helmdeck `slides.narrate`** | **ElevenLabs cost (~$0.05 / minute) + ~$0.001 LLM** | `slides.narrate` does the entire pipeline: Marp render, ElevenLabs TTS, ffmpeg concat, YouTube metadata. The LLM only authors the speaker notes (which it does anyway). |
+| **Helmdeck `slides.narrate`** | **ElevenLabs cost (~$0.05 / minute) + ~$0.001 LLM** | `slides.narrate` does the entire pipeline: Marp render, ElevenLabs TTS, ffmpeg concat, YouTube metadata, **structured AV-artifact validation as a default-on post-step**. The LLM only authors the speaker notes (which it does anyway). |
+
+### 6. Diagnosing "the video has issues" — reliability as a token tax
+
+*Goal: when a narrated MP4 looks wrong (silent run, container metadata mismatch, faststart broken), figure out what went wrong without burning a frontier-model budget on the ffprobe loop.*
+
+| Stack | Approx cost | Why |
+|---|---|---|
+| Frontier model + manual ffprobe + shell archaeology | **~3,000 LLM tokens / incident** | Auth, fetch artifact, ffprobe streams, sample RMS, check faststart with Python atom walk, verify packet contiguity, eyeball duration parity, synthesize findings. The 27.9-second audio/video duration mismatch on `slides.narrate/888de7b...mp4` (issue [#429](https://github.com/tosin2013/helmdeck/issues/429)) cost ~3,000 tokens to discover manually. |
+| **Helmdeck `av.validate` default-on post-step** | **~200 LLM tokens / incident** | The agent reads `validation.checks[]` from the run record. 13 checks (faststart, codec pin, packet contiguity, RMS sweep, LUFS, duration parity, SRT format) execute server-side; the structured result is data, not derivation. Severity model (`fail` reserved for shipped-bug-fix checks, `warn` for soft heuristics) lets the agent reason about findings without re-deriving the diagnostic flow. |
+
+The validation arc (PRs [#428](https://github.com/tosin2013/helmdeck/pull/428) → [#430](https://github.com/tosin2013/helmdeck/pull/430) → [#431](https://github.com/tosin2013/helmdeck/pull/431) → [#432](https://github.com/tosin2013/helmdeck/pull/432) → [#433](https://github.com/tosin2013/helmdeck/pull/433), documented in [ADR 052](/adrs/052-av-output-validation-post-step)) is a concrete worked example of the broader thesis: reliability has a token cost, and moving the diagnostic mechanism from "frontier model derives it" to "deterministic pack computes it" is exactly the same lever as moving navigation from "vision model interprets screenshots" to "browser pack executes deterministic actions."
 
 ## Where the SKILLS bundle compounds the savings
 

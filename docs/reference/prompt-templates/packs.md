@@ -382,7 +382,23 @@ Use helmdeck__podcast-generate to make a podcast from this source text: {{SOURCE
 - `{{SOURCE_TEXT}}` — content to turn into a show (input `source_text`; or `source_url`, or `prompt`+`model`, or a `script`).
 - `{{THEME}}` — `interview`|`debate`|`news-roundup`|`deep-dive`|`solo-essay` (input `theme`, optional).
 
-**Notes** — needs `elevenlabs-key` (or `allow_silent_output:true`); async.
+**Notes** — needs `elevenlabs-key` (or `allow_silent_output:true`); async. Engagement metadata (`metadata_model`) and AV validation (`validate`) are both default-on; pass `metadata_model:""` or `validate:false` to disable. The output's `validation` field carries a structured AV-quality report (see `av.validate` template).
+
+---
+
+## AV utilities
+
+#### `av.validate` — structured validation report for an AV artifact
+
+**Template**
+```
+Use helmdeck__av-validate to validate {{ARTIFACT_KEY}}.
+```
+
+**Variables**
+- `{{ARTIFACT_KEY}}` — the video or audio artifact key (input `video_artifact_key` for MP4 or `audio_artifact_key` for MP3). Direct paths (`video_path` / `audio_path`) also work for chained-pack scenarios where the file is already in the session `/tmp`.
+
+**Notes** — 13-check set covering faststart, codec pin, packet contiguity, RMS sweep, LUFS, audio/video duration parity, SRT format. Default **soft-surface** — failed checks land in the `validation` field, pack returns success; pass `strict:true` to surface `fail`-severity failures as a typed error (CI publish-gate use case). Already runs default-on as a post-step on `slides.narrate` + `podcast.generate`, so direct invocation is mostly for ad-hoc validation of artifacts produced outside those packs OR for the CI strict-mode gate. See [ADR 052](/adrs/052-av-output-validation-post-step) for the architecture.
 
 ---
 

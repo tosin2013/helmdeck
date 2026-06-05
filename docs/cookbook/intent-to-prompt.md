@@ -10,7 +10,7 @@ keywords: [helmdeck, cookbook, openclaw, prompts, pipelines, recipes, intent dec
 
 This page is the answer to that question, organized by the intent class users actually have. Each recipe shows three things:
 
-1. **The OpenClaw natural-language prompt** that resolves cleanly (works against `openrouter/auto`; Tier C free models may be inconsistent — see [Calibrate model tiers](/howto/calibrate-model-tiers) and the [tier-aware prompting discussion in ADR 052](/adrs/052-av-output-validation-post-step) for why).
+1. **The OpenClaw natural-language prompt** that resolves cleanly (works against `openrouter/auto`; Tier C free models may be inconsistent — see [Calibrate model tiers](/howto/calibrate-model-tiers) and the [tier-aware prompting discussion in ADR 052](/adrs/av-output-validation-post-step) for why).
 2. **The direct invocation** — exact pack/pipeline name + input JSON shape, for when you're scripting or want to skip the planner entirely.
 3. **What you get back** — the artifact + structured output fields that land in the run record.
 
@@ -83,6 +83,24 @@ When in doubt, **prefer pipelines over packs**. Pipelines wire multi-step decomp
 | **Outputs** | `markdown_with_citations` (original prose + inline `[1](url)` citations) + `claims_grounded_count` |
 | **Tip** | Default mode is `cite` (find sources for existing claims, insert citations in place). `mode: rewrite` rewrites the prose to be more defensible vs the sources — use when the input draft is aspirational; cite when it's already accurate. |
 
+### "Extract structured data from a single-page web app"
+
+| Field | Value |
+|---|---|
+| **OpenClaw prompt** | *Open `{{URL}}` and extract product price, title, and image — return JSON* |
+| **Direct invocation** | `helmdeck__web-scrape_spa` → `url: ...`, `schema: {"title": "h1", "price": ".price-display", "image": ".product-image[src]"}` |
+| **Outputs** | One JSON object per schema property, populated from the live DOM |
+| **Tip** | `web.scrape` returns markdown for content-heavy sites; `web.scrape_spa` runs Chromium and extracts by CSS selector for SPAs that render content client-side. For tables and structured listings, use `helmdeck__web-test` with a Playwright-MCP loop — it's the right tool when the data needs interaction (scroll-to-load, click-to-expand). |
+
+### "Compare two competitor products' marketing pages"
+
+| Field | Value |
+|---|---|
+| **OpenClaw prompt** | *Scrape `{{URL_A}}` and `{{URL_B}}`, then write up a comparison covering positioning, pricing claims, and target audience* |
+| **Direct invocation** | `helmdeck__web-scrape` × 2 → `helmdeck__blog-rewrite_for_audience` with both scrapes as `source_content`, `audience: "decision maker comparing options"`, `angle: "honest comparison"` |
+| **Outputs** | Markdown comparison post grounded in the actual scraped content |
+| **Tip** | The `blog.rewrite_for_audience` step is a *ghostwriter, not a marketer* — it'll write an honest comparison if you ask for one, not a hit piece on one side. To weight the comparison toward your product, pass that as the `persona`; to keep it balanced, use `persona: "industry analyst"`. |
+
 ## Repos → code work
 
 ### "Read a repo and tell me what it is"
@@ -112,6 +130,24 @@ When in doubt, **prefer pipelines over packs**. Pipelines wire multi-step decomp
 | **Outputs** | `applied: bool`, `patch_summary` |
 | **Tip** | Path-safe inside the clone. For multi-file edits or complex transformations, chain `fs.read` → reason → `fs.patch` per file rather than `fs.write` (which replaces wholesale and is unsafe for surgical edits). |
 
+### "Audit a repo's code for a security pattern"
+
+| Field | Value |
+|---|---|
+| **OpenClaw prompt** | *Fetch `{{REPO_URL}}`, search for hardcoded credentials and unsafe `exec()` calls, summarize what you find* |
+| **Direct invocation** | `helmdeck__repo-fetch` → `helmdeck__cmd-run` with `cmd: "grep -rn 'API_KEY\|SECRET\|password' --include='*.py' --include='*.js'"` → then the agent summarizes hits |
+| **Outputs** | Per-file grep matches + agent's structured summary (which findings are real, which are documented patterns, severity hints) |
+| **Tip** | The session-chaining contract (`_session_id` auto-threaded) means `cmd.run` reads from `repo.fetch`'s clone without re-cloning. Don't reach for `repo.map` for this — grep is cheaper and more precise for known-pattern searches. Use the symbol map when the question is *"who calls function X"* not *"where is string Y."* |
+
+### "Generate developer documentation from a codebase"
+
+| Field | Value |
+|---|---|
+| **OpenClaw prompt** | *Fetch `{{REPO_URL}}`, map its structure, then write up a developer onboarding doc covering entry points, key modules, and the testing strategy* |
+| **Direct invocation** | `helmdeck__repo-fetch` → `helmdeck__repo-map` → `helmdeck__blog-rewrite_for_audience` with the map + readme as `source_content` |
+| **Outputs** | Markdown developer doc grounded in actual repo structure (not a paraphrase of the README) |
+| **Tip** | This composition lives inside the `builtin.repo-presentation` pipeline for the video-output variant. For text docs, chain it manually — there's no `builtin.repo-onboarding-doc` pipeline yet (worth filing if you use this composition often). The `blog.rewrite_for_audience` step takes `audience: "engineers new to this codebase"` for the right voice. |
+
 ## Validation + reliability
 
 ### "Is this artifact good?"
@@ -129,8 +165,55 @@ When in doubt, **prefer pipelines over packs**. Pipelines wire multi-step decomp
 |---|---|
 | **OpenClaw prompt** | *Show me the audit log entries for the last pipeline run* |
 | **Direct invocation** | `helmdeck__inspect-audit-log` *(via REST `/api/v1/audit?limit=N`)* |
-| **What to look at** | Per-pack `validation` field on AV runs; `provider_calls` table for LLM call status + `finish_reason` (per [ADR 051](/adrs/051-failure-mode-aware-dispatch)); the warn-level log lines for soft-surface failures |
+| **What to look at** | Per-pack `validation` field on AV runs; `provider_calls` table for LLM call status + `finish_reason` (per [ADR 051](/adrs/failure-mode-aware-dispatch)); the warn-level log lines for soft-surface failures |
 | **Tip** | The [When a pipeline fails](/howto/when-a-pipeline-fails) HOWTO walks the diagnostic surface in depth — including the `validation` field as a fast-path for AV pipelines and the typed-error codes for credential/quota failures. |
+
+### "Strict-mode validate before publishing"
+
+| Field | Value |
+|---|---|
+| **OpenClaw prompt** | *Validate `{{ARTIFACT_KEY}}` strictly — fail if anything fails* |
+| **Direct invocation** | `helmdeck__av-validate` → `video_artifact_key: ...`, `strict: true` |
+| **Outputs** | Either the `validation` structured report (on pass) OR a typed `CodeArtifactFailed` error naming the failing checks |
+| **Tip** | Use this as a CI publish gate. The default-on validation runs on `slides.narrate` / `podcast.generate` are soft-surface (findings land in the output as data, pack returns success). `strict:true` is the bridge to fail-fast for downstream consumers that can't tolerate processing a structurally-invalid artifact. See [ADR 052](/adrs/av-output-validation-post-step) §"Strict mode" for the rationale. |
+
+## Media & creativity
+
+### "Generate AI artwork from a text prompt"
+
+| Field | Value |
+|---|---|
+| **OpenClaw prompt** | *Generate an image: `{{PROMPT}}`* |
+| **Direct invocation** | `helmdeck__image-generate` → `prompt: ...`, `engine: "fal.ai"`, `model: "fal-ai/flux/schnell"` |
+| **Outputs** | `image_artifact_key` (PNG) + `prompt_used` + `model_used` + `seed_used` |
+| **Tip** | Day-1 ships fal.ai (`fal-key` in vault or `HELMDECK_FAL_KEY` env). Default model is `fal-ai/flux/schnell` at ~$0.003/image in 1-3 seconds — great for iteration. For polish, try `fal-ai/flux/pro` (slower, more expensive). Pass `num_images: N` (1-4) to generate alternatives in one call. |
+
+### "Find stock photos for a topic"
+
+| Field | Value |
+|---|---|
+| **OpenClaw prompt** | *Find stock photos of `{{QUERY}}`, horizontal, large* |
+| **Direct invocation** | `helmdeck__stock-search` → `query: ...`, `orientation: "landscape"`, `size: "large"` |
+| **Outputs** | Array of photos with `artifact_key`, `photographer` (attribution), `source_url`, `width`, `height`, `alt_text` |
+| **Tip** | Pexels-backed (real photos, not AI). When the prompt needs an actual photo of a specific real-world thing (a brand, a place, a person), use this; when the prompt needs creative interpretation (an illustration, a concept, an abstract scene), use `image.generate`. The two compose well — search first for hero photos, generate for spot illustrations. |
+
+### "Build a quick demo video from a HyperFrames description"
+
+| Field | Value |
+|---|---|
+| **OpenClaw prompt** | *Make a 15-second HyperFrames video showing `{{DESCRIPTION}}`, landscape aspect ratio* |
+| **Direct invocation** | `helmdeck__hyperframes-compose` → `description: ...`, `aspect_ratio: "16:9"` → `helmdeck__hyperframes-render` with the resulting `composition_html` |
+| **Outputs** | `video_artifact_key` (MP4, short-form ≤12 min at 1080p) + `duration_s` + `has_audio` |
+| **Tip** | `hyperframes.compose` is LLM-backed (canvas + GSAP scaffolding from a plain description); `hyperframes.render` is deterministic (headless Chromium + ffmpeg). For longer-form narrated content with slide structure, use `slides.narrate` — HyperFrames is the right tool for short motion graphics, not slide decks. |
+
+### "Generate marketing copy for an upcoming release"
+
+| Field | Value |
+|---|---|
+| **OpenClaw prompt** | *Write release marketing copy for `{{REPO_URL}}` v`{{VERSION}}`, audience: developers shipping LLM products* |
+| **Direct invocation** | `helmdeck__repo-fetch` → `helmdeck__blog-rewrite_for_audience` with the README + CHANGELOG as `source_content` → `helmdeck__image-generate` for a hero image |
+| **Outputs** | Marketing-tuned blog post + hero image + optionally a press-kit deck (chain through `slides.outline` + `slides.render`) |
+| **Tip** | This composition has no canned pipeline today — chain it manually. The `blog.rewrite_for_audience` step shapes the voice ("hyped engineering announcement" vs "honest release notes" via `angle`). For social-card-sized graphics specifically, pass `image_size: "square_hd"` to `image.generate`. |
 
 ## Memory
 
@@ -150,7 +233,7 @@ When in doubt, **prefer pipelines over packs**. Pipelines wire multi-step decomp
 | **OpenClaw prompt** | *Forget any defaults you learned about `{{TOPIC}}`* |
 | **Direct invocation** | `helmdeck__memory-forget` → `category: ...` *(or `key`)* |
 | **Outputs** | `forgotten_count` |
-| **Tip** | The same pattern PR #424 / engagement-metadata users follow when they want a clean slate per-deck or per-podcast theme. Memory writes are paired with cleanup hooks by design ([stored feedback](/explanation/memory-cleanup)). |
+| **Tip** | The same pattern engagement-metadata users follow when they want a clean slate per-deck or per-podcast theme. Memory writes are paired with cleanup hooks by design — TTL + programmatic forget + category tag co-ship with any memory-write feature. |
 
 ## Picking the right pipeline for your goal
 
@@ -168,5 +251,5 @@ The full pack catalog with input/output contracts is at [docs/PACKS.md](/PACKS);
 - [Calibrate model tiers](/howto/calibrate-model-tiers) — when your model returns empty plans or length-truncated JSON, this is the first thing to check
 - [Free models and context](/howto/free-models-and-context) — what to expect from Tier C free models like the Nemotron / Kimi K2 series
 - [When a pipeline fails](/howto/when-a-pipeline-fails) — diagnostic surface including the `validation` field
-- [ADR 052 — AV output validation as a default-on post-step](/adrs/052-av-output-validation-post-step) — why the `validation` field exists and how to read it
-- [ADR 051 — failure-mode-aware dispatch](/adrs/051-failure-mode-aware-dispatch) — why some models work and some don't on the same prompt
+- [ADR 052 — AV output validation as a default-on post-step](/adrs/av-output-validation-post-step) — why the `validation` field exists and how to read it
+- [ADR 051 — failure-mode-aware dispatch](/adrs/failure-mode-aware-dispatch) — why some models work and some don't on the same prompt

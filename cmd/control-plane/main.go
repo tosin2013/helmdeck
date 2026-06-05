@@ -489,6 +489,15 @@ func main() {
 	if err := packReg.Register(builtin.DocOCR()); err != nil {
 		logger.Warn("register doc.ocr pack failed", "err", err)
 	}
+	// av.validate — structured validation for slides.narrate /
+	// podcast.generate AV artifacts. Phase 2 of the validation arc
+	// (Phase 1 shipped scripts/av-validate.sh in PR #428). No deps;
+	// the handler shells out to the script baked into the sidecar
+	// at /usr/local/bin/av-validate.sh. Phase 3 will wire this as
+	// a default-on post-step on slides.narrate + podcast.generate.
+	if err := packReg.Register(builtin.AVValidate()); err != nil {
+		logger.Warn("register av.validate pack failed", "err", err)
+	}
 	// T807c (ADR 035): doc.parse is Docling-backed. Same pattern as
 	// web.scrape — registered unconditionally so agents discovering
 	// the catalog see it, handler gates on HELMDECK_DOCLING_ENABLED

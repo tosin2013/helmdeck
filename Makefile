@@ -159,6 +159,15 @@ smoke-integration: ## Fast NON-destructive OpenClaw agent round-trip against the
 pipelines-smoke: ## Run built-in pipelines against the already-running stack and assert on real artifacts (integration-aware; no teardown)
 	bash scripts/pipelines-smoke.sh
 
+.PHONY: av-validate
+av-validate: ## Validate a slides.narrate/podcast.generate AV artifact. Usage: make av-validate VIDEO=/path/to.mp4 [CAPTIONS=/path/to.srt] [JSON=1]
+	@bash scripts/av-validate.sh \
+	  $(if $(VIDEO),--video $(VIDEO)) \
+	  $(if $(AUDIO),--audio $(AUDIO)) \
+	  $(if $(CAPTIONS),--captions $(CAPTIONS)) \
+	  $(if $(JSON),--json) \
+	  $(if $(SKIP_CHECKS),--skip-checks $(SKIP_CHECKS))
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)

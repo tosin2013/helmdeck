@@ -82,7 +82,7 @@ jobs:
         # NEW lint issues a PR introduces, so backsliding is loud.
         # Subsequent reliability-arc PRs (B-D) can pay down the
         # backlog without one PR carrying the whole burden.
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
           args: --timeout=5m

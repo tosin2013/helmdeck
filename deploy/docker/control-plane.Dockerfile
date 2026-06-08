@@ -16,7 +16,7 @@
 # also contain. That class of "page loads HTML but blanks on hash
 # mismatch" bug is impossible against an image built from this file.
 
-FROM node:20-alpine AS web-build
+FROM node:26-alpine AS web-build
 WORKDIR /web
 
 # Stage dependencies first so changes to src/ don't bust the npm cache.

@@ -225,6 +225,7 @@ const sidebars: SidebarsConfig = {
             'reference/packs/artifact/put',
             'reference/packs/artifact/get',
             'reference/packs/artifact/list',
+            'reference/packs/artifact/verify-manifest',
           ],
         },
       ],

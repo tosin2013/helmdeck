@@ -517,6 +517,16 @@ func main() {
 	if err := packReg.Register(builtin.ArtifactList()); err != nil {
 		logger.Warn("register artifact.list pack failed", "err", err)
 	}
+	// artifact.verify_manifest — anti-hallucination audit pack
+	// (#461 Phase 1). Skill prose tells the agent "after the
+	// deposit manifest, you MUST call this pack with each
+	// artifact_key from the table." Returns verified[] / missing[]
+	// / all_present / summary; the LLM's next turn sees the
+	// structured result in context and can surface the gap to the
+	// operator instead of hiding behind plausibility-shaped output.
+	if err := packReg.Register(builtin.ArtifactVerifyManifest()); err != nil {
+		logger.Warn("register artifact.verify_manifest pack failed", "err", err)
+	}
 	// T807c (ADR 035): doc.parse is Docling-backed. Same pattern as
 	// web.scrape — registered unconditionally so agents discovering
 	// the catalog see it, handler gates on HELMDECK_DOCLING_ENABLED

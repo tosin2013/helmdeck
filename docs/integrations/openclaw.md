@@ -199,6 +199,19 @@ If the response says "I don't have access to MCP tools" or returns 0 helmdeck to
 - Check `docker logs helmdeck-control-plane | grep mcp/sse` — should show recent `GET /api/v1/mcp/sse` entries.
 - Check the JWT in OpenClaw's MCP config didn't expire (default 7-day window from `configure-openclaw.sh`); rotate with `./scripts/configure-openclaw.sh --rotate-jwt`.
 - Confirm the lowercase `authorization` header survived any manual edits to `~/.openclaw/openclaw.json` (issue #1 workaround — Pascal-cased `Authorization` 401's against OpenClaw 2026.4+).
+- Confirm the network bridge is in place: `docker exec openclaw-openclaw-gateway-1 getent hosts helmdeck-control-plane` should print an IP. If it fails with `bad address`, the `baas-net` network attachment is missing — see "Network bridge survival" below.
+
+### Network bridge survival across rebuilds
+
+The bundle-mcp connection requires `openclaw-gateway` to share the `baas-net` Docker network with `helmdeck-control-plane`. Runtime-only attachment (`docker network connect`) gets erased every time the container is recreated — `compose up --build`, `compose down/up`, host reboot, image refresh. Each erasure produces the same symptom: `bundle-mcp` probes start failing with `getaddrinfo EAI_AGAIN` (network gone) or 401 (stale token survived but the network didn't), the agent stops seeing helmdeck tools, and the operator gets pulled back into manual recovery.
+
+The persistent fix is a compose override that declares the attachment in OpenClaw's lifecycle. `configure-openclaw.sh` installs it by default (added 2026-06-09):
+
+```bash
+ls /root/openclaw/docker-compose.override.yml  # installed by configure-openclaw.sh
+```
+
+The override is at [`deploy/openclaw-baas-net.compose.yml`](https://github.com/tosin2013/helmdeck/blob/main/deploy/openclaw-baas-net.compose.yml) — three-line declarative attachment that `docker compose` auto-loads alongside OpenClaw's main compose. Pass `--skip-compose-override` to `configure-openclaw.sh` if you'd rather manage the override yourself.
 
 ## 5c. Load the agent skills
 

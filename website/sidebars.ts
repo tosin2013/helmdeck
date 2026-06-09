@@ -218,6 +218,15 @@ const sidebars: SidebarsConfig = {
           label: 'av',
           items: ['reference/packs/av/validate'],
         },
+        {
+          type: 'category',
+          label: 'artifact',
+          items: [
+            'reference/packs/artifact/put',
+            'reference/packs/artifact/get',
+            'reference/packs/artifact/list',
+          ],
+        },
       ],
     },
     {

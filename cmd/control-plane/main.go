@@ -498,6 +498,25 @@ func main() {
 	if err := packReg.Register(builtin.AVValidate()); err != nil {
 		logger.Warn("register av.validate pack failed", "err", err)
 	}
+	// artifact.put / artifact.get / artifact.list — the typed
+	// surface for the artifact store. put deposits a final skill
+	// output; get fetches an artifact's bytes by key; list
+	// introspects what's in the store (operator uploads via a
+	// future POST /api/v1/artifacts, or sidecars produced by
+	// earlier packs in a chain). Replaces the prose "save / read
+	// from artifacts" guidance that Tier C free models silently
+	// ignore. Zero deps; pure passthrough to the artifact store
+	// with kind→filename/MIME defaulting on put and a content-
+	// type-driven encoding policy on get.
+	if err := packReg.Register(builtin.ArtifactPut()); err != nil {
+		logger.Warn("register artifact.put pack failed", "err", err)
+	}
+	if err := packReg.Register(builtin.ArtifactGet()); err != nil {
+		logger.Warn("register artifact.get pack failed", "err", err)
+	}
+	if err := packReg.Register(builtin.ArtifactList()); err != nil {
+		logger.Warn("register artifact.list pack failed", "err", err)
+	}
 	// T807c (ADR 035): doc.parse is Docling-backed. Same pattern as
 	// web.scrape — registered unconditionally so agents discovering
 	// the catalog see it, handler gates on HELMDECK_DOCLING_ENABLED

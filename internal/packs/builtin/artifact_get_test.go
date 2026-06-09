@@ -271,7 +271,9 @@ func TestArtifactGet_RoundTripWithArtifactPut(t *testing.T) {
 		t.Fatalf("put: %v", err)
 	}
 	var putOut map[string]any
-	json.Unmarshal(putRaw, &putOut)
+	if uerr := json.Unmarshal(putRaw, &putOut); uerr != nil {
+		t.Fatalf("unmarshal put output: %v", uerr)
+	}
 	key := putOut["artifact_key"].(string)
 
 	// 2. Get.

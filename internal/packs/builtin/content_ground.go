@@ -149,7 +149,15 @@ func ContentGround(d vision.Dispatcher) *packs.Pack {
 		// if the session isn't available.
 		NeedsSession: false,
 		InputSchema: packs.BasicSchema{
-			Required: []string{"model"},
+			// `model` is no longer Required: when omitted, the handler
+			// resolves a default via defaultPackModel() — see
+			// model_defaults.go for the precedence chain
+			// (input → HELMDECK_DEFAULT_PACK_MODEL → first of
+			// HELMDECK_OPENROUTER_MODELS → openrouter/auto). This
+			// closes the Tier C silent-skip gap where small models
+			// reading skill prose forget to pass the model argument
+			// and the call rejects with "model: must have required
+			// properties model" before any actual work begins.
 			Properties: map[string]string{
 				"clone_path": "string",
 				"path":       "string",
@@ -247,9 +255,10 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 		if err := json.Unmarshal(ec.Input, &in); err != nil {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
 		}
-		if strings.TrimSpace(in.Model) == "" {
-			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "model is required (provider/model)"}
-		}
+		// Resolve a default when the caller omitted model. Tier C
+		// models calling this pack via MCP routinely skip the model
+		// arg; defaultPackModel guarantees a non-empty value.
+		in.Model = defaultPackModel(in.Model)
 		// Resolve persona once, up front, so every successful return
 		// path can echo persona_used — including the "no claims found"
 		// early return. directive is only consumed when Rewrite=true.

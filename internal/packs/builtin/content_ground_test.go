@@ -318,7 +318,11 @@ func TestContentGround_MissingRequiredFields(t *testing.T) {
 	}{
 		{"no clone_path or text", `{"path":"q.md","model":"openai/gpt-4o"}`, "either 'text'"},
 		{"no path", `{"clone_path":"/tmp/helmdeck-blog","model":"openai/gpt-4o"}`, "path is required"},
-		{"no model", `{"clone_path":"/tmp/helmdeck-blog","path":"q.md"}`, "model is required"},
+		// `model` is intentionally NOT in this list: omitted model
+		// now falls back to defaultPackModel() (model_defaults.go).
+		// The "Tier C model forgot to pass the argument" failure mode
+		// no longer surfaces as invalid_input — see
+		// TestContentGround_DefaultsModelWhenOmitted below.
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -332,6 +336,39 @@ func TestContentGround_MissingRequiredFields(t *testing.T) {
 				t.Errorf("message = %q, want contains %q", pe.Message, tc.want)
 			}
 		})
+	}
+}
+
+// TestContentGround_DefaultsModelWhenOmitted — Tier C models calling
+// content.ground via MCP routinely omit the `model` argument
+// (observed against openai/gpt-oss-120b:free on 2026-06-09 during
+// the tech-blog-publisher mcp-adr-analysis-server flow). With the
+// model_defaults.go helper, omitted `model` no longer surfaces as
+// invalid_input — the handler resolves a default and proceeds.
+// Verify the call reaches the dispatcher (text-mode happy path)
+// rather than rejecting at input validation.
+func TestContentGround_DefaultsModelWhenOmitted(t *testing.T) {
+	t.Setenv("HELMDECK_DEFAULT_PACK_MODEL", "")
+	t.Setenv("HELMDECK_OPENROUTER_MODELS", "")
+	fc := stubFirecrawlSearch(t, 200, `{"success":true,"data":[]}`)
+	disp := &scriptedDispatcherWT{replies: []string{
+		`{"claims":[]}`, // claim-extractor returns no claims → early return path
+	}}
+	raw, err := runContentGround(t, disp, &execScript{}, fc,
+		`{"text":"This is a real claim.","topic":"x"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if len(disp.captured) != 1 {
+		t.Fatalf("expected dispatcher to be called once (default model resolved + applied), got %d calls", len(disp.captured))
+	}
+	if disp.captured[0].Model != "openrouter/auto" {
+		t.Errorf("dispatcher Model = %q, want openrouter/auto (hard fallback)", disp.captured[0].Model)
+	}
+	// Sanity-check the output is well-formed (handler proceeded past
+	// model resolution).
+	if len(raw) == 0 {
+		t.Error("expected non-empty output")
 	}
 }
 

@@ -10,13 +10,34 @@ The operator-facing surface for helmdeck's model-tier classification. Every chat
 
 ## Recommended customization per tier
 
-| Tier | Recommendation | What to do | Doc |
-|---|---|---|---|
-| **Tier A** (frontier) | **Works out of the box.** Generic SKILL.md as shipped. No per-model profile required. | Build your agent with the standard skill + your own SOUL/USER/IDENTITY/AGENTS for voice and operator persona. Verify behavior on your specific Tier A model — helmdeck assumes Tier A is reliable but doesn't claim certainty without your trace. | (no special doc) |
-| **Tier B** (mid-tier paid or strong free) | **Unknown — experiment first.** Treat as a research question. | A/B test the same prompt with generic skill vs. a borrowed Tier C profile. Compare `artifact.put` calls + `verify_manifest` result + hallucination count. Decide based on YOUR trace. | [`docs/howto/experiment-with-tier-b-models.md`](../howto/experiment-with-tier-b-models.md) |
-| **Tier C** (free / open-weight) | **Must customize.** Generic skill prose fails empirically (PR #462 + the [field reports](/blog)). | Use a model profile from `models/<provider>-<model>.yaml` as the starting point. Fork SOUL/USER/AGENTS per the profile's `prompt_template`. Encode use-case-specific success criteria. | [`docs/howto/add-free-models.md`](../howto/add-free-models.md) |
+| Tier | Structural compliance | Mandatory deposit-step compliance | What to do | Doc |
+|---|---|---|---|---|
+| **Tier A** (frontier) | **Works out of the box.** Generic SKILL.md as shipped. No per-model profile required. Handles parallel tool use, full N-platform fanout, multi-criterion fit checks, one-clarifying-question discipline. | **DOES NOT honor the mandatory deposit step alone.** Empirically observed (2026-06-09): Claude Sonnet 4.6 ran 8 platform variations via `blog.rewrite_for_audience` but **never called `artifact.put` or `artifact.verify_manifest`** — conflated "append CTA" with "deposit to artifacts." This is **tier-invariant**, not Tier-C-specific. The architectural answer is the audit-callback pattern ([PR #462](https://github.com/tosin2013/helmdeck/pull/462)) wired as a typed call the agent invokes, with engine-level enforcement ([#461 Phase 3](https://github.com/tosin2013/helmdeck/issues/461)) as the durable fix. | Build your agent with the standard skill + your own SOUL/USER/IDENTITY/AGENTS for voice and operator persona. Add explicit `artifact.put` + `verify_manifest` rules to AGENTS.md success criteria (not as advisory prose). Verify behavior on your specific Tier A model. | (no special doc — but see [empirical findings](#empirical-findings-from-2026-06-09) below) |
+| **Tier B** (mid-tier paid or strong free) | **Unknown — experiment first.** Treat as a research question. | **Unknown.** Run the same A/B and count `artifact.put` vs claimed deposits. | A/B test the same prompt with generic skill vs. a borrowed Tier C profile. Compare `artifact.put` calls + `verify_manifest` result + hallucination count. Decide based on YOUR trace. | [`docs/howto/experiment-with-tier-b-models.md`](../howto/experiment-with-tier-b-models.md) |
+| **Tier C** (free / open-weight) | **Must customize.** Generic skill prose fails empirically — three failure modes documented ([PR #462](https://github.com/tosin2013/helmdeck/pull/462) + the [field reports](/blog)). | **Profile helps but does NOT eliminate simplification.** Profile-aware Tier C agent fired `verify_manifest` end-to-end with `all_present: true` on the 2026-06-09 trace, but simplified the 9-platform table to 2. | Use a model profile from `models/<provider>-<model>.yaml` as the starting point. Fork SOUL/USER/AGENTS per the profile's `prompt_template`. Encode use-case-specific success criteria with hard counts. | [`docs/howto/add-free-models.md`](../howto/add-free-models.md) |
 
-The library is a **starting point**, not a finished product. Operators MUST customize per (model × use-case). One library entry won't fit every use case.
+The library is a **starting point**, not a finished product. Operators MUST customize per (model × use-case). One library entry won't fit every use case. **The mandatory deposit step needs engine-level enforcement to be reliable across tiers** — that's [#461 Phase 3](https://github.com/tosin2013/helmdeck/issues/461).
+
+### Empirical findings from 2026-06-09
+
+Same prompt (`tech-blog-publisher` on the mcp-adr-analysis-server source), same skill, two model tiers — three traces captured:
+
+| Behavior | Tier C baseline (no profile) | Tier C w/ profile (`gpt-oss-120b:free`) | Tier A (`claude-sonnet-4.6`) |
+|---|---|---|---|
+| Parallel tool use at startup | ✗ | ✗ | **✓ 3 simultaneous** |
+| Real `blog.rewrite_for_audience` calls | 4 (in chat, not deposited) | 0 (used pipeline shortcut) | **✓ 8** |
+| Real `pipeline-run` calls (auto-deposit producer) | 0 | **✓ 2** | 0 |
+| Real `blog.append_cta` calls | 0 | 0 | 8 (all REJECTED — see [PR #468](https://github.com/tosin2013/helmdeck/pull/468)) |
+| InfoQ 6-criterion fit check executed | skipped | skipped | **✓ per-criterion grades** |
+| Multi-step plan acknowledged upfront | partial | partial | **✓ full 5-step plan stated** |
+| Honored "ask at most ONE clarifying question" rule | ✗ (hedged) | ✗ (hedged) | **✓ one question + stated defaults** |
+| **`artifact.put` calls** | **0** | **0** | **0** |
+| **`artifact.verify_manifest` calls** | **0** | **1 (`all_present: true, 2 of 2 verified`)** | **0** |
+| Hallucinated manifest entries | 6 (earlier session) | 0 | 0 |
+
+**Reading the table**: Tier A handles every *structural* aspect of the skill better than either Tier C variant — parallel tool use, full fanout, fit-check rigor, clarifying-question discipline. But on the load-bearing "deposit step is mandatory" rule, **all three tiers behaved the same way (skipped it)**. Only the profile-aware Tier C variant fired `verify_manifest` — and it did so via the `pipeline-run` shortcut, where the audit was implicit in the pipeline contract rather than an explicit agent decision.
+
+**The deposit-step failure is tier-invariant.** Skill prose marked "MANDATORY" is treated as advisory regardless of model capability. The architectural answer is at the engine layer, not the skill layer — see [#461 Phase 3](https://github.com/tosin2013/helmdeck/issues/461).
 
 **Per-model profiles available today**: [`openai/gpt-oss-120b:free`](https://github.com/tosin2013/helmdeck/blob/main/models/openai-gpt-oss-120b-free.yaml) (first entry; sourced from OpenAI Harmony + Together AI + IBM watsonx docs; empirically validated 2026-06-09). Planned per [issue #464](https://github.com/tosin2013/helmdeck/issues/464): `meta-llama/llama-3.3-70b-instruct:free`, `nvidia/nemotron-3-super-120b-a12b:free`, `google/gemma-2-9b-it:free`, `z-ai/glm-4.5-air:free` — each requires its own empirical validation before shipping.
 

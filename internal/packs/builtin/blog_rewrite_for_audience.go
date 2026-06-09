@@ -124,7 +124,10 @@ func BlogRewriteForAudience(d vision.Dispatcher) *packs.Pack {
 			Limitations:    []string{"does not fetch sources (call doc.parse / web.scrape / research.deep first)", "does not insert inline citations (chain content.ground rewrite:false after)", "does not publish to a CMS (chain blog.publish to save the artifact)"},
 		},
 		InputSchema: packs.BasicSchema{
-			Required: []string{"source_content", "audience", "model"},
+			// `model` is no longer Required: when omitted, the handler
+			// resolves a default via defaultPackModel() — same
+			// rationale as content.ground (see model_defaults.go).
+			Required: []string{"source_content", "audience"},
 			Properties: map[string]string{
 				"source_content": "string",
 				"audience":       "string",
@@ -166,9 +169,9 @@ func blogRewriteHandler(d vision.Dispatcher) packs.HandlerFunc {
 		if strings.TrimSpace(in.Audience) == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "audience is required (e.g. 'developers building AI agents')"}
 		}
-		if strings.TrimSpace(in.Model) == "" {
-			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "model is required (provider/model id; see helmdeck://models)"}
-		}
+		// Resolve a default when the caller omitted model. See
+		// model_defaults.go for the precedence chain.
+		in.Model = defaultPackModel(in.Model)
 
 		maxTokens := in.MaxTokens
 		if maxTokens <= 0 {

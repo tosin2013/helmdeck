@@ -94,8 +94,11 @@ func TestBlogRewrite_RequiredFields(t *testing.T) {
 	for _, tc := range []struct{ name, input string }{
 		{"no source_content", `{"audience":"x","model":"m"}`},
 		{"no audience", `{"source_content":"x","model":"m"}`},
-		{"no model", `{"source_content":"x","audience":"a"}`},
 		{"empty source_content", `{"source_content":"   ","audience":"a","model":"m"}`},
+		// `no model` removed: omitted model now falls back to
+		// defaultPackModel() (model_defaults.go) rather than
+		// rejecting as invalid_input. See
+		// TestBlogRewrite_DefaultsModelWhenOmitted below.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := runBlogRewrite(t, &scriptedDispatcherWT{}, tc.input)
@@ -119,6 +122,44 @@ func TestBlogRewrite_RegisteredWithoutDispatcher(t *testing.T) {
 	pe := &packs.PackError{}
 	if !errors.As(err, &pe) || pe.Code != packs.CodeInternal {
 		t.Errorf("want CodeInternal when dispatcher is nil, got %v", err)
+	}
+}
+
+// TestBlogRewrite_DefaultsModelWhenOmitted — Tier C models calling
+// this pack via MCP routinely omit the `model` argument. With the
+// model_defaults.go helper, omitted `model` falls back to a sensible
+// default (HELMDECK_DEFAULT_PACK_MODEL → first OPENROUTER_MODELS
+// entry → openrouter/auto hard fallback) instead of rejecting the
+// call with invalid_input. The output's model field echoes the
+// resolved value so the caller can see what fired.
+func TestBlogRewrite_DefaultsModelWhenOmitted(t *testing.T) {
+	t.Setenv("HELMDECK_DEFAULT_PACK_MODEL", "")
+	t.Setenv("HELMDECK_OPENROUTER_MODELS", "")
+	disp := &scriptedDispatcherWT{replies: []string{"# Post\n\nbody"}}
+	raw, err := runBlogRewrite(t, disp, `{"source_content":"x","audience":"devs"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct{ Model string }
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Model != "openrouter/auto" {
+		t.Errorf("default model not applied: got %q, want openrouter/auto", out.Model)
+	}
+}
+
+func TestBlogRewrite_DefaultsModelHonorsOperatorOverride(t *testing.T) {
+	t.Setenv("HELMDECK_DEFAULT_PACK_MODEL", "openrouter/openai/gpt-oss-120b:free")
+	disp := &scriptedDispatcherWT{replies: []string{"# Post\n\nbody"}}
+	raw, err := runBlogRewrite(t, disp, `{"source_content":"x","audience":"devs"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct{ Model string }
+	_ = json.Unmarshal(raw, &out)
+	if out.Model != "openrouter/openai/gpt-oss-120b:free" {
+		t.Errorf("operator override not honored: got %q", out.Model)
 	}
 }
 

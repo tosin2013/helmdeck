@@ -6,7 +6,7 @@ tags: [agent-architecture, mcp, weak-models, field-report]
 description: For any pack call an LLM might transform in its text response, ship a paired audit pack that reads ground truth. The architecture is the same shape as ADR 052 av-validate — applied at the chat-response layer instead of the artifact layer.
 image: /img/social-card.png
 date: 2026-06-09
-draft: true
+draft: false
 ---
 
 ## Hook

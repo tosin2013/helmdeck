@@ -6,7 +6,7 @@ tags: [weak-models, agent-architecture, field-report, friction]
 description: A Tier C free model produced a confidently-formatted six-entry deposit manifest, with byte sizes and a policy citation, for artifacts that never existed. One real pack call, six fabricated. The architectural fix is verify-against-ground-truth.
 image: /img/social-card.png
 date: 2026-06-09
-draft: true
+draft: false
 ---
 
 ## Hook

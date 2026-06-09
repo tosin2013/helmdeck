@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The helmdeck contributors
+#
+# openclaw-baas-net.compose.yml — Docker Compose override that
+# declaratively bridges helmdeck's `baas-net` network into the
+# OpenClaw gateway container so `http://helmdeck-control-plane:3000`
+# resolves by DNS across every container recreation.
+#
+# Why this file exists: prior to its introduction, the bridge was
+# established at runtime by `scripts/configure-openclaw.sh` step 1
+# via `docker network connect baas-net openclaw-openclaw-gateway-1`.
+# Runtime attachments are erased every time the container is
+# recreated (compose up --build, compose down/up, host reboot, image
+# refresh). Each recreation produced the same 24-hour debugging loop:
+# bundle-mcp probes failing with `getaddrinfo EAI_AGAIN` or 401
+# (the latter when a stale token survived but the network didn't),
+# operator reports "the LLM stopped seeing helmdeck packs," operator
+# manually re-runs configure-openclaw.sh, repeat next rebuild.
+#
+# By declaring the network attachment in a compose override the
+# bridge becomes part of the OpenClaw stack's lifecycle: every
+# `docker compose up` re-attaches it automatically, regardless of
+# how the container got recreated.
+#
+# How to use this file
+# --------------------
+# Install once into the OpenClaw compose directory (whichever path
+# holds the OpenClaw docker-compose.yml — typically /root/openclaw,
+# but configurable via OPENCLAW_COMPOSE_FILE). The companion
+# `scripts/configure-openclaw.sh --install-compose-override` flag
+# handles the copy and prints the next steps; manual installs are
+# also fine:
+#
+#   cp deploy/openclaw-baas-net.compose.yml \
+#      /root/openclaw/docker-compose.override.yml
+#
+# Docker Compose auto-discovers `docker-compose.override.yml` (legacy
+# name, used by OpenClaw's main compose) and `compose.override.yaml`
+# (modern). Both work — pick whichever matches the main compose's
+# naming style.
+#
+# Prerequisites
+# -------------
+# `baas-net` must already exist on the host. helmdeck's own compose
+# creates it (`networks.baas-net.name: baas-net`); if you've never
+# brought up the helmdeck stack, do that once before relying on this
+# override.
+#
+# Verification
+# ------------
+# After installing the override and running `docker compose up -d`:
+#
+#   docker exec openclaw-openclaw-gateway-1 getent hosts helmdeck-control-plane
+#   # → 172.18.0.X helmdeck-control-plane
+#
+# If DNS still fails after the override is in place, confirm
+# `baas-net` exists (`docker network ls | grep baas-net`) and that
+# the OpenClaw service name in the override matches the actual
+# service name in your `docker-compose.yml` — `openclaw-gateway` is
+# the upstream default but can be renamed.
+#
+# Why this isn't in helmdeck's compose.yaml
+# -----------------------------------------
+# helmdeck and OpenClaw are independent Docker projects with their
+# own compose lifecycles. helmdeck owning network attachment for an
+# external project's container would violate the project boundary —
+# this override file lives in helmdeck's tree (so the integration
+# guide ships with the runbook), but it's applied at the OpenClaw
+# project's compose level so OpenClaw's container lifecycle remains
+# the source of truth for OpenClaw's networking.
+
+services:
+  openclaw-gateway:
+    networks:
+      - default
+      - baas-net
+
+networks:
+  # `external: true` tells compose "don't create this; trust that
+  # something else owns it." That something is the helmdeck compose
+  # stack — see deploy/compose.yaml `networks.baas-net.name`.
+  baas-net:
+    external: true
+    name: baas-net

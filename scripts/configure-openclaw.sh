@@ -23,6 +23,7 @@
 #   ./scripts/configure-openclaw.sh --model <id>              # pin a different primary model
 #   ./scripts/configure-openclaw.sh --fallbacks a,b,c         # comma-separated fallback chain
 #   ./scripts/configure-openclaw.sh --skip-mcp --skip-skills  # only refresh identity
+#   ./scripts/configure-openclaw.sh --skip-compose-override   # don't install docker-compose.override.yml
 #   ./scripts/configure-openclaw.sh --smoke                   # also run the integration smoke check
 #
 # Exits 0 on success. Prints the verification probe commands at
@@ -47,6 +48,7 @@ SKIP_MCP="false"
 SKIP_SKILLS="false"
 DO_SMOKE="false"
 SKILL_ONLY=""
+INSTALL_COMPOSE_OVERRIDE="true"
 
 HELMDECK_ROOT="${HELMDECK_ROOT:-/root/helmdeck}"
 HELMDECK_ENV_FILE="${HELMDECK_ENV_FILE:-${HELMDECK_ROOT}/deploy/compose/.env.local}"
@@ -92,6 +94,7 @@ while [[ $# -gt 0 ]]; do
 		--skip-mcp)       SKIP_MCP="true"; shift ;;
 		--skip-skills)    SKIP_SKILLS="true"; shift ;;
 		--smoke)          DO_SMOKE="true"; shift ;;
+		--skip-compose-override) INSTALL_COMPOSE_OVERRIDE="false"; shift ;;
 		-h|--help)        usage ;;
 		*) echo "unknown flag: $1" >&2; exit 2 ;;
 	esac
@@ -197,13 +200,61 @@ fi
 log "preflight ok"
 
 # --- 1. bridge baas-net into the openclaw container -----------------------
+#
+# Two-layer attachment so the bridge survives container recreation:
+#
+#   1a. Install a compose override into the OpenClaw compose dir
+#       (deploy/openclaw-baas-net.compose.yml). This declares the
+#       attachment in OpenClaw's lifecycle so every `docker compose up`
+#       re-establishes it automatically.
+#
+#   1b. Best-effort runtime `docker network connect` for the CURRENT
+#       container instance. The override takes effect on the NEXT
+#       compose-recreate; until then this step keeps the live
+#       container reachable so the rest of this run (JWT mint, MCP
+#       config write, skill install) can probe and verify against
+#       helmdeck without requiring a restart.
+#
+# History: the runtime-only attachment was the recurring 24-hour
+# breakage source — every rebuild dropped the bridge silently, the
+# bundle-mcp probes started 401-ing (stale token) or DNS-failing
+# (network gone), and operators re-ran this script. The override
+# file moves the load-bearing piece to a place that survives.
+
+if [[ "$INSTALL_COMPOSE_OVERRIDE" == "true" ]]; then
+	override_src="${HELMDECK_ROOT}/deploy/openclaw-baas-net.compose.yml"
+	# Detect the OpenClaw compose directory from OPENCLAW_COMPOSE_FILE.
+	# OpenClaw's main compose is `docker-compose.yml` (legacy naming),
+	# so the auto-loaded override is `docker-compose.override.yml`.
+	openclaw_compose_dir="$(dirname "$OPENCLAW_COMPOSE_FILE")"
+	override_dst="${openclaw_compose_dir}/docker-compose.override.yml"
+	if [[ ! -f "$override_src" ]]; then
+		warn "compose-override: source missing ($override_src) — skipping; manual fix:"
+		warn "  cp deploy/openclaw-baas-net.compose.yml $override_dst"
+	elif [[ ! -d "$openclaw_compose_dir" ]]; then
+		warn "compose-override: OpenClaw compose dir not found ($openclaw_compose_dir) — skipping"
+	elif [[ -f "$override_dst" ]] && ! cmp -s "$override_src" "$override_dst"; then
+		# An existing, DIFFERENT override is present. Back it up and
+		# replace — but loudly, so the operator can see we touched it.
+		backup="${override_dst}.bak.$(date -u +%Y%m%d-%H%M%S)"
+		warn "compose-override: existing $override_dst differs; backing up to $backup"
+		cp "$override_dst" "$backup"
+		cp "$override_src" "$override_dst"
+		log "compose-override: installed $override_dst (backup at $backup)"
+	elif [[ -f "$override_dst" ]]; then
+		log "compose-override: $override_dst already current"
+	else
+		cp "$override_src" "$override_dst"
+		log "compose-override: installed $override_dst"
+	fi
+fi
 
 if docker inspect "$OPENCLAW_CONTAINER" \
 	 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
 	 | grep -qw "$HELMDECK_NETWORK"; then
 	log "network: $HELMDECK_NETWORK already attached to $OPENCLAW_CONTAINER"
 else
-	log "network: attaching $HELMDECK_NETWORK to $OPENCLAW_CONTAINER"
+	log "network: attaching $HELMDECK_NETWORK to $OPENCLAW_CONTAINER (runtime — override takes effect on next compose-up)"
 	docker network connect "$HELMDECK_NETWORK" "$OPENCLAW_CONTAINER"
 fi
 

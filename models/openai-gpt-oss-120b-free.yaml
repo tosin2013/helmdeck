@@ -143,9 +143,73 @@ prompt_template: |
 
 validated_against:
   - skill: tech-blog-publisher
-    workspace: workspace-blog-gpt-oss
-    agent: press-gpt-oss
-    baseline: workspace-blog (press) — same skill, same prompt, generic SKILL.md
-    metric: number of real artifact.put calls per session vs hallucinated manifest entries
+    workspace: <operator-personal — sanitized for public docs>
+    agent: <profile-aware variant — sanitized for public docs>
+    baseline: <baseline variant — same skill, same prompt, generic SKILL.md>
+    metric: real pack calls + verify_manifest call + all_present result
     trace_dates: [2026-06-09]
-    finding: pending  # filled in after the empirical comparison
+    finding: |
+      Profile-aware agent on openai/gpt-oss-120b:free, same prompt as baseline
+      (publishing strategy for a multi-source repo + docs site), produced:
+
+      | Metric                       | Baseline (no profile)  | Profile-aware       |
+      |------------------------------|------------------------|---------------------|
+      | pipeline-run calls           | 0                      | 2                   |
+      | Real blog artifacts in store | 0                      | 2                   |
+      | artifact.verify_manifest     | 0 calls                | 1 call              |
+      | verify result                | n/a                    | all_present: true   |
+      |                              |                        | 2 of 2 verified     |
+      | Hallucinated manifest entries| 6 (earlier session)    | 0                   |
+      | 6-section structured output  | partial                | complete            |
+
+      Strategic insight: profile-aware agent partially honored the skill —
+      it executed the audit-callback pattern end-to-end with real artifacts
+      AND simplified the skill's ~9-platform fanout to 2 by using
+      pipeline-run (auto-deposit via blog.publish) instead of per-platform
+      blog.rewrite_for_audience calls. The simplification is a real
+      behavior, not a bug: gpt-oss-120b reasons about the objective
+      (artifacts in store) and picks the most direct route. The library
+      is a starting point for non-frontier models; operators MUST customize
+      per use case.
+
+# --- community-contributed traces -------------------------------
+#
+# Operators running custom Tier C agents are producing data the rest
+# of the community needs. Submit your trace excerpts here via PR; see
+# docs/howto/add-free-models.md § 7 for the contribution paths.
+#
+# Schema (one entry per submitted use case):
+#
+#   - contributor: <github-handle or "anonymous">
+#     use_case: <short label, e.g., "research-summarizer">
+#     session_date: <YYYY-MM-DD>
+#     metric_summary:
+#       real_pack_calls: <int>
+#       verify_manifest_called: <bool>
+#       all_present: <bool>
+#       hallucination_count: <int>
+#       simplification_observed: <bool>
+#     decision: <"profile-works" | "profile-helps-partially" |
+#                "profile-not-enough" | "no-profile-needed">
+#     notes: <one or two lines>
+#     pr_or_issue_url: <link>
+
+community_traces:
+  - contributor: tosin2013
+    use_case: publishing-strategist
+    session_date: 2026-06-09
+    metric_summary:
+      real_pack_calls: 6        # 1 plan + 2 pipeline-run + 1 verify + 2 artifact-get
+      verify_manifest_called: true
+      all_present: true
+      hallucination_count: 0
+      simplification_observed: true   # 9-platform table simplified to 2
+    decision: profile-helps-partially
+    notes: |
+      Profile-aware AGENTS.md drove the audit-callback pattern to fire
+      end-to-end (artifact.verify_manifest returned all_present:true on
+      2 of 2 real artifacts). Same agent simplified the 9-platform skill
+      table to 2 variations using pipeline-run shortcut. This proves the
+      profile is necessary but not sufficient; per-use-case customization
+      is required for full skill compliance.
+    pr_or_issue_url: https://github.com/tosin2013/helmdeck/pull/462

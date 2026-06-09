@@ -142,6 +142,25 @@ the project also welcomes:
 - **ADR drafts** for design decisions you think the project should
   formalize. ADRs live in `docs/adrs/` and follow the existing
   numbered template.
+- **Model behavior reports (community research)** — helmdeck's
+  per-model prompting-profile library lives in `models/<provider>-<model>.yaml`.
+  Operators running custom Tier C agents are producing data the rest of the
+  community needs. Three submission shapes:
+  - **Profile contribution** — refine an existing profile or add a new model.
+    Open a PR with your trace evidence in the `community_traces[]` field of
+    the relevant YAML file. Schema documented inline in
+    [`models/openai-gpt-oss-120b-free.yaml`](models/openai-gpt-oss-120b-free.yaml).
+  - **Use-case contribution** — used an existing profile on a new use case
+    (research summarizer, code reviewer, compliance auditor, etc.) with
+    different results? Open an issue tagged `field-report` with the trace
+    excerpt and comparison metrics.
+  - **Tier B research** — Tier B is an open question. Run the A/B test
+    methodology in [`docs/howto/experiment-with-tier-b-models.md`](docs/howto/experiment-with-tier-b-models.md)
+    and submit your finding (positive OR null result — both matter).
+
+  See [`docs/howto/add-free-models.md`](docs/howto/add-free-models.md)
+  §7 for the detailed workflow. Contribution is optional, not gated —
+  helmdeck remains usable without it. We're all doing this together.
 - **Field reports / blog posts (community welcome)** — the helmdeck
   blog at `helmdeck.dev/blog` is open to community submissions.
   We especially want **independent reproductions** of cost / accuracy

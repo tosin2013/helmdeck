@@ -8,6 +8,18 @@ keywords: [helmdeck, models, tier, budget, prompt variant, routing, MCP]
 
 The operator-facing surface for helmdeck's model-tier classification. Every chat completion model that hits the gateway falls into one of three tiers (A, B, C) plus an implicit "unknown" bucket that resolves to Tier C. The tier drives five tier-aware knobs simultaneously — catalog projection size, output token budget, prompt-template variant, strict-JSON mode, and prefix-cache routing. The full mechanism lives in [`internal/llmcontext/budgets.go`](https://github.com/tosin2013/helmdeck/blob/main/internal/llmcontext/budgets.go) and is described architecturally in [ADR 050](../adrs/050-llm-context-manager.md), [ADR 051](../adrs/051-failure-mode-aware-dispatch.md), and [ADR 053](../adrs/053-tier-aware-plan-prompt-variants.md). This page is the operator's quick lookup.
 
+## Recommended customization per tier
+
+| Tier | Recommendation | What to do | Doc |
+|---|---|---|---|
+| **Tier A** (frontier) | **Works out of the box.** Generic SKILL.md as shipped. No per-model profile required. | Build your agent with the standard skill + your own SOUL/USER/IDENTITY/AGENTS for voice and operator persona. Verify behavior on your specific Tier A model — helmdeck assumes Tier A is reliable but doesn't claim certainty without your trace. | (no special doc) |
+| **Tier B** (mid-tier paid or strong free) | **Unknown — experiment first.** Treat as a research question. | A/B test the same prompt with generic skill vs. a borrowed Tier C profile. Compare `artifact.put` calls + `verify_manifest` result + hallucination count. Decide based on YOUR trace. | [`docs/howto/experiment-with-tier-b-models.md`](../howto/experiment-with-tier-b-models.md) |
+| **Tier C** (free / open-weight) | **Must customize.** Generic skill prose fails empirically (PR #462 + the [field reports](/blog)). | Use a model profile from `models/<provider>-<model>.yaml` as the starting point. Fork SOUL/USER/AGENTS per the profile's `prompt_template`. Encode use-case-specific success criteria. | [`docs/howto/add-free-models.md`](../howto/add-free-models.md) |
+
+The library is a **starting point**, not a finished product. Operators MUST customize per (model × use-case). One library entry won't fit every use case.
+
+**Per-model profiles available today**: [`openai/gpt-oss-120b:free`](https://github.com/tosin2013/helmdeck/blob/main/models/openai-gpt-oss-120b-free.yaml) (first entry; sourced from OpenAI Harmony + Together AI + IBM watsonx docs; empirically validated 2026-06-09). Planned per [issue #464](https://github.com/tosin2013/helmdeck/issues/464): `meta-llama/llama-3.3-70b-instruct:free`, `nvidia/nemotron-3-super-120b-a12b:free`, `google/gemma-2-9b-it:free`, `z-ai/glm-4.5-air:free` — each requires its own empirical validation before shipping.
+
 ## How tier affects behavior
 
 | Knob | Tier A | Tier B | Tier C | Source ADR |

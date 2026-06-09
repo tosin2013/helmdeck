@@ -12,6 +12,8 @@ This pack exists for one reason: **Tier C free models silently treat skill prose
 
 The fix is the same shape as [ADR 052's av-validate decision](/adrs/av-output-validation-post-step): turn an advisory step into a typed pack call. A skill that ends with `helmdeck__artifact-put { kind: "blog", content: "..." }` gets deterministic deposit regardless of model tier.
 
+> **Pipeline-run shortcut** (observed 2026-06-09): Tier C models given multi-deposit success criteria often choose `pipeline-run` (with packs that include `blog.publish` as an auto-deposit terminal step) over explicit `artifact.put` chains. This is **valid behavior** — the artifact lands in the store the same way, just via a different producer. The audit-callback pattern (`artifact.verify_manifest`) verifies the result regardless of which producer was used. See [the empirical validation field report](/blog/empirical-validation-per-model-profile) for the trace data.
+
 ## When to use
 
 - **Final step in a content-producing skill** — e.g. `tech-blog-publisher` should always end with `artifact.put` after generating each platform variation, before any `blog.publish` call.

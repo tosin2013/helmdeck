@@ -1,0 +1,215 @@
+# SPDX-License-Identifier: Apache-2.0
+# openai/gpt-oss-120b:free — model prompting profile
+#
+# First file in the per-model prompting-profile library proposed in
+# issue #464. Sourced from OFFICIAL model documentation only — see
+# `official_docs` below for the citation list. The blog draft is
+# tracked in PR #463 (the audit-callback + plausibility-shaped-output
+# series); a successful empirical comparison run on the press-gpt-oss
+# custom agent adds the third post to that series.
+
+provider: openrouter
+model: openai/gpt-oss-120b:free
+family: gpt-oss
+parameters: 117_000_000_000     # 117B params, MoE
+active_parameters: 5_100_000_000 # ~5.1B active per pass
+tier: C                          # see docs/reference/models.md
+
+context_window: 131072
+context_window_notes: |
+  OpenRouter free route advertises 131K. Real per-call ceilings
+  vary by provider downstream; the tech-blog-publisher skill has
+  already hit "Context overflow: estimated context size exceeds
+  safe threshold" at ~131,073 tokens during 2026-06-09 testing
+  with the 17 KB monolithic SKILL.md + 98 tools loaded. Plan
+  prompts assuming a SAFE working window of ~96 KB.
+
+official_docs:
+  - https://developers.openai.com/cookbook/articles/openai-harmony   # Harmony response format
+  - https://docs.together.ai/docs/gpt-oss                            # Together AI GPT-OSS quickstart
+  - https://www.ibm.com/docs/en/watsonx/watson-orchestrate/base?topic=models-gpt-oss-model-behavior-instruction-guidelines  # IBM watsonx model behavior
+  - https://openrouter.ai/openai/gpt-oss-120b:free                   # OpenRouter pricing + benchmark
+
+# --- prompting style ---------------------------------------------
+
+prompting_style: objectives_constraints_success_criteria
+prompting_style_notes: |
+  GPT-OSS performs best when given a clear objective, explicit
+  constraints, and machine-checkable success criteria — and avoids
+  micromanagement of method. Per Together AI's docs:
+  "performs best when given clear objectives while avoiding
+  over-prompting or micromanaging the method."
+
+  The canonical shape: Objective + context + source priority +
+  constraints + output format + success criteria. NOT step-by-step
+  numbered procedures.
+
+reasoning_effort_control: true
+reasoning_effort_levels: [low, medium, high]
+reasoning_effort_defaults:
+  summarization: low
+  extraction: low
+  formatting: low
+  product_requirements: medium
+  code_review: medium
+  scoring_logic: medium
+  architecture: high
+  debugging: high
+  financial_modeling: high
+  multi_document_synthesis: high
+
+source_priority_directive: required
+source_priority_directive_notes: |
+  GPT-OSS can prefer internal knowledge unless told otherwise in
+  some agent stacks. IBM watsonx behavior docs explicitly say to
+  clearly state priorities and constraints, avoid conflicting
+  instructions, and tell it when to prioritize connected knowledge
+  bases over internal knowledge. Skills using gpt-oss MUST include
+  an explicit source-priority section.
+
+harmony_format: true
+harmony_format_notes: |
+  GPT-OSS uses the harmony response format and supports chain-of-
+  thought internally. The chain-of-thought is not intended to be
+  shown directly to end users. Agent harnesses that surface
+  reasoning tokens should explicitly drop them from the final
+  visible response — see ADR 053 PromptVariantFullSteps
+  retry-on-reasoning-only logic for the existing helmdeck handling.
+
+# --- skill-prose guidance ----------------------------------------
+
+best_practices:
+  - "Lead with OBJECTIVE, not 'Step 1.'"
+  - "State CONSTRAINTS as concrete rules, not 'do this then that.'"
+  - "Define SUCCESS CRITERIA that the model can check itself."
+  - "Use a SOURCE PRIORITY section: uploaded data → project context → general knowledge."
+  - "Compact role instructions — no conflicting brevity/depth directives."
+  - "For coding tasks: ask for diffs, tests, assumptions, minimal patches."
+  - "For chained tool calls: frame the chain as part of the success criteria, not as separate 'steps.'"
+  - "Specify reasoning effort per task type (low/medium/high) — see reasoning_effort_defaults."
+
+anti_patterns:
+  - "Step-by-step micromanagement ('First X, then Y, then Z, then compare A, then rewrite...')."
+  - "Conflicting brevity directives ('be concise' AND 'be exhaustive' in the same prompt)."
+  - "Implicit source priority (assume the model will read uploaded files first without being told)."
+  - "Numbered procedure of 5+ steps where the order matters — gpt-oss reasons rather than follows; long ordered lists trigger the plausibility-shaped-output failure mode where the model hallucinates intermediate steps as text instead of executing them (see 2026-06-09 trace, PR #462 + blog draft 'plausibility-shaped-output')."
+  - "Treating tool calls as separable 'steps' rather than as part of success criteria. On Tier C, advisory 'remember to call X' is treated as advisory and frequently skipped; framing X as part of WHAT MAKES THE OUTPUT VALID raises the call rate."
+  - "Marking instructions 'MANDATORY' or 'CRITICAL' without integrating them into success criteria — this gives the model the option to acknowledge the mandate in text while skipping the action (see 'mandatory per SKILL.md' citation in 2026-06-09 trace)."
+
+# --- chain-call reliability (the load-bearing helmdeck concern) --
+
+chain_call_reliability:
+  short_chains: high      # 1-2 pack calls per turn
+  medium_chains: medium   # 3-4 pack calls per turn
+  long_chains: low        # 5+ pack calls per turn
+  notes: |
+    Observed in 2026-06-09 tech-blog-publisher tests: gpt-oss-120b
+    reliably makes 1-2 real pack calls per turn, then hallucinates
+    the rest of a 6+ call chain as text. This is "plausibility-
+    shaped output" (PR #462, blog draft). Mitigation: structure
+    skills as single-action turns OR pair every multi-call producer
+    with an audit pack the agent MUST also call (the audit-callback
+    pattern, issue #461).
+
+# --- skill prose template for gpt-oss --------------------------
+
+prompt_template: |
+  ## Objective
+  {what the agent is trying to produce}
+
+  ## Source priority
+  1. {primary source — uploaded data / direct repo content}
+  2. {secondary source — pack output / scraped content}
+  3. {fallback source — model general knowledge}
+  4. If the answer is not supported by the data, say what is missing instead of guessing.
+
+  ## Constraints
+  - {hard rule 1 — what must NOT happen}
+  - {hard rule 2}
+  - {style/voice constraints from USER.md and SOUL.md}
+
+  ## Output format
+  - {required sections, in order, with explicit content shape}
+
+  ## Success criteria
+  - {criterion 1 — machine-checkable, e.g. "every artifact key in the manifest exists in the store per artifact.verify_manifest"}
+  - {criterion 2}
+  - {criterion 3}
+
+  ## Reasoning
+  Reasoning: {low / medium / high}
+
+# --- empirical-validation pointer --------------------------------
+
+validated_against:
+  - skill: tech-blog-publisher
+    workspace: <operator-personal — sanitized for public docs>
+    agent: <profile-aware variant — sanitized for public docs>
+    baseline: <baseline variant — same skill, same prompt, generic SKILL.md>
+    metric: real pack calls + verify_manifest call + all_present result
+    trace_dates: [2026-06-09]
+    finding: |
+      Profile-aware agent on openai/gpt-oss-120b:free, same prompt as baseline
+      (publishing strategy for a multi-source repo + docs site), produced:
+
+      | Metric                       | Baseline (no profile)  | Profile-aware       |
+      |------------------------------|------------------------|---------------------|
+      | pipeline-run calls           | 0                      | 2                   |
+      | Real blog artifacts in store | 0                      | 2                   |
+      | artifact.verify_manifest     | 0 calls                | 1 call              |
+      | verify result                | n/a                    | all_present: true   |
+      |                              |                        | 2 of 2 verified     |
+      | Hallucinated manifest entries| 6 (earlier session)    | 0                   |
+      | 6-section structured output  | partial                | complete            |
+
+      Strategic insight: profile-aware agent partially honored the skill —
+      it executed the audit-callback pattern end-to-end with real artifacts
+      AND simplified the skill's ~9-platform fanout to 2 by using
+      pipeline-run (auto-deposit via blog.publish) instead of per-platform
+      blog.rewrite_for_audience calls. The simplification is a real
+      behavior, not a bug: gpt-oss-120b reasons about the objective
+      (artifacts in store) and picks the most direct route. The library
+      is a starting point for non-frontier models; operators MUST customize
+      per use case.
+
+# --- community-contributed traces -------------------------------
+#
+# Operators running custom Tier C agents are producing data the rest
+# of the community needs. Submit your trace excerpts here via PR; see
+# docs/howto/add-free-models.md § 7 for the contribution paths.
+#
+# Schema (one entry per submitted use case):
+#
+#   - contributor: <github-handle or "anonymous">
+#     use_case: <short label, e.g., "research-summarizer">
+#     session_date: <YYYY-MM-DD>
+#     metric_summary:
+#       real_pack_calls: <int>
+#       verify_manifest_called: <bool>
+#       all_present: <bool>
+#       hallucination_count: <int>
+#       simplification_observed: <bool>
+#     decision: <"profile-works" | "profile-helps-partially" |
+#                "profile-not-enough" | "no-profile-needed">
+#     notes: <one or two lines>
+#     pr_or_issue_url: <link>
+
+community_traces:
+  - contributor: tosin2013
+    use_case: publishing-strategist
+    session_date: 2026-06-09
+    metric_summary:
+      real_pack_calls: 6        # 1 plan + 2 pipeline-run + 1 verify + 2 artifact-get
+      verify_manifest_called: true
+      all_present: true
+      hallucination_count: 0
+      simplification_observed: true   # 9-platform table simplified to 2
+    decision: profile-helps-partially
+    notes: |
+      Profile-aware AGENTS.md drove the audit-callback pattern to fire
+      end-to-end (artifact.verify_manifest returned all_present:true on
+      2 of 2 real artifacts). Same agent simplified the 9-platform skill
+      table to 2 variations using pipeline-run shortcut. This proves the
+      profile is necessary but not sufficient; per-use-case customization
+      is required for full skill compliance.
+    pr_or_issue_url: https://github.com/tosin2013/helmdeck/pull/462

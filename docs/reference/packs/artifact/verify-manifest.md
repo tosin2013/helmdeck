@@ -139,6 +139,41 @@ the missing entries and propose retrying the depot step.
 - `missing[]` reasons are best-effort store errors. Semantic-level reasons ("wrong namespace") require the caller to interpret.
 - Does not protect against the case where the agent fabricates the `expected` list itself (and never produces a manifest table at all). For that, the skill must wire the audit pack into the deterministic output template — see the skill integration pattern above.
 
+## Empirical validation
+
+First empirical validation from a real Tier C session: 2026-06-09, profile-aware agent on `openai/gpt-oss-120b:free`, publishing-strategist use case.
+
+The agent ran `pipeline-run` twice (one per source URL — a GitHub repo + a docs site), polled `pack-status` until both pipelines completed, listed the resulting artifacts via `artifact.list`, then called `artifact.verify_manifest` with the actual keys:
+
+```json
+{
+  "expected": [
+    {"artifact_key": "blog.publish/c7d64171271e69ea-introducing-mcp-adr-analysis-server.md"},
+    {"artifact_key": "blog.publish/09ee6929aefa306b-exploring-the-mcp-adr-analysis-server-repository.md"}
+  ]
+}
+```
+
+Returned:
+
+```json
+{
+  "verified": [
+    { "artifact_key": "blog.publish/c7d64171...-introducing-mcp-adr-analysis-server.md",
+      "filename": "introducing-mcp-adr-analysis-server.md",
+      "namespace": "blog.publish", "size": 8559, "content_type": "text/markdown; charset=utf-8" },
+    { "artifact_key": "blog.publish/09ee6929...-exploring-the-mcp-adr-analysis-server-repository.md",
+      "filename": "exploring-the-mcp-adr-analysis-server-repository.md",
+      "namespace": "blog.publish", "size": 8539, "content_type": "text/markdown; charset=utf-8" }
+  ],
+  "missing": [],
+  "all_present": true,
+  "summary": "2 of 2 claimed artifacts verified; 0 missing"
+}
+```
+
+The verification result landed in the model's context window before its final text reply. The agent's final response honestly reports `verified: 2 of 2` rather than the earlier hallucinated-six-deposits pattern from the same model. The audit-callback pattern works as designed — see [the field report](/blog/empirical-validation-per-model-profile) for the full A/B comparison vs the baseline agent without a profile.
+
 ## Phase 2 — generalize the audit-callback pattern
 
 `artifact.verify_manifest` is Phase 1 of a broader anti-hallucination pattern tracked in [#461](https://github.com/tosin2013/helmdeck/issues/461). The same shape applies to other producer/consumer pairs:

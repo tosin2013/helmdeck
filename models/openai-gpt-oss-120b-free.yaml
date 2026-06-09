@@ -213,3 +213,41 @@ community_traces:
       profile is necessary but not sufficient; per-use-case customization
       is required for full skill compliance.
     pr_or_issue_url: https://github.com/tosin2013/helmdeck/pull/462
+
+# --- comparison traces (cross-tier) ----------------------------
+#
+# Not strictly community contributions — these are maintainer-captured
+# comparison runs on OTHER tiers using the SAME skill + prompt.
+# Surfaced here for cross-tier comparison; the data shapes the
+# tier-level recommendation in docs/reference/models.md.
+
+comparison_traces:
+  - tier: A
+    model: openrouter/anthropic/claude-sonnet-4.6
+    session_date: 2026-06-09
+    issue_url: https://github.com/tosin2013/helmdeck/issues/466
+    metric_summary:
+      parallel_tool_use_at_startup: true       # 3 simultaneous tool calls
+      real_blog_rewrite_calls: 8                # full N-platform fanout
+      real_pipeline_run_calls: 0                # did NOT use shortcut
+      real_artifact_put_calls: 0                # SKIPPED — tier-invariant
+      real_verify_manifest_calls: 0             # SKIPPED — tier-invariant
+      infoq_fit_check_executed: true            # full 6-criterion grade
+      multi_step_plan_acknowledged: true        # 5-step plan stated upfront
+      one_clarifying_question_honored: true     # asked one + stated defaults
+      hallucination_count: 0
+      blog_append_cta_failed: true              # all 8 rejected — bug, fixed in PR #468
+    decision: structural-compliance-good-but-deposit-step-skipping-is-tier-invariant
+    notes: |
+      Tier A handles every structural aspect of the skill better than
+      either Tier C variant — parallel tool use, full fanout, fit-check
+      rigor, clarifying-question discipline. But on the load-bearing
+      "deposit step is mandatory" rule, Tier A behaved the same way as
+      Tier C: skipped artifact.put AND artifact.verify_manifest entirely.
+      Agent conflated "append CTA" with "deposit to artifacts" — the
+      skill prose was insufficient even for a frontier model.
+
+      Strategic finding: the deposit-step failure mode is tier-invariant,
+      not Tier-C-specific. Engine-level enforcement (Phase 3 of
+      issue #461) is the architectural answer regardless of tier.
+    pr_or_issue_url: https://github.com/tosin2013/helmdeck/issues/466

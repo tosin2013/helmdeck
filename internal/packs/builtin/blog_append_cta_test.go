@@ -170,22 +170,61 @@ func TestBlogAppendCTA_AllThreeLinksLandInPrompt(t *testing.T) {
 	}
 }
 
-// TestBlogAppendCTA_RequiresModelWhenLinkSet — opening the no-op
-// escape hatch only when ALL links are empty means the LLM path
-// is unavoidable once any link is set; the model field is required
-// there.
-func TestBlogAppendCTA_RequiresModelWhenLinkSet(t *testing.T) {
-	disp := &scriptedDispatcherWT{}
-	_, err := runBlogAppendCTA(t, disp, `{"markdown":"x","project_url":"https://example.com"}`)
-	if err == nil {
-		t.Fatalf("expected error when model is missing alongside a link")
+// TestBlogAppendCTA_DefaultsModelWhenOmitted — empirical evidence
+// from the 2026-06-09 Tier A trace: Claude Sonnet 4.6 called this
+// pack 8 times in parallel with project_url set but no model arg,
+// and the original pack contract rejected all 8 with
+// CodeInvalidInput. PR #453 applied a defaultPackModel() resolver
+// to content.ground and blog.rewrite_for_audience but deliberately
+// skipped this pack — the empirical trace proved the failure mode
+// is the same. This test pins the fix.
+//
+// Replaces TestBlogAppendCTA_RequiresModelWhenLinkSet (removed): the
+// behavior it pinned ("model is required when one of source_url /
+// project_url / github_url is set") no longer applies. The pack now
+// resolves a default via model_defaults.go (openrouter/auto hard
+// fallback) and proceeds with the LLM call.
+func TestBlogAppendCTA_DefaultsModelWhenOmitted(t *testing.T) {
+	t.Setenv("HELMDECK_DEFAULT_PACK_MODEL", "")
+	t.Setenv("HELMDECK_OPENROUTER_MODELS", "")
+	disp := &scriptedDispatcherWT{replies: []string{"## Try it yourself\n\nbody"}}
+	raw, err := runBlogAppendCTA(t, disp,
+		`{"markdown":"x","project_url":"https://example.com"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
 	}
-	perr, ok := err.(*packs.PackError)
-	if !ok || perr.Code != packs.CodeInvalidInput {
-		t.Errorf("expected CodeInvalidInput; got %#v", err)
+	if len(disp.captured) != 1 {
+		t.Fatalf("expected dispatcher to be called once (default model resolved + applied), got %d", len(disp.captured))
 	}
-	if !strings.Contains(perr.Message, "model is required") {
-		t.Errorf("error message should mention model: %q", perr.Message)
+	if disp.captured[0].Model != "openrouter/auto" {
+		t.Errorf("dispatcher Model = %q, want openrouter/auto (hard fallback)", disp.captured[0].Model)
+	}
+	var out struct {
+		Markdown  string `json:"markdown"`
+		ModelUsed string `json:"model_used"`
+		CTAAdded  bool   `json:"cta_added"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.CTAAdded {
+		t.Error("cta_added should be true after a successful append")
+	}
+	if out.ModelUsed != "openrouter/auto" {
+		t.Errorf("model_used = %q, want openrouter/auto echoed back", out.ModelUsed)
+	}
+}
+
+func TestBlogAppendCTA_DefaultsModelHonorsOperatorOverride(t *testing.T) {
+	t.Setenv("HELMDECK_DEFAULT_PACK_MODEL", "openrouter/openai/gpt-oss-120b:free")
+	disp := &scriptedDispatcherWT{replies: []string{"## Try it yourself\n\nbody"}}
+	_, err := runBlogAppendCTA(t, disp,
+		`{"markdown":"x","project_url":"https://example.com"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if disp.captured[0].Model != "openrouter/openai/gpt-oss-120b:free" {
+		t.Errorf("operator override not honored: got %q", disp.captured[0].Model)
 	}
 }
 

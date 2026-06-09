@@ -162,10 +162,17 @@ func blogAppendCTAHandler(d vision.Dispatcher) packs.HandlerFunc {
 			return nil, &packs.PackError{Code: packs.CodeInternal,
 				Message: "blog.append_cta registered without a gateway dispatcher"}
 		}
-		if strings.TrimSpace(in.Model) == "" {
-			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
-				Message: "model is required when one of source_url / project_url / github_url is set"}
-		}
+		// Resolve a default when the caller omitted model. PR #453
+		// applied this to content.ground and blog.rewrite_for_audience;
+		// blog.append_cta was deliberately excluded at the time because
+		// its "model required when source/project/github_url is set"
+		// shape was thought to be a different failure surface. The
+		// 2026-06-09 Tier A trace empirically proved otherwise — Claude
+		// Sonnet 4.6 called this pack 8 times in parallel with
+		// project_url set but no model arg, and the pack rejected all 8.
+		// Closing the same gap here. See model_defaults.go for the
+		// precedence chain.
+		in.Model = defaultPackModel(in.Model)
 
 		maxTokens := in.MaxTokens
 		if maxTokens <= 0 {

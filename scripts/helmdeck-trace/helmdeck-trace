@@ -235,11 +235,41 @@ class Metrics:
 
 
 _INLINE_URL_RE = re.compile(r"\[(?:source|\d+)\]\((https?://[^)\s]+)\)")
-_FAKE_DEPOSIT_RE = re.compile(
-    r"(?:artifact[_-]?put|deposit|deposited|saved to artifact|"
-    r"artifact_key|verify_manifest)",
+
+# Tightened to require first-person claim language or a concrete
+# artifact_key path — NOT bare "deposit" which falsepositive on the
+# Turn 2 handoff line "Reply with deposit to save and verify...".
+_DEPOSIT_CLAIM_RE = re.compile(
+    r"(?:"
+    r"(?:I\s+(?:have\s+)?deposited|artifact\s+(?:was\s+)?(?:deposited|saved|stored))|"
+    r"artifact_key\s*[:=]\s*[\w./-]+|"
+    r"(?:deposit(?:ed)?|saved|stored)\s+(?:to|at|in)\s+(?:artifact[_-]?put|blog\.publish|"
+    r"[a-z][\w./-]*\.(?:md|txt|json|html))"
+    r")",
     re.IGNORECASE,
 )
+_VERIFY_CLAIM_RE = re.compile(
+    r"(?:"
+    r"all_present\s*[:=]\s*(?:true|false)|"
+    r"(?:verify_manifest\s+(?:returned|confirmed|reported)|"
+    r"(?:verified|confirmed)\s+(?:all|the|\d+)\s+(?:artifacts?|of))"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _pack_output(result_parsed: Optional[dict]) -> dict:
+    """Helmdeck packs wrap their data inside an `output` field:
+    `{"pack": "...", "version": "v1", "output": {...real data...}}`.
+    Return the inner output dict, or the parsed result itself if no
+    `output` key is present (older helmdeck versions or non-helmdeck
+    tools)."""
+    if not isinstance(result_parsed, dict):
+        return {}
+    inner = result_parsed.get("output")
+    if isinstance(inner, dict):
+        return inner
+    return result_parsed
 
 
 def extract_metrics(session: ParsedSession) -> Metrics:
@@ -251,18 +281,20 @@ def extract_metrics(session: ParsedSession) -> Metrics:
 
         if tc.name == "helmdeck__artifact-verify_manifest":
             m.verify_manifest_called = True
-            if tc.result_parsed and "all_present" in tc.result_parsed:
-                m.all_present = bool(tc.result_parsed["all_present"])
+            out = _pack_output(tc.result_parsed)
+            if "all_present" in out:
+                m.all_present = bool(out["all_present"])
         elif tc.name == "helmdeck__artifact-put":
             m.artifact_put_called = True
         elif tc.name == "helmdeck__content-ground":
             m.content_ground_called = True
-            if tc.result_parsed:
-                m.claims_considered = tc.result_parsed.get("claims_considered")
-                m.claims_grounded = tc.result_parsed.get("claims_grounded")
-                skipped = tc.result_parsed.get("skipped") or []
+            out = _pack_output(tc.result_parsed)
+            if out:
+                m.claims_considered = out.get("claims_considered")
+                m.claims_grounded = out.get("claims_grounded")
+                skipped = out.get("skipped") or []
                 m.claims_skipped = len(skipped) if isinstance(skipped, list) else None
-                grounding = tc.result_parsed.get("grounding") or []
+                grounding = out.get("grounding") or []
                 if isinstance(grounding, list):
                     m.citation_urls_from_grounding += sum(
                         1 for g in grounding if isinstance(g, dict) and g.get("url")
@@ -274,8 +306,9 @@ def extract_metrics(session: ParsedSession) -> Metrics:
     # or [source](url); cross-check against grounding response URLs.
     grounding_urls: set[str] = set()
     for tc in session.tool_calls:
-        if tc.name == "helmdeck__content-ground" and tc.result_parsed:
-            for g in tc.result_parsed.get("grounding", []) or []:
+        if tc.name == "helmdeck__content-ground":
+            out = _pack_output(tc.result_parsed)
+            for g in out.get("grounding", []) or []:
                 if isinstance(g, dict) and g.get("url"):
                     grounding_urls.add(g["url"])
 
@@ -289,15 +322,18 @@ def extract_metrics(session: ParsedSession) -> Metrics:
         )
 
     # Hallucination heuristic: assistant text claims a deposit / verify
-    # outcome but the corresponding tool call never fired.
+    # outcome but the corresponding tool call never fired. The regex is
+    # tightened to require first-person claim language ("I deposited"),
+    # an explicit `artifact_key:` pattern, or a "saved to <path>"
+    # idiom — NOT bare keyword matches. The Turn 2 handoff line "Reply
+    # with deposit to save and verify..." was false-positiving the
+    # naive bare-keyword check.
     deposit_claims_without_call = 0
     verify_claims_without_call = 0
     for text in session.assistant_texts:
-        if not _FAKE_DEPOSIT_RE.search(text):
-            continue
-        if ("deposit" in text.lower() or "artifact_key" in text.lower()) and not m.artifact_put_called:
+        if _DEPOSIT_CLAIM_RE.search(text) and not m.artifact_put_called:
             deposit_claims_without_call += 1
-        if ("verify_manifest" in text.lower() or "all_present" in text.lower()) and not m.verify_manifest_called:
+        if _VERIFY_CLAIM_RE.search(text) and not m.verify_manifest_called:
             verify_claims_without_call += 1
     if deposit_claims_without_call:
         m.hallucination_count += deposit_claims_without_call

@@ -1,0 +1,609 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""
+helmdeck-trace — extract a structured `community_traces[]` block from an
+OpenClaw session jsonl file for #464 Phase 1 model-profile submissions.
+
+Subcommands:
+  extract   one session → one community_traces[] entry (YAML)
+  compare   baseline session + profile-aware session → A/B diff (YAML)
+  summary   quick stdout summary (no YAML emission)
+
+Operator data (workspace path, agent id, file paths) is anonymized by
+default so the output is safe to PR against a public model profile.
+Pass --no-anonymize when you want the raw metrics.
+
+Usage:
+  helmdeck-trace extract --session /path/to/session.jsonl \\
+      --model openrouter/google/gemma-4-26b-a4b-it:free \\
+      --use-case publishing-strategist \\
+      --decision profile-helps-partially \\
+      --contributor your-gh-handle
+
+  helmdeck-trace compare \\
+      --baseline      /path/to/baseline-session.jsonl \\
+      --profile-aware /path/to/profile-session.jsonl
+
+  helmdeck-trace summary --session /path/to/session.jsonl
+
+The model id is auto-detected from the trajectory if --model is omitted.
+
+Stdlib only — no PyYAML / requests. Python 3.8+.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, Optional
+
+# ---- OpenClaw session parsing ------------------------------------
+
+@dataclass
+class ToolCall:
+    name: str
+    arguments: dict
+    result_text: str
+    result_parsed: Optional[dict] = None  # populated when result_text is JSON
+
+@dataclass
+class ParsedSession:
+    session_id: str
+    model_id: str
+    provider: str
+    workspace_dir: str
+    agent_id: str
+    started_at: str
+    ended_at: str
+    user_messages: list = field(default_factory=list)
+    assistant_texts: list = field(default_factory=list)
+    tool_calls: list = field(default_factory=list)  # ordered list of ToolCall
+    terminal_errors: list = field(default_factory=list)
+    raw_event_count: int = 0
+
+
+def parse_session(jsonl_path: Path) -> ParsedSession:
+    """Walk an OpenClaw session jsonl forward, pairing toolCalls with the
+    following toolResult turn (FIFO). Returns a ParsedSession with all the
+    raw materials downstream metrics extractors need."""
+    events = []
+    with jsonl_path.open() as f:
+        for line in f:
+            if line.strip():
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+
+    session = ParsedSession(
+        session_id="",
+        model_id="",
+        provider="",
+        workspace_dir="",
+        agent_id="",
+        started_at="",
+        ended_at="",
+        raw_event_count=len(events),
+    )
+
+    pending_calls: list[ToolCall] = []
+    for e in events:
+        etype = e.get("type")
+        if etype == "session" or "version" in e and "cwd" in e:
+            # First event: session-meta
+            session.session_id = e.get("id", "")
+            session.started_at = e.get("timestamp", "")
+            session.workspace_dir = e.get("cwd", "")
+        elif etype == "model_change":
+            session.model_id = e.get("modelId", session.model_id)
+            session.provider = e.get("provider", session.provider)
+        elif etype == "message" or "message" in e:
+            msg = e.get("message") or {}
+            if not msg and "role" in e:
+                msg = e
+            role = msg.get("role")
+            if role == "user":
+                content = msg.get("content", "")
+                text = _flatten_text(content)
+                if "failed before producing content" not in text.lower():
+                    # Strip OpenClaw [timestamp] prefix
+                    if text.startswith("[") and "]" in text[:40]:
+                        text = text[text.find("]") + 1:].strip()
+                    session.user_messages.append(text)
+            elif role == "assistant":
+                content = msg.get("content", [])
+                if isinstance(content, list):
+                    text_parts = []
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        if part.get("type") == "text":
+                            text_parts.append(part.get("text", ""))
+                        elif part.get("type") == "toolCall":
+                            pending_calls.append(ToolCall(
+                                name=part.get("name", "?"),
+                                arguments=part.get("arguments", {}),
+                                result_text="",
+                            ))
+                    text = "\n".join(t for t in text_parts if t.strip())
+                    if text and "failed before producing content" not in text.lower():
+                        session.assistant_texts.append(text)
+            elif role == "toolResult":
+                if pending_calls:
+                    tc = pending_calls.pop(0)
+                    tc.result_text = _flatten_text(msg.get("content", []))
+                    if tc.result_text.strip().startswith("{"):
+                        try:
+                            tc.result_parsed = json.loads(tc.result_text)
+                        except json.JSONDecodeError:
+                            pass
+                    session.tool_calls.append(tc)
+        # Capture terminal errors from custom events
+        if e.get("customType") == "model_completed" or "terminalError" in str(e):
+            data = e.get("data") or {}
+            err = data.get("terminalError") if isinstance(data, dict) else None
+            if err:
+                session.terminal_errors.append(err)
+
+    # Last event timestamp = ended_at
+    if events:
+        session.ended_at = events[-1].get("timestamp", "")
+    return session
+
+
+def _flatten_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, dict) and p.get("type") == "text":
+                parts.append(p.get("text", ""))
+            elif isinstance(p, str):
+                parts.append(p)
+        return "\n".join(parts)
+    return ""
+
+
+# ---- Trajectory parsing (for higher-fidelity metadata) ----------
+
+def enrich_from_trajectory(session: ParsedSession, jsonl_path: Path):
+    """If a sibling .trajectory.jsonl exists, use it to fill in fields
+    the session jsonl doesn't carry (model id, agent id, terminal error
+    reasons, OpenRouter cost tally)."""
+    traj_path = jsonl_path.with_name(jsonl_path.stem + ".trajectory.jsonl")
+    if not traj_path.exists():
+        return
+
+    cost_total = 0.0
+    with traj_path.open() as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            etype = e.get("type", "")
+            if etype == "session.started":
+                if not session.model_id:
+                    session.model_id = e.get("modelId", "")
+                if not session.provider:
+                    session.provider = e.get("provider", "")
+                if not session.workspace_dir:
+                    session.workspace_dir = e.get("workspaceDir", "")
+                data = e.get("data") or {}
+                session.agent_id = session.agent_id or data.get("agentId", "")
+            elif etype == "model.completed":
+                data = e.get("data") or {}
+                err = data.get("terminalError")
+                if err and err not in session.terminal_errors:
+                    session.terminal_errors.append(err)
+                snap = data.get("messagesSnapshot") or []
+                for m in snap:
+                    if m.get("role") == "assistant":
+                        usage = m.get("usage") or {}
+                        cost = usage.get("cost") or {}
+                        if isinstance(cost, dict):
+                            cost_total += cost.get("total", 0) or 0
+    session_cost_total = cost_total  # noqa — kept for potential future use
+
+
+# ---- Metric extraction -------------------------------------------
+
+@dataclass
+class Metrics:
+    real_pack_calls: int = 0
+    tool_calls_by_name: dict = field(default_factory=dict)
+    verify_manifest_called: bool = False
+    all_present: Optional[bool] = None
+    content_ground_called: bool = False
+    artifact_put_called: bool = False
+    claims_considered: Optional[int] = None
+    claims_grounded: Optional[int] = None
+    claims_skipped: Optional[int] = None
+    citation_urls_in_text: int = 0
+    citation_urls_from_grounding: int = 0
+    citation_urls_fabricated: int = 0
+    hallucination_count: int = 0
+    hallucination_notes: list = field(default_factory=list)
+    terminal_errors: list = field(default_factory=list)
+    pipeline_run_called: bool = False
+
+
+_INLINE_URL_RE = re.compile(r"\[(?:source|\d+)\]\((https?://[^)\s]+)\)")
+_FAKE_DEPOSIT_RE = re.compile(
+    r"(?:artifact[_-]?put|deposit|deposited|saved to artifact|"
+    r"artifact_key|verify_manifest)",
+    re.IGNORECASE,
+)
+
+
+def extract_metrics(session: ParsedSession) -> Metrics:
+    m = Metrics(terminal_errors=list(session.terminal_errors))
+
+    for tc in session.tool_calls:
+        m.real_pack_calls += 1
+        m.tool_calls_by_name[tc.name] = m.tool_calls_by_name.get(tc.name, 0) + 1
+
+        if tc.name == "helmdeck__artifact-verify_manifest":
+            m.verify_manifest_called = True
+            if tc.result_parsed and "all_present" in tc.result_parsed:
+                m.all_present = bool(tc.result_parsed["all_present"])
+        elif tc.name == "helmdeck__artifact-put":
+            m.artifact_put_called = True
+        elif tc.name == "helmdeck__content-ground":
+            m.content_ground_called = True
+            if tc.result_parsed:
+                m.claims_considered = tc.result_parsed.get("claims_considered")
+                m.claims_grounded = tc.result_parsed.get("claims_grounded")
+                skipped = tc.result_parsed.get("skipped") or []
+                m.claims_skipped = len(skipped) if isinstance(skipped, list) else None
+                grounding = tc.result_parsed.get("grounding") or []
+                if isinstance(grounding, list):
+                    m.citation_urls_from_grounding += sum(
+                        1 for g in grounding if isinstance(g, dict) and g.get("url")
+                    )
+        elif tc.name == "helmdeck__pipeline-run":
+            m.pipeline_run_called = True
+
+    # Citation fabrication detection: scan assistant text for [N](url)
+    # or [source](url); cross-check against grounding response URLs.
+    grounding_urls: set[str] = set()
+    for tc in session.tool_calls:
+        if tc.name == "helmdeck__content-ground" and tc.result_parsed:
+            for g in tc.result_parsed.get("grounding", []) or []:
+                if isinstance(g, dict) and g.get("url"):
+                    grounding_urls.add(g["url"])
+
+    inline_urls: list[str] = []
+    for text in session.assistant_texts:
+        inline_urls.extend(_INLINE_URL_RE.findall(text))
+    m.citation_urls_in_text = len(inline_urls)
+    if inline_urls:
+        m.citation_urls_fabricated = sum(
+            1 for u in inline_urls if u not in grounding_urls
+        )
+
+    # Hallucination heuristic: assistant text claims a deposit / verify
+    # outcome but the corresponding tool call never fired.
+    deposit_claims_without_call = 0
+    verify_claims_without_call = 0
+    for text in session.assistant_texts:
+        if not _FAKE_DEPOSIT_RE.search(text):
+            continue
+        if ("deposit" in text.lower() or "artifact_key" in text.lower()) and not m.artifact_put_called:
+            deposit_claims_without_call += 1
+        if ("verify_manifest" in text.lower() or "all_present" in text.lower()) and not m.verify_manifest_called:
+            verify_claims_without_call += 1
+    if deposit_claims_without_call:
+        m.hallucination_count += deposit_claims_without_call
+        m.hallucination_notes.append(
+            f"{deposit_claims_without_call} assistant text(s) claim deposit / artifact_key but no helmdeck__artifact-put call fired"
+        )
+    if verify_claims_without_call:
+        m.hallucination_count += verify_claims_without_call
+        m.hallucination_notes.append(
+            f"{verify_claims_without_call} assistant text(s) claim verify outcome but no helmdeck__artifact-verify_manifest call fired"
+        )
+
+    return m
+
+
+# ---- Anonymization + YAML emission -------------------------------
+
+def anonymize_label(session: ParsedSession, anonymize: bool) -> str:
+    """Build an `agent:` field for the YAML community_traces[] entry."""
+    if anonymize:
+        tier = "Tier C"  # caller can override post-emission if needed
+        model = session.model_id or "<unknown-model>"
+        return f"{tier} agent on `{model}`"
+    return session.agent_id or "<unknown-agent>"
+
+
+def detect_session_date(session: ParsedSession) -> str:
+    """Prefer ended_at over started_at for the trace's logical date.
+    Falls back to today (UTC) when neither is set."""
+    for ts in (session.started_at, session.ended_at):
+        if ts:
+            try:
+                # OpenClaw timestamps are ISO-8601 UTC like "2026-06-09T18:13:13.810Z"
+                return datetime.fromisoformat(ts.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                continue
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def render_yaml_entry(
+    session: ParsedSession,
+    metrics: Metrics,
+    contributor: str,
+    use_case: str,
+    decision: str,
+    pr_or_issue_url: str,
+    notes: str,
+    anonymize: bool,
+) -> str:
+    """Hand-roll YAML to match the schema in models/openai-gpt-oss-120b-free.yaml
+    community_traces[]. No PyYAML dependency."""
+    agent_label = anonymize_label(session, anonymize)
+    session_date = detect_session_date(session)
+
+    # If notes wasn't supplied, generate a one-line synthesis.
+    if not notes:
+        if metrics.terminal_errors:
+            notes = f"Trace ended with terminal error: {metrics.terminal_errors[0]}. Metrics may be incomplete."
+        elif metrics.real_pack_calls == 0:
+            notes = "Zero pack calls fired — model produced text-only response."
+        elif metrics.verify_manifest_called and metrics.all_present:
+            notes = (
+                f"Audit-callback fired end-to-end ({metrics.real_pack_calls} real pack call(s); "
+                f"verify_manifest all_present:true)."
+            )
+        elif metrics.artifact_put_called and not metrics.verify_manifest_called:
+            notes = "Deposit fired but verify_manifest was skipped — audit-callback pattern incomplete."
+        else:
+            notes = f"{metrics.real_pack_calls} real pack call(s) fired; see per-tool tally above."
+
+    # Tool-call tally as a header comment for visibility.
+    tally_lines = ["# tool-call tally (above the schema fields, comment for operator review):"]
+    if metrics.tool_calls_by_name:
+        for name in sorted(metrics.tool_calls_by_name.keys()):
+            tally_lines.append(f"#   {name}: {metrics.tool_calls_by_name[name]}")
+    else:
+        tally_lines.append("#   (no tool calls fired)")
+    if metrics.terminal_errors:
+        tally_lines.append("# terminal errors:")
+        for err in metrics.terminal_errors:
+            tally_lines.append(f"#   - {err}")
+    if metrics.citation_urls_in_text:
+        tally_lines.append(
+            f"# citation URLs in assistant text: {metrics.citation_urls_in_text} "
+            f"({metrics.citation_urls_fabricated} not from content.ground response)"
+        )
+    if metrics.hallucination_notes:
+        tally_lines.append("# hallucination notes:")
+        for note in metrics.hallucination_notes:
+            tally_lines.append(f"#   - {note}")
+    if metrics.claims_considered is not None:
+        tally_lines.append(
+            f"# content.ground: considered={metrics.claims_considered}, "
+            f"grounded={metrics.claims_grounded}, skipped={metrics.claims_skipped}"
+        )
+
+    contributor_str = contributor or "anonymous"
+    use_case_str = use_case or "<set use-case label>"
+    decision_str = decision or "<choose: profile-works | profile-helps-partially | profile-not-enough | no-profile-needed>"
+    pr_or_issue_url_str = pr_or_issue_url or "<add link>"
+
+    yaml_lines = [
+        "",
+        f"# trace agent (anonymized): {agent_label}",
+        f"# trace model: {session.model_id or '<unknown>'}",
+        f"# trace session id: {session.session_id or '<unknown>'}",
+    ] + tally_lines + [
+        "",
+        "community_traces:",
+        f"  - contributor: {contributor_str}",
+        f"    use_case: {_yaml_safe(use_case_str)}",
+        f"    session_date: {session_date}",
+        f"    metric_summary:",
+        f"      real_pack_calls: {metrics.real_pack_calls}",
+        f"      verify_manifest_called: {str(metrics.verify_manifest_called).lower()}",
+        f"      all_present: {_optional_bool(metrics.all_present)}",
+        f"      hallucination_count: {metrics.hallucination_count}",
+        f"      simplification_observed: null  # set manually after operator review",
+        f"    decision: {decision_str}",
+        f"    notes: |",
+    ]
+    for line in notes.splitlines() or [notes]:
+        yaml_lines.append(f"      {line}")
+    yaml_lines.append(f"    pr_or_issue_url: {pr_or_issue_url_str}")
+    return "\n".join(yaml_lines) + "\n"
+
+
+def _optional_bool(v: Optional[bool]) -> str:
+    if v is None:
+        return "null"
+    return str(v).lower()
+
+
+def _yaml_safe(s: str) -> str:
+    """Quote string values that contain YAML-special characters."""
+    if not s or any(c in s for c in ":#{}[]&*!|>'\"%@`"):
+        return json.dumps(s)
+    return s
+
+
+# ---- Comparison (baseline vs profile-aware) ----------------------
+
+def render_comparison(
+    baseline: ParsedSession,
+    baseline_metrics: Metrics,
+    profile: ParsedSession,
+    profile_metrics: Metrics,
+    anonymize: bool,
+) -> str:
+    rows = [
+        ("Metric", "Baseline", "Profile-aware"),
+        ("real pack calls", baseline_metrics.real_pack_calls, profile_metrics.real_pack_calls),
+        ("verify_manifest called", baseline_metrics.verify_manifest_called, profile_metrics.verify_manifest_called),
+        ("verify all_present", baseline_metrics.all_present, profile_metrics.all_present),
+        ("artifact.put called", baseline_metrics.artifact_put_called, profile_metrics.artifact_put_called),
+        ("content.ground called", baseline_metrics.content_ground_called, profile_metrics.content_ground_called),
+        ("claims_grounded", baseline_metrics.claims_grounded, profile_metrics.claims_grounded),
+        ("citation URLs in text", baseline_metrics.citation_urls_in_text, profile_metrics.citation_urls_in_text),
+        ("citation URLs fabricated", baseline_metrics.citation_urls_fabricated, profile_metrics.citation_urls_fabricated),
+        ("hallucination_count", baseline_metrics.hallucination_count, profile_metrics.hallucination_count),
+        ("pipeline-run called", baseline_metrics.pipeline_run_called, profile_metrics.pipeline_run_called),
+    ]
+    widths = [max(len(str(row[c])) for row in rows) for c in range(3)]
+    out = []
+    out.append(f"# Baseline vs profile-aware (anonymized: {anonymize})")
+    out.append(f"# baseline model: {baseline.model_id}")
+    out.append(f"# profile  model: {profile.model_id}")
+    out.append("")
+    out.append("| " + " | ".join(f"{rows[0][c]:<{widths[c]}}" for c in range(3)) + " |")
+    out.append("|" + "|".join("-" * (widths[c] + 2) for c in range(3)) + "|")
+    for row in rows[1:]:
+        out.append("| " + " | ".join(f"{str(row[c]):<{widths[c]}}" for c in range(3)) + " |")
+    return "\n".join(out) + "\n"
+
+
+# ---- CLI entrypoints ---------------------------------------------
+
+def cmd_extract(args):
+    session_path = Path(args.session)
+    if not session_path.exists():
+        print(f"error: session file not found: {session_path}", file=sys.stderr)
+        return 2
+    s = parse_session(session_path)
+    enrich_from_trajectory(s, session_path)
+    if args.model:
+        s.model_id = args.model
+    if not s.model_id:
+        print("warning: model id not detected and --model not provided", file=sys.stderr)
+    metrics = extract_metrics(s)
+    yaml = render_yaml_entry(
+        s, metrics,
+        contributor=args.contributor or "",
+        use_case=args.use_case or "",
+        decision=args.decision or "",
+        pr_or_issue_url=args.url or "",
+        notes=args.notes or "",
+        anonymize=not args.no_anonymize,
+    )
+    if args.output:
+        Path(args.output).write_text(yaml)
+        print(f"wrote {args.output}", file=sys.stderr)
+    else:
+        sys.stdout.write(yaml)
+    return 0
+
+
+def cmd_compare(args):
+    bp = Path(args.baseline)
+    pp = Path(args.profile_aware)
+    if not bp.exists() or not pp.exists():
+        print("error: one or both sessions not found", file=sys.stderr)
+        return 2
+    bs = parse_session(bp); enrich_from_trajectory(bs, bp)
+    ps = parse_session(pp); enrich_from_trajectory(ps, pp)
+    bm = extract_metrics(bs)
+    pm = extract_metrics(ps)
+    out = render_comparison(bs, bm, ps, pm, anonymize=not args.no_anonymize)
+    if args.output:
+        Path(args.output).write_text(out)
+        print(f"wrote {args.output}", file=sys.stderr)
+    else:
+        sys.stdout.write(out)
+    return 0
+
+
+def cmd_summary(args):
+    s = parse_session(Path(args.session))
+    enrich_from_trajectory(s, Path(args.session))
+    if args.model:
+        s.model_id = args.model
+    m = extract_metrics(s)
+    print(f"session_id:      {s.session_id}")
+    print(f"model:           {s.model_id}")
+    print(f"workspace:       {s.workspace_dir}")
+    print(f"agent_id:        {s.agent_id}")
+    print(f"started_at:      {s.started_at}")
+    print(f"ended_at:        {s.ended_at}")
+    print(f"raw events:      {s.raw_event_count}")
+    print(f"user messages:   {len(s.user_messages)}")
+    print(f"assistant texts: {len(s.assistant_texts)}")
+    print(f"real pack calls: {m.real_pack_calls}")
+    if m.tool_calls_by_name:
+        print("  by name:")
+        for name in sorted(m.tool_calls_by_name.keys()):
+            print(f"    {name}: {m.tool_calls_by_name[name]}")
+    print(f"verify_manifest called: {m.verify_manifest_called}")
+    if m.all_present is not None:
+        print(f"  all_present:          {m.all_present}")
+    print(f"artifact.put called:    {m.artifact_put_called}")
+    print(f"content.ground called:  {m.content_ground_called}")
+    if m.claims_considered is not None:
+        print(f"  claims considered:  {m.claims_considered}")
+        print(f"  claims grounded:    {m.claims_grounded}")
+        print(f"  claims skipped:     {m.claims_skipped}")
+    print(f"pipeline-run called:    {m.pipeline_run_called}")
+    print(f"citation URLs in text:  {m.citation_urls_in_text}")
+    print(f"  fabricated (not from content.ground): {m.citation_urls_fabricated}")
+    print(f"hallucination count:    {m.hallucination_count}")
+    for note in m.hallucination_notes:
+        print(f"  - {note}")
+    if m.terminal_errors:
+        print(f"terminal errors:")
+        for err in m.terminal_errors:
+            print(f"  - {err}")
+    return 0
+
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="helmdeck-trace",
+        description="Extract structured metrics from OpenClaw session jsonl files for #464 Phase 1 community_traces[] submissions.",
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+
+    pe = sub.add_parser("extract", help="single session → YAML community_traces[] entry")
+    pe.add_argument("--session", required=True, help="path to session jsonl")
+    pe.add_argument("--model", help="model id (auto-detected from trajectory if omitted)")
+    pe.add_argument("--use-case", help="short label like 'publishing-strategist'")
+    pe.add_argument("--contributor", help="GitHub handle (default: anonymous)")
+    pe.add_argument("--decision", help="profile-works | profile-helps-partially | profile-not-enough | no-profile-needed")
+    pe.add_argument("--url", help="PR or issue URL for the trace")
+    pe.add_argument("--notes", help="custom notes (default: auto-synthesized from metrics)")
+    pe.add_argument("--no-anonymize", action="store_true", help="include raw agent name + workspace path in output (default: anonymized)")
+    pe.add_argument("--output", "-o", help="write YAML to file (default: stdout)")
+    pe.set_defaults(func=cmd_extract)
+
+    pc = sub.add_parser("compare", help="baseline vs profile-aware A/B diff")
+    pc.add_argument("--baseline", required=True, help="path to baseline session jsonl")
+    pc.add_argument("--profile-aware", required=True, help="path to profile-aware session jsonl")
+    pc.add_argument("--no-anonymize", action="store_true", help="include raw agent identifiers")
+    pc.add_argument("--output", "-o", help="write comparison to file")
+    pc.set_defaults(func=cmd_compare)
+
+    ps = sub.add_parser("summary", help="quick stdout summary, no YAML output")
+    ps.add_argument("--session", required=True, help="path to session jsonl")
+    ps.add_argument("--model", help="model id override")
+    ps.set_defaults(func=cmd_summary)
+
+    return p
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

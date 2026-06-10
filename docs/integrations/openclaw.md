@@ -229,6 +229,54 @@ The script is idempotent — it only re-writes the stamped skill, leaving JWTs, 
 
 Verify by repeating the catalog smoke test from §5b — the response should include any newly-added pack names.
 
+## 5d. OpenClaw canonical file roles (workspace layering)
+
+OpenClaw separates the things that change per operator (your persona, your platforms, your projects) from the things that come from helmdeck (pack catalog, schemas, contracts) by splitting them across four canonical workspace files. Understanding the layering matters because mixing concerns leads to per-operator forks of helmdeck's shipped skills — exactly the problem #459 was filed to track and PR #477 closed differently.
+
+Each agent has its own workspace directory at `~/.openclaw/workspace-<agent-id>/` containing:
+
+| File | Role | Owned by | Example content |
+|---|---|---|---|
+| `SOUL.md` | Voice + values + banned phrases | Operator | Voice posture ("first-person, terse, practitioner-voiced"), banned filler ("game-changer", "let's dive in"), editorial principles |
+| `IDENTITY.md` | Who the agent IS as a persona | Operator | Display name, emoji, expertise areas, audience |
+| `USER.md` | Who the operator IS | Operator | Domain, platforms, projects, geographic context, anything the agent should know about you |
+| `AGENTS.md` | Mechanism + workflow shape | Operator (often forked from a recipe) | Three-turn iterative pattern, tool allow-list, success criteria, model-specific prompting hints |
+
+The four files are loaded into the system prompt at bootstrap. Each is capped at 12,000 characters (bootstrap injection limit); content beyond the cap is truncated, so concise > comprehensive.
+
+**Helmdeck's shipped skills** at `~/.openclaw/skills/helmdeck/SKILL.md` (and `helmdeck-debug`, `tech-blog-publisher` when operators add them locally) stay **mechanism-only** — the helmdeck pack vocabulary, schemas, contracts. They DON'T encode persona or operator-specific defaults. The persona layer lives in the workspace files; the mechanism layer in the skill. That split is what lets one helmdeck install support many agents with different personalities sharing the same pack catalog.
+
+### Multi-agent workspaces
+
+A single helmdeck install can register many OpenClaw agents (`openclaw.json` → `agents.list[]`), each pointing at its own workspace directory with its own SOUL/IDENTITY/USER/AGENTS files. Common pattern (sanitized worked example using the [Maya security-researcher persona](../howto/per-model-agents/gemma-4-iterative-workflow.md) — substitute your own):
+
+```
+~/.openclaw/
+  workspace-maya-blog/        ← Maya's persona on the default model
+    SOUL.md                   ← voice posture, banned phrases
+    IDENTITY.md               ← display name, expertise, audience
+    USER.md                   ← Maya's domain (security research)
+    AGENTS.md                 ← three-turn iterative workflow
+  workspace-maya-gemma-4/     ← same persona, Gemma-4-tuned variant
+    SOUL.md                   ← (reused from above)
+    IDENTITY.md               ← (reused from above)
+    USER.md                   ← (reused from above)
+    AGENTS.md                 ← Gemma-4 prompting shape
+  ...
+```
+
+Each workspace's AGENTS.md tunes the workflow to the model's prompting style (per the [per-model profiles in `models/`](../reference/models.md)). The persona files (SOUL/IDENTITY/USER) stay **reusable** across model variants when the operator wants the same voice + identity on multiple models — only AGENTS.md changes per-model.
+
+### Worked example
+
+The [Gemma 4 iterative workflow recipe](../howto/per-model-agents/gemma-4-iterative-workflow.md) walks a sanitized Maya-persona example end-to-end — what each canonical file contains, how the AGENTS.md adapts to Gemma 4's role-turn-conversational format vs gpt-oss's Harmony format, and how the same three-turn iterative shape ports across models.
+
+### Why this matters operationally
+
+The empirical work captured in `models/*.yaml` `community_traces[]` arrays consistently shows that **per-use-case AGENTS.md hardening is more impactful than per-model profile guidance alone** ([PR #481](https://github.com/tosin2013/helmdeck/pull/481) captures one such trace: a Tier C agent on `nemotron-3-super-120b-a12b:free` with a docs-only baseline AGENTS.md fired 24 pack calls without reaching the deposit step; a hardened variant with explicit tool whitelist + async-pattern bounds + tighter invalidation conditions fired 7 calls and completed deposit+verify with `all_present: true` on the same prompt).
+
+The takeaway: helmdeck's shipped skill stays compact and stable; **the operator-tuned workspace AGENTS.md is where reliability comes from**. Treating SOUL/IDENTITY/USER/AGENTS as separate layers (rather than dumping everything into one IDENTITY.md) is what makes that tuning maintainable across many agents.
+
 ## 6. Walk the Phase 5.5 code-edit loop
 
 Open `http://localhost:18789` in your browser, paste the OpenClaw gateway token into Settings, then send a chat prompt:

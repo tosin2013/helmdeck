@@ -521,6 +521,66 @@ Use helmdeck__swe-solve on {{REPO_URL}} to: {{TASK}}. Mode: {{MODE}}.
 
 ---
 
+## Artifacts (typed artifact store + audit-callback verification)
+
+These four packs replace prose-instruction "save to artifacts" guidance that Tier C free models silently ignore. Pair `artifact.put` (deposit) with `artifact.verify_manifest` (audit-callback) when a skill produces a multi-artifact manifest — the agent SHOULD call verify after deposit so the operator sees `all_present: true/false` rather than trusting prose claims. See `docs/howto/personalize-an-openclaw-agent.md` and `docs/howto/per-model-agents/` for AGENTS.md hardening patterns that empirically improve deposit reliability on Tier C models.
+
+#### `artifact.put` — typed deposit into the artifact store
+
+**Template**
+```
+Use helmdeck__artifact-put to save this {{KIND}} content: {{CONTENT}}. Filename {{FILENAME}}, namespace {{NAMESPACE}}.
+```
+
+**Variables**
+- `{{CONTENT}}` — the content to deposit (input `content`, required).
+- `{{KIND}}` — one of `blog` / `markdown` / `transcript` / `summary` / `json` / `text` / `html` / `csv` / `binary` (input `kind`, required). Drives default `filename` + `content_type`.
+- `{{FILENAME}}` — override the kind default (input `filename`, optional). Filename safety: leading slashes stripped, `..` segments resolved.
+- `{{NAMESPACE}}` — logical namespace (input `namespace`, optional). Defaults to `artifact.put/`; skills targeting a specific publishing chain should set explicitly (e.g., `blog.publish/`).
+
+**Notes** — returns `{artifact_key, url, size, content_type, filename, namespace}`. `encoding: "base64"` opt-in for binary content (input `encoding`, optional). Use with `artifact.verify_manifest` after multi-artifact runs.
+
+#### `artifact.get` — read an artifact's bytes
+
+**Template**
+```
+Use helmdeck__artifact-get to read artifact {{ARTIFACT_KEY}}.
+```
+
+**Variables**
+- `{{ARTIFACT_KEY}}` — from a prior `artifact.put` (or `artifact.list` discovery) (input `artifact_key`, required).
+- `{{ENCODING}}` — `utf-8` | `base64` (input `encoding`, optional). Defaults to UTF-8 for text content types per RFC 6839 (`text/*`, `application/json`, `application/yaml`, `application/xml`, `*+json`, `*+xml`, `*+yaml`); base64 for everything else.
+
+**Notes** — returns `{content, encoding, content_type, size, artifact_key, filename, namespace}`.
+
+#### `artifact.list` — list artifacts in the store
+
+**Template**
+```
+Use helmdeck__artifact-list to find artifacts in namespace {{NAMESPACE}} matching filename {{FILENAME}}.
+```
+
+**Variables**
+- `{{NAMESPACE}}` — filter by namespace (input `namespace`, optional).
+- `{{FILENAME}}` — case-insensitive substring match (input `filename`, optional).
+- `{{LIMIT}}` — max entries to return (input `limit`, optional). Default 100, newest-first by `created_at`.
+
+**Notes** — returns `{artifacts: [...], count, truncated}`. Pair with `artifact.get` to read the bytes.
+
+#### `artifact.verify_manifest` — anti-hallucination audit-callback
+
+**Template**
+```
+Use helmdeck__artifact-verify_manifest to confirm these claimed artifacts exist: {{EXPECTED_KEYS}}.
+```
+
+**Variables**
+- `{{EXPECTED_KEYS}}` — array of `{artifact_key: "..."}` objects (also accepts flat string array `[...]` for Tier C friendliness) (input `expected`, required).
+
+**Notes** — returns `{verified: [...], missing: [...], all_present: true/false, summary: "..."}`. **Always call after a multi-artifact deposit chain** — Tier C models hallucinate `artifact_key` strings that don't exist in the store, and this pack is the audit that catches it. Empirically validated (PR #481 → PR #484 Nemotron A/B): per-use-case AGENTS.md hardening + this verify pattern closes the documented "Goal Drift + Tool-Call Failures" failure modes.
+
+---
+
 ## Filesystem (session-scoped — need clone_path + _session_id from repo.fetch)
 
 #### `fs.read` — read a file

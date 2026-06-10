@@ -1,6 +1,6 @@
 ---
 name: helmdeck
-description: Use helmdeck's 53 capability packs (browser, web scraping, content grounding, podcast/slide/blog/video production, image generation, stock photo search, repo orientation, filesystem, git, GitHub, HTTP, vision, document OCR/parse, Python/Node execution) plus four orchestration meta-packs (helmdeck.route, helmdeck.plan, helmdeck.memory_store, helmdeck.memory_forget) via MCP — all prefixed `helmdeck__*` in the tool catalog.
+description: Use helmdeck's 57 capability packs (browser, web scraping, content grounding, podcast/slide/blog/video production, image generation, stock photo search, repo orientation, filesystem, git, GitHub, HTTP, vision, document OCR/parse, Python/Node execution, typed artifact store with audit-callback verification) plus four orchestration meta-packs (helmdeck.route, helmdeck.plan, helmdeck.memory_store, helmdeck.memory_forget) via MCP — all prefixed `helmdeck__*` in the tool catalog.
 metadata:
   openclaw:
     skillKey: helmdeck
@@ -9,24 +9,33 @@ metadata:
 ---
 
 <!-- This SKILL.md is the canonical helmdeck agent skill. Stamped at
-     helmdeck v0.25.0 — the reliability arc that ships the empirical
-     proof of the cheap-model bet. Eight PRs (A-H) closed: per-package
-     coverage gate + lint (PR A), schema + typed-error contract tests
-     (PR B), zero-coverage handler set + browser.interact null-fix
-     (PR C), property tests + nightly mutation workflow (PR D), S3
-     wire surface (PR E), engine audit + memory machinery (PR F),
-     internal/mcp ratchet to 81% (PR G), and the model-recovery
-     loop test against openai/gpt-oss-120b:free (PR H — passes
-     all 5 typed-error recovery scenarios at >=7/10). Catalog
-     unchanged at 53 packs + 4 meta-packs; this was a reliability
-     arc, not a feature release. To enable PR H's weekly recovery
-     test: add OPENROUTER_API_KEY as a GitHub repository secret.
-     Re-run scripts/configure-openclaw.sh after this release so
-     your OpenClaw agent picks up the v0.25.0-stamped skill. -->
+     helmdeck v0.27.0 — the per-model profiles + audit-callback arc:
+     - Typed artifact store: artifact.put / .get / .list (PR #450)
+     - Anti-hallucination audit-callback: artifact.verify_manifest (PR #462)
+       Catalog grew from 53 → 57 packs + 4 meta-packs.
+     - Per-model prompting-profile library Phase 1 — 5 OpenRouter
+       profiles (gpt-oss-120b, gemma-4-26b-a4b-it, llama-3.3-70b,
+       nemotron-3-super-120b-a12b, qwen3-coder) + 1 HF Inference
+       Providers template — under models/<provider>-<model>.yaml.
+       Per-use-case AGENTS.md hardening empirically validated as the
+       load-bearing layer (PR #481 → #484 Nemotron A/B: 24 calls /
+       0 deposit → 7 calls / deposit + verify with all_present:true).
+     - Multi-provider YAML schema (huggingface / together / groq /
+       cerebras / sambanova / custom alongside openrouter).
+     - scripts/helmdeck-trace CLI for extracting community_traces[]
+       entries from OpenClaw session jsonl. Provider-agnostic.
+     - configure-openclaw.sh now seeds canonical 4-file workspace
+       layout (SOUL / IDENTITY / USER / AGENTS) with operator-tunable
+       TODO comments and idempotency guards.
+     - HuggingFace integration epic (#490) framing 6 phases beyond
+       routing layer: Datasets, Embeddings, Spaces, Tokenizers,
+       Self-hosted runtime patterns.
+     Re-run scripts/configure-openclaw.sh after this release so your
+     OpenClaw agent picks up the v0.27.0-stamped skill. -->
 
 ## You are connected to helmdeck
 
-Helmdeck is a browser automation and AI capability platform. You have access to 53 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
+Helmdeck is a browser automation and AI capability platform. You have access to 57 tools exposed as MCP tools. Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
 
 > **Routing tip (ADR 047):** for any multi-step request, prefer calling **`helmdeck__route`** first — it's the LLM-backed meta-pack that fuses the catalog (`helmdeck://routing-guide`), the caller's learned defaults (`helmdeck://my-defaults`), and reasoning about gaps. Inputs: `user_intent` (the user's request in their own words) + `model`. Returns a recommendation (with pre-filled `suggested_inputs` from learned defaults), up to three alternatives, and — when nothing in the catalog fits — a `gap_warning` containing a proposed new pack (name, input/output schema, integration pattern, why it's useful). Confirm the recommendation with the user, then run it. When `helmdeck__route` is unavailable (no gateway) or for trivial single-step requests, fall back to reading `helmdeck://routing-guide` directly: it returns the structured catalog plus a `policy` block on how to score by `accepts` / `produces` / `intent_keywords`. Prefer a pipeline over chaining packs when the pipeline's `metadata.supersedes` lists those packs. The picker tables and decision trees below in THIS skill are the offline fallback — the resource is canonical.
 
@@ -107,6 +116,12 @@ Every deck should **open with a title slide** (a single `#` deck title, plus a o
 - `repo.map` — Return a symbol-level structural map (functions, types, classes) of a cloned repo, budgeted to a token target. Opt-in follow-on for code-understanding tasks; inspired by Aider's repo-map.
 - `repo.push` — Push changes from a session-local clone.
 - `swe.solve` — Give it a `repo_url` + a `task` and it runs a mini-swe-agent loop **inside a sidecar** to produce a reviewable code change. The agent never sees git or gateway credentials (vault-injected). `mode` picks the output: `patch` (default, safe — diff + trajectory, no push), `branch` (push a NEW `helmdeck/swe-solve-*` branch), or `pull_request` (push the branch + open a PR). It **never pushes to the default branch**, and a human always reviews the PR. Async — poll for the result.
+
+### Artifacts (typed artifact store + audit-callback)
+- `artifact.put` (v0.27.0, PR #450) — Typed deposit into the artifact store. Replaces prose-instruction "save to artifacts" guidance that Tier C free models silently ignore. Input: `{content, kind, filename?, content_type?, encoding?, namespace?}`. `kind` (one of `blog`, `markdown`, `transcript`, `summary`, `json`, `text`, `html`, `csv`, `binary`) drives default `filename` + `content_type` so skills don't have to think about MIME types. Returns `{artifact_key, url, size, content_type, filename, namespace}`. `encoding:"base64"` opt-in for binary content. Filename safety: leading slashes stripped, `..` segments resolved.
+- `artifact.get` (v0.27.0, PR #450) — Symmetric reader. Input: `{artifact_key, encoding?}`. Output: `{content, encoding, content_type, size, artifact_key, filename, namespace}`. Text-shaped content types (`text/*`, `application/json`, `application/yaml`, `application/xml`, `*+json`, `*+xml`, `*+yaml` per RFC 6839) return as UTF-8 strings by default; everything else as base64. Force either with `encoding:"utf-8"` / `encoding:"base64"`.
+- `artifact.list` (v0.27.0, PR #450) — Introspection. Input: `{namespace?, filename?, limit?}` (filename is case-insensitive substring match). Output: `{artifacts:[...], count, truncated}`. Default limit 100 entries, newest-first sort by `created_at`. Pair `artifact.list` (find the key) with `artifact.get` (read the bytes) when an operator uploaded a file the agent needs to discover, or to enumerate what a multi-pack skill produced.
+- `artifact.verify_manifest` (v0.27.0, PR #462, ADR-pattern issue #461) — **Anti-hallucination audit-callback.** When a skill produces a deposit manifest (e.g., the `tech-blog-publisher` 6-section output with claimed `artifact_key` per platform variation), call `artifact.verify_manifest` with the claimed keys to confirm each artifact actually exists in the store. Input: `{expected: [{artifact_key: "..."}]}` (also accepts flat string array `[...]` for Tier C friendliness). Output: `{verified[], missing[], all_present, summary}`. Empirically validated (PR #481 → PR #484 Nemotron baseline-vs-hardened A/B): 24 calls / 0 deposit → 7 calls / deposit + verify with `all_present:true`. Per-use-case AGENTS.md hardening (tool whitelist + async pattern + tool-call invalidation rules) is the load-bearing layer enabling this on Tier C models. See `docs/howto/personalize-an-openclaw-agent.md` and `docs/howto/per-model-agents/`.
 
 ### Filesystem (session-scoped)
 - `fs.read` — Read a file from a session-local clone.

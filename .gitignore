@@ -22,6 +22,14 @@ deploy/compose/.env.local
 deploy/compose/.env.*
 !deploy/compose/.env.example
 
+# Root-level .env files (operator-local dev shells exporting credentials
+# like OPENROUTER_API_KEY). Never commit these. GitHub secret-scanning
+# would reject the push, but better to ignore them up front.
+.env
+.env.local
+.env.*
+!.env.example
+
 # Build artifacts
 /bin/
 *.test

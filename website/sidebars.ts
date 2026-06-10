@@ -50,6 +50,14 @@ const sidebars: SidebarsConfig = {
         'SIDECAR-LANGUAGES',
       ],
     },
+    {
+      type: 'category',
+      label: 'Per-model agent adaptation',
+      collapsed: false,
+      items: [
+        'howto/per-model-agents/gemma-4-iterative-workflow',
+      ],
+    },
   ],
 
   reference: [

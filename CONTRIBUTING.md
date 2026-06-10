@@ -148,8 +148,13 @@ the project also welcomes:
   community needs. Three submission shapes:
   - **Profile contribution** — refine an existing profile or add a new model.
     Open a PR with your trace evidence in the `community_traces[]` field of
-    the relevant YAML file. Schema documented inline in
-    [`models/openai-gpt-oss-120b-free.yaml`](models/openai-gpt-oss-120b-free.yaml).
+    the relevant YAML file. Schema reference:
+    [`docs/reference/model-profiles-schema.md`](docs/reference/model-profiles-schema.md).
+    Non-OpenRouter providers (HuggingFace Inference Providers, Together AI,
+    Groq, Cerebras, SambaNova, self-hosted vLLM / SGLang / TGI) are also
+    supported — see
+    [`docs/howto/configure-non-openrouter-providers.md`](docs/howto/configure-non-openrouter-providers.md)
+    for routing setup.
   - **Use-case contribution** — used an existing profile on a new use case
     (research summarizer, code reviewer, compliance auditor, etc.) with
     different results? Open an issue tagged `field-report` with the trace

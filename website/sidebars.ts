@@ -56,6 +56,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'howto/personalize-an-openclaw-agent',
+        'howto/configure-non-openrouter-providers',
         'howto/per-model-agents/gemma-4-iterative-workflow',
       ],
     },
@@ -66,6 +67,7 @@ const sidebars: SidebarsConfig = {
     'reference/architecture',
     'reference/agent-memory',
     'reference/models',
+    'reference/model-profiles-schema',
     {
       type: 'category',
       label: 'Prompt templates',

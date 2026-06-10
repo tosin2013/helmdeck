@@ -1,0 +1,40 @@
+name: model-profiles-validate
+
+# Gate per #464 / #482: validate models/*.yaml against the schema
+# documented in docs/reference/model-profiles-schema.md. Catches
+# malformed profiles before they land. Cheap to run, fast to fail.
+#
+# Triggers only when files under models/ or the validator script
+# itself change in a PR — avoids spending CI minutes on unrelated PRs.
+
+on:
+  pull_request:
+    paths:
+      - 'models/**'
+      - 'scripts/validate-model-profiles.py'
+      - 'docs/reference/model-profiles-schema.md'
+      - '.github/workflows/model-profiles-validate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'models/**'
+      - 'scripts/validate-model-profiles.py'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Validate all models/*.yaml
+        run: python3 scripts/validate-model-profiles.py

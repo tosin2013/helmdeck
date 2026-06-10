@@ -1,0 +1,211 @@
+# SPDX-License-Identifier: Apache-2.0
+# huggingface/openai-gpt-oss-120b — model prompting profile (STUB)
+#
+# First non-OpenRouter profile in the per-model prompting-profile library
+# proposed by issue #464, contributed under the HuggingFace community
+# track from issue #482. Sourced from OFFICIAL OpenAI gpt-oss documentation
+# (same as the OpenRouter sibling at models/openai-gpt-oss-120b-free.yaml)
+# — model behavior is provider-agnostic; only routing layer differs.
+#
+# This profile ships as a STUB: prompting guidance is fully populated
+# (identical to the OpenRouter route's empirically-validated guidance per
+# PR #462/#470/#480), but `validated_against`, `community_traces`, and
+# `comparison_traces` arrays start empty. External contributors with HF
+# infrastructure are invited to submit traces here via PR — see
+# docs/howto/add-free-models.md § 7 for the contribution path.
+#
+# Cross-provider relationship: the prompting style, sampling defaults,
+# reasoning controls, chain-call reliability, best practices, and
+# anti-patterns in this profile are IDENTICAL to the OpenRouter
+# sibling because the model itself is the same. Only the routing
+# layer differs (HF Inference Providers vs OpenRouter free pool).
+# A community contributor running HF-hosted gpt-oss-120b through the
+# three-turn iterative workflow should see the same empirical
+# behaviors documented in the OpenRouter profile's community_traces[].
+# Different provider, same model.
+
+provider: huggingface
+model: openai/gpt-oss-120b
+family: gpt-oss
+parameters: 117_000_000_000     # 117B params, MoE
+active_parameters: 5_100_000_000 # ~5.1B active per pass
+tier: C                          # see docs/reference/models.md
+                                 # tier is model-based, not provider-based;
+                                 # gpt-oss-120b is Tier C regardless of host
+
+# --- HuggingFace Inference Providers routing ----------------------
+
+hf_routing_policy: ":preferred"  # default; operator can override to ":fastest" or ":cheapest"
+                                 # via OpenClaw's per-agent model config
+
+context_window: 131072
+context_window_notes: |
+  Same model as the OpenRouter `openai/gpt-oss-120b:free` route; context
+  window is unchanged. The routing layer differs:
+
+  - **OpenAI-compatible**: `router.huggingface.co/v1` exposes the same
+    chat-completions surface as OpenRouter — operators can swap base URL
+    + API key in OpenClaw without changing prompt or workflow shape.
+  - **Provider-selection transparency**: HF exposes routing policies
+    (`:fastest`, `:cheapest`, `:preferred`) so operators can see WHICH
+    upstream is serving each request (Cerebras / Fireworks / Groq /
+    SambaNova / Together / etc.). The OpenRouter `:free` pool's
+    upstream is opaque from outside — the 2026-06-10 empirical findings
+    on `:free`-route rate limits (PR #481 / issue #473, #474, #476) are
+    one motivation for #482's community track.
+  - **Free-tier credit**: HF Inference Providers free tier is small
+    (writeups quote ~$0.10/month). PRO and Team plans have higher
+    quotas. Sustained empirical work via the BYOK path on OpenRouter
+    or via paid HF Inference Endpoints (`provider: huggingface` with
+    an operator-owned endpoint URL) avoids the small free-tier limit.
+
+  See docs/howto/configure-non-openrouter-providers.md for the routing
+  setup walkthrough.
+
+official_docs:
+  - https://developers.openai.com/cookbook/articles/openai-harmony   # Harmony response format
+  - https://huggingface.co/openai/gpt-oss-120b                       # HF model card (first-class)
+  - https://huggingface.co/docs/inference-providers/index            # HF Inference Providers docs
+  - https://arxiv.org/html/2508.10925v1                              # gpt-oss arXiv model card
+
+# --- prompting style (provider-agnostic) -------------------------
+#
+# IDENTICAL to the OpenRouter sibling at
+# models/openai-gpt-oss-120b-free.yaml — model behavior is the same
+# regardless of routing layer. Empirically validated for the
+# OpenRouter route in PR #462/#470/#480; the same empirical findings
+# apply here because the model is the same.
+
+prompting_style: objectives_constraints_success_criteria
+prompting_style_notes: |
+  GPT-OSS performs best when given a clear objective, explicit
+  constraints, and machine-checkable success criteria — and avoids
+  micromanagement of method. Per Together AI's docs:
+  "performs best when given clear objectives while avoiding
+  over-prompting or micromanaging the method."
+
+  The canonical shape: Objective + context + source priority +
+  constraints + output format + success criteria. NOT step-by-step
+  numbered procedures.
+
+reasoning_effort_control: true
+reasoning_effort_levels: [low, medium, high]
+reasoning_effort_defaults:
+  summarization: low
+  extraction: low
+  formatting: low
+  product_requirements: medium
+  code_review: medium
+  scoring_logic: medium
+  architecture: high
+  debugging: high
+  financial_modeling: high
+  multi_document_synthesis: high
+
+source_priority_directive: required
+source_priority_directive_notes: |
+  GPT-OSS can prefer internal knowledge unless told otherwise. Skills
+  using gpt-oss MUST include an explicit source-priority section. This
+  is provider-agnostic — same behavior on HF as on OpenRouter.
+
+harmony_format: true
+harmony_format_notes: |
+  GPT-OSS uses the harmony response format and supports chain-of-
+  thought internally. The chain-of-thought is not intended to be
+  shown directly to end users. Harness handling identical regardless
+  of provider.
+
+# --- skill-prose guidance ----------------------------------------
+#
+# IDENTICAL to the OpenRouter sibling — model behavior is provider-agnostic.
+
+best_practices:
+  - "Lead with OBJECTIVE, not 'Step 1.'"
+  - "State CONSTRAINTS as concrete rules, not 'do this then that.'"
+  - "Define SUCCESS CRITERIA that the model can check itself."
+  - "Use a SOURCE PRIORITY section: uploaded data → project context → general knowledge."
+  - "Compact role instructions — no conflicting brevity/depth directives."
+  - "For coding tasks: ask for diffs, tests, assumptions, minimal patches."
+  - "For chained tool calls: frame the chain as part of the success criteria, not as separate 'steps.'"
+  - "Specify reasoning effort per task type (low/medium/high) — see reasoning_effort_defaults."
+
+anti_patterns:
+  - "Step-by-step micromanagement ('First X, then Y, then Z, then compare A, then rewrite...')."
+  - "Conflicting brevity directives ('be concise' AND 'be exhaustive' in the same prompt)."
+  - "Implicit source priority (assume the model will read uploaded files first without being told)."
+  - "Numbered procedure of 5+ steps where the order matters — gpt-oss reasons rather than follows; long ordered lists trigger the plausibility-shaped-output failure mode (PR #462)."
+  - "Treating tool calls as separable 'steps' rather than as part of success criteria. On Tier C, advisory 'remember to call X' is treated as advisory and frequently skipped; framing X as part of WHAT MAKES THE OUTPUT VALID raises the call rate."
+  - "Marking instructions 'MANDATORY' or 'CRITICAL' without integrating them into success criteria — this gives the model the option to acknowledge the mandate in text while skipping the action."
+
+# --- chain-call reliability (provider-agnostic) ------------------
+
+chain_call_reliability:
+  short_chains: high      # 1-2 pack calls per turn
+  medium_chains: medium   # 3-4 pack calls per turn
+  long_chains: low        # 5+ pack calls per turn
+  notes: |
+    Same as the OpenRouter sibling — observed in 2026-06-09 tests:
+    gpt-oss-120b reliably makes 1-2 real pack calls per turn, then
+    hallucinates the rest of a 6+ call chain as text. This is
+    "plausibility-shaped output" (PR #462). Mitigation: structure
+    skills as single-action turns OR pair every multi-call producer
+    with an audit pack the agent MUST also call (the audit-callback
+    pattern, issue #461 / PR #481 + #484).
+
+    Cross-provider expectation: chain-call reliability is a model
+    property, not a routing property. HF-hosted gpt-oss should
+    exhibit the same 1-2 reliable / 3-4 partial / 5+ unreliable
+    pattern as the OpenRouter-routed gpt-oss. A community trace
+    confirming or refuting this would be a valuable contribution
+    per #482.
+
+# --- skill prose template for gpt-oss --------------------------
+
+prompt_template: |
+  ## Objective
+  {what the agent is trying to produce}
+
+  ## Source priority
+  1. {primary source — uploaded data / direct repo content}
+  2. {secondary source — pack output / scraped content}
+  3. {fallback source — model general knowledge}
+  4. If the answer is not supported by the data, say what is missing instead of guessing.
+
+  ## Constraints
+  - {hard rule 1 — what must NOT happen}
+  - {hard rule 2}
+  - {style/voice constraints from USER.md and SOUL.md}
+
+  ## Output format
+  - {required sections, in order, with explicit content shape}
+
+  ## Success criteria
+  - {criterion 1 — machine-checkable, e.g. "every artifact key in the manifest exists in the store per artifact.verify_manifest"}
+  - {criterion 2}
+
+  ## Reasoning
+  Reasoning: {low / medium / high}
+
+# --- empirical-validation pointer --------------------------------
+#
+# HF route empirical sections start empty — external contributors
+# with HF Inference Providers, HF Endpoints, or HF Inference API
+# access are invited to submit traces here via PR. See
+# docs/howto/add-free-models.md § 7 for the contribution path and
+# docs/howto/configure-non-openrouter-providers.md for routing setup.
+#
+# The OpenRouter sibling profile at models/openai-gpt-oss-120b-free.yaml
+# has 1 validated_against entry + 2 community_traces entries +
+# 1 comparison_traces entry from the same model on the OpenRouter
+# free route — operators submitting HF traces are encouraged to
+# replicate one of those use cases (publishing-strategist or
+# blog-drafter-test) for a clean cross-provider A/B.
+
+validated_against: []      # community contribution invited (#482)
+
+community_traces: []       # community contribution invited (#482)
+
+comparison_traces: []      # awaiting cross-provider runs;
+                           # the natural first comparison is gpt-oss-120b
+                           # on HF Inference Providers vs gpt-oss-120b:free
+                           # on OpenRouter using the same prompt + workflow

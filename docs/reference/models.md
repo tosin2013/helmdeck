@@ -61,7 +61,13 @@ The handoff line at the end of each turn IS load-bearing — if the skill prose 
 - [`nvidia/nemotron-3-super-120b-a12b:free`](https://github.com/tosin2013/helmdeck/blob/main/models/nvidia-nemotron-3-super-120b-a12b-free.yaml) — *profile stub*; 120B/12B hybrid Mamba-Transformer MoE (1M context); sourced from Nvidia NIM + agentic-coding cookbook + technical blog; baseline empirical trace pending.
 - [`qwen/qwen3-coder:free`](https://github.com/tosin2013/helmdeck/blob/main/models/qwen-qwen3-coder-free.yaml) — *profile stub*; 480B-total / 35B-active MoE coder-specialized variant (1M context via YaRN, 256K native); sourced from Alibaba Qwen HF card + GitHub README + announcement blog; baseline empirical trace pending. Substituted for the originally-listed `z-ai/glm-4.5-air:free`, which was deprecated from OpenRouter on or before 2026-06-10.
 
+**Non-OpenRouter profiles (alternative routing)** — per [issue #482](https://github.com/tosin2013/helmdeck/issues/482):
+
+- [`huggingface/openai/gpt-oss-120b`](https://github.com/tosin2013/helmdeck/blob/main/models/huggingface-openai-gpt-oss-120b.yaml) — first non-OpenRouter template; reuses the gpt-oss prompting guidance from the OpenRouter sibling above (model behavior is provider-agnostic); routes through HuggingFace Inference Providers (`router.huggingface.co/v1`) with `:fastest` / `:cheapest` / `:preferred` provider-selection policies. Empirical sections empty — community contributions invited. See [`docs/howto/configure-non-openrouter-providers.md`](../howto/configure-non-openrouter-providers.md) for routing setup.
+
 Stub profiles ship the schema scaffold with docs-sourced prompting guidance. They invite community contributions per [`docs/howto/add-free-models.md` § 7](../howto/add-free-models.md): operators running custom Tier C agents can submit trace excerpts to populate `community_traces[]` or open issues against any per-model YAML.
+
+**See also**: [`docs/reference/model-profiles-schema.md`](model-profiles-schema.md) for the canonical YAML schema reference; [`docs/howto/configure-non-openrouter-providers.md`](../howto/configure-non-openrouter-providers.md) for routing setup on HuggingFace / Together / Groq / self-hosted.
 
 ## How tier affects behavior
 

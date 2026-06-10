@@ -191,18 +191,18 @@ One library entry won't fit every use case. Don't expect it to.
 
 ## Available profiles
 
-Today the library contains:
+See the [tier reference](../reference/models.md) for the current per-model profile list — five OpenRouter profiles (gpt-oss, gemma-4, llama-3.3, nemotron-3-super, qwen3-coder) plus the first non-OpenRouter template (HuggingFace gpt-oss). Schema reference: [`docs/reference/model-profiles-schema.md`](../reference/model-profiles-schema.md).
 
-- [`models/openai-gpt-oss-120b-free.yaml`](https://github.com/tosin2013/helmdeck/blob/main/models/openai-gpt-oss-120b-free.yaml) — empirically validated 2026-06-09
+## Adding a non-OpenRouter profile
 
-Planned per [issue #464](https://github.com/tosin2013/helmdeck/issues/464):
+The schema accepts a union of providers (`openrouter` / `huggingface` / `together` / `groq` / `cerebras` / `sambanova` / `custom`). To contribute a profile for a routing layer other than OpenRouter:
 
-- `meta-llama/llama-3.3-70b-instruct:free`
-- `nvidia/nemotron-3-super-120b-a12b:free`
-- `google/gemma-2-9b-it:free`
-- `z-ai/glm-4.5-air:free`
+1. Set up the routing — see [`docs/howto/configure-non-openrouter-providers.md`](configure-non-openrouter-providers.md) for HuggingFace Inference Providers (primary), Together AI / Groq / Cerebras / SambaNova direct (brief), and self-hosted vLLM / SGLang / TGI (brief).
+2. Fork an existing profile in `models/` as your starting template — pick the one with the model family closest to yours.
+3. Update `provider:` to your routing layer's identifier and add any per-provider fields (`hf_routing_policy`, `endpoint_base_url`, etc.) per the schema reference.
+4. Empirical sections (`validated_against`, `community_traces`, `comparison_traces`) start as `[]` arrays — populated via the contribution paths in § 7.
 
-Each waits for empirical validation evidence — see § 7 for how to contribute.
+The first non-OpenRouter template — [`models/huggingface-openai-gpt-oss-120b.yaml`](https://github.com/tosin2013/helmdeck/blob/main/models/huggingface-openai-gpt-oss-120b.yaml) — was added under [issue #482](https://github.com/tosin2013/helmdeck/issues/482) to demonstrate the pattern; community contributions for HuggingFace, self-hosted, or direct-provider profiles are welcomed.
 
 ## Share your findings (community research)
 

@@ -302,16 +302,18 @@ The user explicitly opts in by giving you a webhook_url + webhook_secret; never 
 
 ---
 
-## Pack composition — you are a creative agent
+## Pack composition pattern
 
-You are not limited to calling one pack per user request. **You can and should compose packs** to accomplish complex goals:
+Packs are composable — multiple pack calls can chain in service of a single user request. The composition pattern is "agent generates content, packs handle production":
 
-- **"Create a pitch deck video"** → YOU write the Marp markdown with speaker notes → call `slides.narrate` → video + YouTube metadata
-- **"Write a blog post with sources"** → YOU write the prose → call `content.ground` with `rewrite: true` → grounded blog artifact
-- **"Research a topic and present it"** → call `research.deep` → YOU format the synthesis as a Marp deck → call `slides.narrate`
+- **"Create a pitch deck video"** → agent writes the Marp markdown with speaker notes → call `slides.narrate` → video + YouTube metadata
+- **"Write a blog post with sources"** → agent writes the prose → call `content.ground` with `rewrite: true` → grounded blog artifact
+- **"Research a topic and present it"** → call `research.deep` → agent formats the synthesis as a Marp deck → call `slides.narrate`
 - **"Generate code, test it, commit it"** → call `repo.fetch` → call `fs.write` → call `cmd.run` → call `git.commit` → call `repo.push`
 
-When composing, YOU generate the creative content (slides, blog text, code) and the packs handle the production work (rendering, narration, grounding, committing). Do not ask the user to provide content you can generate yourself.
+The split: agent generates the creative content (slides, blog text, code); packs handle the production work (rendering, narration, grounding, committing). Agents should generate content themselves rather than asking the user for material they could produce.
+
+> **Operator override**: this is mechanism-level default behavior. To pin a different composition style (e.g., "always ask before generating content" for editorial workflows), state it in AGENTS.md — see [`docs/integrations/openclaw.md` §5d](https://github.com/tosin2013/helmdeck/blob/main/docs/integrations/openclaw.md) for the layered-customization pattern.
 
 ---
 

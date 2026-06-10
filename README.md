@@ -44,7 +44,7 @@ Three audiences specifically:
 - **Intent decomposition (ADR 049)** — `helmdeck.plan` turns a multi-action prompt into an ordered, pipeline-aware step plan plus a `rewritten_prompt`.
 - **LLM context manager (ADR 050)** — `internal/llmcontext` compacts catalog-heavy prompts to fit small-model context budgets (tiered per-model budgets, cascading select + lexical rank, optional two-pass filter), surfaced through `helmdeck://context-budgets` and `helmdeck://my-plans`.
 
-**52 capability packs** ship in the control-plane binary (42 without an AI gateway configured), alongside **21 built-in pipelines**, a community pack **marketplace** (`helmdeck pack install <name>`), and operator-supplied `cmd.*` subprocess packs. Earlier headline features remain: end-to-end content chaining (image.generate auto-feeds podcast/slides/blog covers), the `helmdeck://image-models` MCP resource, image-mode install (`./scripts/install.sh --image-mode`), and the Pack Test Runner UI. Helmdeck is published to the [official
+**57 capability packs** ship in the control-plane binary (47 without an AI gateway configured), alongside **21 built-in pipelines**, a community pack **marketplace** (`helmdeck pack install <name>`), and operator-supplied `cmd.*` subprocess packs. Earlier headline features remain: end-to-end content chaining (image.generate auto-feeds podcast/slides/blog covers), the `helmdeck://image-models` MCP resource, image-mode install (`./scripts/install.sh --image-mode`), and the Pack Test Runner UI. Helmdeck is published to the [official
 MCP Registry](https://registry.modelcontextprotocol.io/) as
 `io.github.tosin2013/helmdeck` for one-line install in registry-aware
 clients. Phases 1–6.5 are complete; the current milestone is **v1.0 — Kubernetes & GA** (Phase 7), with backlog
@@ -179,7 +179,7 @@ roadmap.
 
 ## Built-in Capability Packs
 
-53 packs ship in the box (43 without an AI gateway configured). Each one hides a multi-step workflow
+57 packs ship in the box (47 without an AI gateway configured). Each one hides a multi-step workflow
 behind a single typed JSON-Schema call so weak open-weight models
 can drive it as reliably as frontier models. The full input/output
 contract for every pack lives in [`docs/PACKS.md`](docs/PACKS.md).

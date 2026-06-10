@@ -1,6 +1,6 @@
 ---
 title: Capability pack catalog
-description: Reference table for every shipped helmdeck capability pack — input/output schema, session requirement, execution engine, vault credentials. 52 packs total.
+description: Reference table for every shipped helmdeck capability pack — input/output schema, session requirement, execution engine, vault credentials. 57 packs total.
 keywords: [helmdeck, capability packs, browser automation, web scraping, GitHub, vault, MCP, slides, vision, repo, filesystem]
 sidebar_label: PACKS reference
 priority: 0.9
@@ -9,7 +9,7 @@ changefreq: weekly
 
 # Helmdeck — Built-in Capability Pack Reference
 
-52 packs ship in the control plane binary (42 without an AI gateway configured — the 10 gateway-gated packs are the LLM/vision packs). All are available as MCP tools (via `/api/v1/mcp/sse` or `/api/v1/mcp/ws`) and as REST endpoints (`POST /api/v1/packs/<name>`).
+57 packs ship in the control plane binary (47 without an AI gateway configured — the 10 gateway-gated packs are the LLM/vision packs). All are available as MCP tools (via `/api/v1/mcp/sse` or `/api/v1/mcp/ws`) and as REST endpoints (`POST /api/v1/packs/<name>`).
 
 ## Quick reference
 
@@ -132,7 +132,7 @@ For MCP clients: when the artifact is an image under 1 MB, the MCP response incl
 
 ## Gateway-gated packs
 
-10 of the 53 packs require an AI gateway (a configured chat-completion provider). Without one, the binary registers 43 packs and these are absent: `vision.click_anywhere`, `vision.extract_visible_text`, `vision.fill_form_by_label`, `web.test`, `research.deep`, `content.ground`, `slides.outline`, `blog.rewrite_for_audience`, `hyperframes.compose`, `slides.narrate`. The newest pack, `av.validate`, has no gateway dependency (ffprobe + libavfilter + python3 are baked into the sidecar image).
+10 of the 57 packs require an AI gateway (a configured chat-completion provider). Without one, the binary registers 47 packs and these are absent: `vision.click_anywhere`, `vision.extract_visible_text`, `vision.fill_form_by_label`, `web.test`, `research.deep`, `content.ground`, `slides.outline`, `blog.rewrite_for_audience`, `hyperframes.compose`, `slides.narrate`. The newest pack, `av.validate`, has no gateway dependency (ffprobe + libavfilter + python3 are baked into the sidecar image).
 
 Beyond the built-ins, operators can register `cmd.*` subprocess packs (`HELMDECK_COMMAND_PACKS_DIR`) and install community packs from the marketplace (`helmdeck pack install <name>`); both appear in `tools/list` at runtime.
 

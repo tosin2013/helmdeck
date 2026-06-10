@@ -6,7 +6,7 @@ keywords: [helmdeck, free models, context budget, llmcontext, compaction, contex
 
 # Run orchestration packs on free models
 
-`helmdeck.plan` and `helmdeck.route` give the model a projection of the catalog (52 packs + 21 pipelines, each with metadata) to reason over. On a frontier model that fits comfortably. On a small free model with an 8K–16K context window, the full projection can blow the budget, and the model returns an empty or garbage plan.
+`helmdeck.plan` and `helmdeck.route` give the model a projection of the catalog (57 packs + 21 pipelines, each with metadata) to reason over. On a frontier model that fits comfortably. On a small free model with an 8K–16K context window, the full projection can blow the budget, and the model returns an empty or garbage plan.
 
 The **LLM context manager** (`internal/llmcontext`, ADR 050) fixes that: it compacts the catalog projection to fit each model's budget before the packs call the gateway. This guide explains how to read what it did and what to do when a plan still comes back thin.
 

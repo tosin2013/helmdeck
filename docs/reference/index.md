@@ -21,7 +21,7 @@ Information-oriented lookup. These pages are precise, complete, and dry — opti
 - **[Models reference](./models.md)** — operator-facing tier table: which models are recognized, what tier they're classified as, what tier-aware behavior applies (catalog projection, output budget, `PromptVariant`, strict JSON, prefix cache), and how to override.
 - **[MCP resources](./mcp-resources.md)** — read-only resources for catalog discovery, routing, learned defaults, memory, and context budgets.
 - **[Agent memory](./agent-memory.md)** — the per-caller memory delivery layer (ADR 039) packs opt into.
-- **[SKILLS](../integrations/SKILLS.md)** — agent-facing reference. Load this into your MCP client's system prompt so the LLM knows how to use all 52 packs, retry transient errors, and chain sessions.
+- **[SKILLS](../integrations/SKILLS.md)** — agent-facing reference. Load this into your MCP client's system prompt so the LLM knows how to use all 57 packs, retry transient errors, and chain sessions.
 - **[Integrations index](../integrations/README.md)** — sidecar topology and per-client guide map.
 
 ## Architecture Decisions

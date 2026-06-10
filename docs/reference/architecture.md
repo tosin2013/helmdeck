@@ -41,7 +41,7 @@ graph TB
         api["REST API<br/>/api/v1/*"]
         mcp_server["MCP server<br/>WS + SSE + stdio"]
         gateway["AI gateway<br/>OpenAI-compatible /v1/*"]
-        registry["Pack registry<br/>(52 packs)"]
+        registry["Pack registry<br/>(57 packs)"]
         vault["Credential vault<br/>(AES-256-GCM)"]
         sess_mgr["Session manager"]
         ui["Embedded React UI"]

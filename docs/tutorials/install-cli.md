@@ -9,7 +9,7 @@ changefreq: monthly
 
 # Install helmdeck (CLI walkthrough)
 
-This tutorial takes you from a clean machine to a running helmdeck stack in about 10 minutes. You'll log in to the Management UI, see the catalog of 52 capability packs, and run a smoke test that creates a session and takes a screenshot end-to-end.
+This tutorial takes you from a clean machine to a running helmdeck stack in about 10 minutes. You'll log in to the Management UI, see the catalog of 57 capability packs, and run a smoke test that creates a session and takes a screenshot end-to-end.
 
 If you'd rather skim the README and figure it out yourself, [scripts/install.sh](https://github.com/tosin2013/helmdeck/blob/main/scripts/install.sh) is the canonical bootstrap. This page walks through what it does and why.
 

@@ -191,7 +191,7 @@ docker compose -f /root/openclaw/docker-compose.yml run --rm -T openclaw-cli age
   --message "List every MCP tool whose name starts with helmdeck__. Just the names, one per line."
 ```
 
-You should see the assistant reply listing the full `helmdeck__*` catalog — the 52 capability packs (42 without a gateway) plus the 3 async wrappers (`helmdeck__pack-start`, `helmdeck__pack-status`, `helmdeck__pack-result`) and the pipeline MCP tools.
+You should see the assistant reply listing the full `helmdeck__*` catalog — the 57 capability packs (47 without a gateway) plus the 3 async wrappers (`helmdeck__pack-start`, `helmdeck__pack-status`, `helmdeck__pack-result`) and the pipeline MCP tools.
 
 > 🧩 **Naming convention**: MCP tool names can't contain dots, so helmdeck's `browser.screenshot_url` becomes `helmdeck__browser-screenshot_url` over MCP. The mapping is mechanical — `<family>.<action>` → `helmdeck__<family>-<action>`. Pack reference pages list both forms.
 

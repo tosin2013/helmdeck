@@ -104,7 +104,7 @@ Open `http://localhost:18789` in a browser, start a chat with the `main` agent, 
 List every tool available to you whose name starts with "helmdeck__".
 ```
 
-Expected: the agent lists the full `helmdeck__*` catalog (52 capability packs, or 42 without an AI gateway, plus the async wrappers and pipeline tools — `helmdeck__repo_fetch`, `helmdeck__repo_map`, `helmdeck__browser_interact`, etc.). If the list is much shorter, something on the MCP handshake broke. Verify with:
+Expected: the agent lists the full `helmdeck__*` catalog (57 capability packs, or 47 without an AI gateway, plus the async wrappers and pipeline tools — `helmdeck__repo_fetch`, `helmdeck__repo_map`, `helmdeck__browser_interact`, etc.). If the list is much shorter, something on the MCP handshake broke. Verify with:
 
 ```bash
 docker logs helmdeck-control-plane --since 10m 2>&1 | grep 'mcp/sse'

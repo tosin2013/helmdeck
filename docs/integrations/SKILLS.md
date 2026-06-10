@@ -1,6 +1,6 @@
 ---
 title: Agent skills (load into your MCP client prompt)
-description: Drop-in agent guidance for helmdeck's 52 capability packs. Teaches the LLM how to call each pack, retry transient errors, chain workflows, and file bug reports. Load this into your MCP client's system prompt.
+description: Drop-in agent guidance for helmdeck's 57 capability packs. Teaches the LLM how to call each pack, retry transient errors, chain workflows, and file bug reports. Load this into your MCP client's system prompt.
 keywords: [helmdeck, agent skills, MCP, system prompt, OpenClaw, Claude Code, Claude Desktop, Gemini CLI, capability packs, weak models]
 priority: 0.9
 changefreq: weekly
@@ -8,7 +8,7 @@ changefreq: weekly
 
 # Helmdeck Agent Skills
 
-**Load this file into your MCP client's system prompt or agent config.** It teaches the LLM how to use helmdeck's 52 capability packs correctly, retry transient errors, diagnose failures, chain multi-step workflows, and file bug reports.
+**Load this file into your MCP client's system prompt or agent config.** It teaches the LLM how to use helmdeck's 57 capability packs correctly, retry transient errors, diagnose failures, chain multi-step workflows, and file bug reports.
 
 The intent is the same across every client: this file's content must be in the model's context **before** it sees the user's first prompt. The mechanism varies — pick the subsection that matches your client.
 
@@ -83,7 +83,7 @@ Find the client's "system prompt" / "custom instructions" / "agent context" fiel
 
 ## You are connected to helmdeck
 
-Helmdeck is a browser automation and AI capability platform. You have access to up to 52 capability packs exposed as MCP tools (42 when no AI gateway is configured — the 10 LLM/vision packs are gated on a gateway). Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
+Helmdeck is a browser automation and AI capability platform. You have access to up to 57 capability packs exposed as MCP tools (47 when no AI gateway is configured — the 10 LLM/vision packs are gated on a gateway). Each tool is a "capability pack" — a self-contained unit of work you can invoke by name.
 
 ## Pack catalog
 

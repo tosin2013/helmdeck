@@ -6,7 +6,7 @@ keywords: [helmdeck, routing, helmdeck.route, routing-guide, gap analysis, ADR 0
 
 # Route a request and read gap warnings
 
-When an agent gets a request, it has to pick *which* of the 52 packs (or 21 pipelines) to run. Hard-coding that logic in a system prompt doesn't scale. `helmdeck.route` (ADR 047) does it dynamically: it reads the structured catalog, blends in the caller's learned defaults, asks an LLM to reason, and returns a single recommendation — or a structured `gap_warning` when nothing in the catalog can serve the request.
+When an agent gets a request, it has to pick *which* of the 57 packs (or 21 pipelines) to run. Hard-coding that logic in a system prompt doesn't scale. `helmdeck.route` (ADR 047) does it dynamically: it reads the structured catalog, blends in the caller's learned defaults, asks an LLM to reason, and returns a single recommendation — or a structured `gap_warning` when nothing in the catalog can serve the request.
 
 This guide assumes helmdeck is installed with an AI gateway configured (routing is LLM-backed). For multi-action prompts use [`helmdeck.plan`](./intent-decomposition.md) instead; the two share the same catalog and memory.
 

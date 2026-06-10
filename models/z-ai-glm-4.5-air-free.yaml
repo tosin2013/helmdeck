@@ -1,0 +1,190 @@
+# SPDX-License-Identifier: Apache-2.0
+# z-ai/glm-4.5-air:free — model prompting profile (STUB)
+#
+# Fifth per-model profile in the library proposed by issue #464.
+# Sourced from OFFICIAL Z.ai / Zhipu AI documentation only — see
+# `official_docs` below for the citation list. This profile ships as a
+# STUB: metadata + prompting guidance are populated from official docs,
+# but `validated_against`, `community_traces`, and `comparison_traces`
+# are empty. A baseline empirical trace is tracked as a follow-up issue.
+
+provider: openrouter
+model: z-ai/glm-4.5-air:free
+family: glm-4.5
+parameters: 106_000_000_000     # 106B total
+active_parameters: 12_000_000_000 # 12B active per pass (MoE)
+tier: C                          # see docs/reference/models.md
+
+context_window: 131072
+context_window_notes: |
+  131K-token window. Air is the lightweight variant of the GLM-4.5
+  family (vs. the flagship 355B/32B variant). Knowledge cutoff:
+  December 2024 (per OpenRouter card; not explicitly stated in Z.ai
+  primary sources). GLM-4.5 is multi-stage trained on 23T tokens
+  (per arXiv 2508.06471).
+
+official_docs:
+  - https://huggingface.co/zai-org/GLM-4.5-Air                          # Hugging Face model card
+  - https://huggingface.co/zai-org/GLM-4.5-Air/blob/main/chat_template.jinja  # Chat template (authoritative)
+  - https://github.com/zai-org/GLM-4.5                                  # Official repo
+  - https://arxiv.org/abs/2508.06471                                    # GLM-4.5 technical report
+  - https://z.ai/blog/glm-4.5                                           # Z.ai announcement
+  - https://openrouter.ai/z-ai/glm-4.5-air:free                         # OpenRouter routing + pricing
+
+# --- prompting style ---------------------------------------------
+
+prompting_style: chatml_structured
+prompting_style_notes: |
+  GLM-4.5 uses Z.ai's own ChatML-like format. The chat template
+  (authoritative source: `chat_template.jinja` in the HF repo) wraps
+  the conversation in `[gMASK]<sop>` and uses `<|system|>`, `<|user|>`,
+  `<|assistant|>`, `<|observation|>` turn markers. The `<think>` /
+  `</think>` tags wrap reasoning when thinking mode is on; tool calls
+  use a custom XML wrapper (`<tool_call>`, `<arg_key>`, `<arg_value>`)
+  around OpenAI-style tool descriptions.
+
+  Apply via `tokenizer.apply_chat_template()` rather than hand-rolling
+  the delimiters — the template handles thinking-mode toggling, tool
+  formatting, and the `/nothink` user-message marker correctly.
+
+reasoning_effort_control: binary
+reasoning_effort_levels: [on, off]
+reasoning_effort_mechanism: |
+  Two equivalent ways to disable thinking:
+  - `extra_body={"chat_template_kwargs": {"enable_thinking": False}}`
+    when calling vLLM / SGLang OpenAI-compatible endpoints
+  - `/nothink` marker appended to the user message (the template
+    auto-appends this when `enable_thinking=False` is set)
+
+  Thinking is on by default. Quote (HF card): "thinking mode for
+  complex reasoning and tool usage, and non-thinking mode for
+  immediate responses." Unlike gpt-oss, GLM-4.5 Air does NOT expose
+  a graded low/medium/high knob.
+reasoning_effort_defaults:
+  summarization: off    # use /nothink — Z.ai recommends non-thinking for "straightforward questions"
+  extraction: off
+  formatting: off
+  product_requirements: on
+  code_review: on
+  tool_use: on          # Z.ai explicitly groups tool use with thinking-mode tasks
+  architecture: on
+  debugging: on
+  multi_document_synthesis: on
+
+source_priority_directive: optional
+source_priority_directive_notes: |
+  Not documented in primary Z.ai sources. Conservative default:
+  include an explicit source-priority section in any skill that wires
+  GLM-4.5 Air in for grounded generation.
+
+harmony_format: false
+harmony_format_notes: |
+  GLM-4.5 uses Z.ai's ChatML-like format, not OpenAI Harmony.
+
+function_calling_format: |
+  GLM's XML wrapper around OpenAI-style tool descriptions. The model
+  emits:
+
+    <tool_call>{function_name}
+    <arg_key>{key}</arg_key>
+    <arg_value>{value}</arg_value>
+    </tool_call>
+
+  Tool returns are wrapped:
+
+    <|observation|>
+    <tool_response>{result}</tool_response>
+    <|assistant|>
+
+  Quote (HF card): "Both support tool calling. Please use OpenAI-style
+  tool description format for calls."
+
+# --- skill-prose guidance ----------------------------------------
+
+best_practices:
+  - "Apply the official chat template (`tokenizer.apply_chat_template()`) — do NOT hand-roll the `[gMASK]<sop><|system|>` delimiters."
+  - "Use thinking mode for complex reasoning and tool usage; disable for short deterministic tasks (formatting, extraction, summarization)."
+  - "Disable thinking via `extra_body={\"chat_template_kwargs\": {\"enable_thinking\": False}}` OR by appending `/nothink` to user messages."
+  - "Describe tools in OpenAI-style JSON — the template wraps them in GLM's XML format automatically."
+  - "Strip prior-turn `<think>` blocks before re-submitting history — same hygiene as Gemma 4."
+  - "GLM-4.5 Air is positioned as the agentic-optimized lightweight variant; use thinking-on for tool-use workflows even when the prompt looks simple."
+  - "Z.ai platform-wide guidance suggests `top_p` in the 0.8-0.95 range; Air-specific sampling defaults are not documented in primary sources."
+
+anti_patterns:
+  - "Hand-rolling delimiters — the chat template's `[gMASK]<sop>` prefix, `<|system|>`/`<|user|>`/`<|assistant|>` markers, and tool-call XML wrapping all encode invariants that easy to miss when constructing prompts directly."
+  - "Using thinking mode for trivial requests — Z.ai recommends non-thinking mode for 'straightforward questions not requiring complex reasoning or tool usage'; thinking mode burns reasoning tokens unnecessarily."
+  - "Replaying prior-turn `<think>` thoughts back into history — same warning as Gemma 4; harness must strip the reasoning channel from previous assistant turns."
+  - "Treating reasoning effort as a graded knob — GLM-4.5 Air has binary on/off, no low/medium/high."
+  - "Assuming the 131K window is shared cleanly between thinking traces, verbose XML tool calls, and user content — the XML format is more verbose than JSON and eats context faster than a flat-JSON tool-call format would."
+  - "Trusting flagship GLM-4.5 (355B/32B) benchmarks as applicable to Air — Air's reported 59.8 agentic-suite score is below flagship 63+, so chain-call reliability projections from flagship runs OVER-estimate Air's behavior."
+
+# --- chain-call reliability (the load-bearing helmdeck concern) --
+
+chain_call_reliability:
+  short_chains: high      # 1-2 pack calls per turn
+  medium_chains: medium   # 3-4 pack calls per turn — needs empirical refinement
+  long_chains: low        # 5+ pack calls per turn — needs empirical refinement
+  notes: |
+    Documented evidence: GLM-4.5 family reports TAU-Bench 70.1% and
+    SWE-bench Verified 64.2% (flagship 355B/32B numbers, not Air
+    specifically). The HF model card states Air "delivers competitive
+    results at 59.8" on a 12-benchmark agentic suite. Z.ai positions
+    GLM-4.5 as "second specifically on agentic benchmarks" among
+    evaluated models, with Air as the agentic-optimized lightweight
+    variant.
+
+    Conservative best-effort estimate. Air's 59.8 score vs. flagship
+    63+ implies modest degradation on agentic tasks; the XML tool-call
+    format is more verbose than JSON and adds per-step token cost.
+    No published 5+ step benchmark for Air specifically; MoE-Air
+    variants typically lag flagships on long-horizon agent traces.
+    Empirical refinement pending — see follow-up issue.
+
+# --- skill prose template for glm-4.5-air ------------------------
+
+prompt_template: |
+  [gMASK]<sop><|system|>
+  ## Role
+  {what the agent IS — voice, expertise, scope}
+
+  ## Source priority
+  1. {primary source}
+  2. {secondary source}
+  3. {fallback source}
+  4. If not supported, say what is missing — do not guess.
+
+  ## Constraints
+  - {hard rule 1}
+  - {hard rule 2}
+
+  ## Output format
+  - {required sections, in order, with explicit content shape}
+
+  ## Success criteria
+  - {criterion 1 — machine-checkable}
+  - {criterion 2}
+
+  ## Thinking
+  enable_thinking: {True | False}   # passed via chat_template_kwargs
+  # OR append `/nothink` to user message to disable
+
+  ## Tool descriptions (OpenAI-style JSON; template wraps in GLM XML)
+  {if tools are wired in}
+
+  <|user|>
+  {user message}
+  <|assistant|>
+  <think>{reasoning if enable_thinking}</think>
+  {final answer}
+
+# --- empirical-validation pointer --------------------------------
+#
+# Awaiting baseline empirical trace — see follow-up issue (filed with
+# this PR). Operators running custom GLM-4.5 Air agents are invited to
+# submit traces here via PR; see docs/howto/add-free-models.md § 7.
+
+validated_against: []
+
+community_traces: []   # awaiting submissions
+
+comparison_traces: []  # awaiting cross-tier comparison runs

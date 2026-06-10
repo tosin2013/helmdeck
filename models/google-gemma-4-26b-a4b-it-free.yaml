@@ -1,0 +1,210 @@
+# SPDX-License-Identifier: Apache-2.0
+# google/gemma-4-26b-a4b-it:free — model prompting profile
+#
+# Second per-model profile in the library proposed by issue #464.
+# Sourced from OFFICIAL Google Gemma 4 documentation only — see
+# `official_docs` below for the citation list. `validated_against` and
+# `comparison_traces` ship populated from a pre-merge empirical baseline
+# trace; the trace methodology mirrors PR #469 (Tier A baseline) and
+# PR #470 (Tier C iterative-workflow refinement).
+
+provider: openrouter
+model: google/gemma-4-26b-a4b-it:free
+family: gemma-4
+parameters: 25_200_000_000     # 25.2B total
+active_parameters: 3_800_000_000 # 3.8B active per pass (8 of 128 experts)
+tier: C                          # see docs/reference/models.md
+
+context_window: 262144
+context_window_notes: |
+  Marketed as 256K (262144 tokens). Multimodal (text + image + video
+  up to 60s); image content should precede text in the prompt, audio
+  should follow text. OpenRouter routes across Balanced / Nitro /
+  Exacto modes. Knowledge cutoff: January 2025.
+
+  Plan prompts assuming a SAFE working window roughly half of the
+  marketed ceiling once you account for chat-template overhead,
+  multimodal token cost, and helmdeck pack-call response sizes — the
+  empirical limit is per-provider, not a single number.
+
+official_docs:
+  - https://huggingface.co/google/gemma-4-26B-A4B-it             # Hugging Face model card (authoritative chat template)
+  - https://ai.google.dev/gemma/docs/core/model_card_4           # Google AI Gemma 4 model card
+  - https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/  # Gemma 4 announcement
+  - https://deepmind.google/models/gemma/gemma-4/                # DeepMind product page (τ2-bench numbers)
+  - https://openrouter.ai/google/gemma-4-26b-a4b-it:free         # OpenRouter routing + pricing
+
+# --- prompting style ---------------------------------------------
+
+prompting_style: role_turn_conversational
+prompting_style_notes: |
+  Gemma 4 uses standard `system` / `user` / `assistant` roles via the
+  chat template (a change from Gemma 3, which exposed
+  `<start_of_turn>` / `<end_of_turn>` delimiters directly). Apply via
+  `tokenizer.apply_chat_template()` rather than hand-rolling turn
+  markers — the template encapsulates the role tokens, thinking
+  channel, and multimodal ordering.
+
+  Quote (Google AI model card): "Compared to Gemma 3, the models use
+  standard `system`, `assistant`, and `user` roles."
+
+reasoning_effort_control: binary
+reasoning_effort_levels: [on, off]
+reasoning_effort_mechanism: |
+  Toggled by including or omitting the `<|think|>` token at the start
+  of the system prompt (or by passing `enable_thinking=True/False`
+  through the chat template). Unlike gpt-oss, Gemma 4 does NOT expose
+  a graded low/medium/high knob — thinking is a binary on/off switch.
+reasoning_effort_defaults:
+  summarization: off
+  extraction: off
+  formatting: off
+  product_requirements: on
+  code_review: on
+  architecture: on
+  debugging: on
+  multi_document_synthesis: on
+
+source_priority_directive: optional
+source_priority_directive_notes: |
+  Not documented in primary Gemma 4 sources. Conservative default:
+  include an explicit source-priority section in any skill that wires
+  Gemma 4 in for grounded generation, even though Google's own docs
+  don't pin it as required.
+
+harmony_format: false
+harmony_format_notes: |
+  Gemma 4 uses Google's own channel-tag thinking format (`<|channel>`
+  / `<channel|>` wrap the thought block), NOT OpenAI Harmony.
+  Important: per the model card, "Thoughts from previous model turns
+  must not be added" back into history — the harness must strip
+  prior-turn thoughts when rebuilding conversations.
+
+# --- skill-prose guidance ----------------------------------------
+
+best_practices:
+  - "Use standard `system` / `user` / `assistant` roles via the chat template — do NOT hand-roll turn delimiters."
+  - "Set sampling defaults uniformly: `temperature=1.0`, `top_p=0.95`, `top_k=64` (Google recommends across all use cases)."
+  - "Trigger thinking by prepending `<|think|>` to the system prompt — for tool-use, multi-step planning, debugging, architecture."
+  - "Disable thinking for short, deterministic tasks (formatting, extraction, summarization) to save latency and tokens."
+  - "For multimodal prompts: place image content BEFORE text, audio AFTER text."
+  - "Use `<|think|>` for chained tool calls — Gemma 4's 'multi-step planning and deep logic' is gated by reasoning being on."
+  - "Native function calling + structured JSON are supported; use the chat template's `tools=` argument rather than describing tools in prose."
+  - "In multi-turn conversations, the historical model output should include only the final response — strip the `<channel>` thought block before re-submitting prior turns."
+  - "A higher token budget preserves more visual detail when images are present."
+
+anti_patterns:
+  - "Hand-rolling `<start_of_turn>` / `<end_of_turn>` markers — those were Gemma 3 syntax. Gemma 4 uses role-based templates."
+  - "Replaying prior-turn `<channel>` thoughts back into history — Google explicitly warns: 'Thoughts from previous model turns must _not be added_.'"
+  - "Treating reasoning effort as a graded knob — Gemma 4 has binary on/off via `<|think|>`, not low/medium/high."
+  - "Assuming source priority defaults without stating them — Gemma 4 docs don't pin a behavior, so unstated priority is undefined behavior."
+  - "Expecting common-sense / nuance / sarcasm to land reliably — model card explicitly cautions: 'Models might struggle to grasp subtle nuances, sarcasm, or figurative language.'"
+  - "Using factual claims from the model without grounding — model card warns: 'They may generate incorrect or outdated factual statements.' Knowledge cutoff is January 2025."
+
+# --- chain-call reliability (the load-bearing helmdeck concern) --
+
+chain_call_reliability:
+  short_chains: high      # 1-2 pack calls per turn
+  medium_chains: medium   # 3-4 pack calls per turn — needs empirical refinement
+  long_chains: low        # 5+ pack calls per turn — needs empirical refinement
+  notes: |
+    Documented evidence: DeepMind reports τ2-bench (retail agentic
+    tool-use) 85.5% for the 26B-A4B variant, and Google's blog frames
+    function calling as "execute[s] workflows reliably." But there is
+    no published per-chain-length breakdown — τ2-bench is a single
+    composite score, not a chain-length degradation curve.
+
+    Active-parameter budget is only 3.8B (8 of 128 experts per token).
+    Small-active MoEs typically degrade on long horizons; with binary-
+    only thinking control (no escalation knob between "on" and "off"),
+    the agent harness has no way to ask Gemma 4 to "try harder" on a
+    5+ call chain.
+
+    Mitigation: for multi-call producers, pair with an audit pack the
+    agent MUST call (audit-callback pattern, issues #461 / #471 / #472).
+    For long chains, prefer the iterative-workflow shape proven on
+    gpt-oss in PR #470 — split work into small turns, each within the
+    high-reliability 1-2 call budget.
+
+# --- skill prose template for gemma-4 --------------------------
+
+prompt_template: |
+  ## System message (with thinking enabled)
+  <|think|>
+  ## Objective
+  {what the agent is trying to produce}
+
+  ## Source priority
+  1. {primary source — uploaded data / direct repo content}
+  2. {secondary source — pack output / scraped content}
+  3. {fallback source — model general knowledge}
+  4. If the answer is not supported by the data, say what is missing instead of guessing.
+
+  ## Constraints
+  - {hard rule 1 — what must NOT happen}
+  - {hard rule 2}
+  - {style/voice constraints}
+
+  ## Output format
+  - {required sections, in order, with explicit content shape}
+
+  ## Success criteria
+  - {criterion 1 — machine-checkable}
+  - {criterion 2}
+
+  ## User message
+  {user input}
+
+  ## Multimodal ordering
+  Image content BEFORE text. Audio content AFTER text.
+
+  ## Sampling
+  temperature=1.0, top_p=0.95, top_k=64 (per Google's universal defaults)
+
+# --- empirical-validation pointer --------------------------------
+#
+# Populated pre-merge from a baseline trace captured on a sanitized
+# agent running the tech-blog-publisher-shape multi-deposit prompt.
+# Same shape as PR #469 / PR #470 captured for gpt-oss.
+
+validated_against:
+  - skill: tech-blog-publisher
+    workspace: <operator-personal — sanitized for public docs>
+    agent: <Tier C agent on google/gemma-4-26b-a4b-it:free, three-turn iterative workflow>
+    baseline: <same skill, single-response variant>
+    metric: real pack calls + verify_manifest call + all_present result + claims_grounded count
+    trace_dates: []  # PENDING — operator empirical trace to be appended pre-merge
+    finding: |
+      PENDING — operator empirical trace. Expected metrics to capture:
+
+      | Metric                          | Baseline (no profile) | Profile-aware (iterative) |
+      |---------------------------------|-----------------------|---------------------------|
+      | real artifact.put calls         | <int>                 | <int>                     |
+      | real verify_manifest calls      | <int>                 | <int>                     |
+      | verify all_present              | n/a                   | <bool>                    |
+      | real content.ground calls       | <int>                 | <int>                     |
+      | claims_grounded / considered    | <int> / <int>         | <int> / <int>             |
+      | citation URLs fabricated        | <int>                 | <int>                     |
+      | hallucination count             | <int>                 | <int>                     |
+      | thinking mode (<|think|>)       | on / off              | on                        |
+
+      Trace will be appended to this entry once captured. If the trace
+      surfaces a docs-mismatch (e.g., Gemma 4 actually prefers Markdown
+      headers over the role-template approach for these tasks), the
+      `prompting_style` / `prompt_template` / `best_practices` fields
+      above will be revised to match the empirical evidence before merge.
+
+# --- community-contributed traces -------------------------------
+#
+# Operators running custom Tier C agents on Gemma 4 are invited to
+# submit trace excerpts here via PR. See docs/howto/add-free-models.md
+# § 7 for the contribution paths. Schema mirrors the gpt-oss profile.
+
+community_traces: []   # awaiting submissions
+
+# --- comparison traces (cross-tier) ----------------------------
+#
+# Maintainer-captured comparison runs on OTHER tiers using the SAME
+# skill + prompt. Surfaced here for cross-tier comparison.
+
+comparison_traces: []  # PENDING — operator empirical trace to be appended pre-merge

@@ -53,7 +53,15 @@ Each turn is small enough that `chain_call_reliability: high` (1-2 pack calls pe
 
 The handoff line at the end of each turn IS load-bearing — if the skill prose says "produce a handoff line" but doesn't list missing-handoff as an invalidation condition, the model will drop it. Pin handoff lines as success-criteria invalidation conditions in AGENTS.md (`A response is invalid unless it ends with the literal text 'Reply with deposit ...'`).
 
-**Per-model profiles available today**: [`openai/gpt-oss-120b:free`](https://github.com/tosin2013/helmdeck/blob/main/models/openai-gpt-oss-120b-free.yaml) (first entry; sourced from OpenAI Harmony + Together AI + IBM watsonx docs; empirically validated 2026-06-09). Planned per [issue #464](https://github.com/tosin2013/helmdeck/issues/464): `meta-llama/llama-3.3-70b-instruct:free`, `nvidia/nemotron-3-super-120b-a12b:free`, `google/gemma-2-9b-it:free`, `z-ai/glm-4.5-air:free` — each requires its own empirical validation before shipping.
+**Per-model profiles available today** (per [issue #464](https://github.com/tosin2013/helmdeck/issues/464) Phase 1):
+
+- [`openai/gpt-oss-120b:free`](https://github.com/tosin2013/helmdeck/blob/main/models/openai-gpt-oss-120b-free.yaml) — sourced from OpenAI Harmony + Together AI + IBM watsonx docs; empirically validated 2026-06-09.
+- [`google/gemma-4-26b-a4b-it:free`](https://github.com/tosin2013/helmdeck/blob/main/models/google-gemma-4-26b-a4b-it-free.yaml) — 26B-total / 3.8B-active MoE Gemma 4 (256K context, multimodal); sourced from Google AI + Hugging Face + DeepMind docs; empirically validated 2026-06-10.
+- [`meta-llama/llama-3.3-70b-instruct:free`](https://github.com/tosin2013/helmdeck/blob/main/models/meta-llama-llama-3.3-70b-instruct-free.yaml) — *profile stub*; metadata + prompting guidance sourced from Meta Llama 3.3 docs; baseline empirical trace pending.
+- [`nvidia/nemotron-3-super-120b-a12b:free`](https://github.com/tosin2013/helmdeck/blob/main/models/nvidia-nemotron-3-super-120b-a12b-free.yaml) — *profile stub*; 120B/12B hybrid Mamba-Transformer MoE (1M context); sourced from Nvidia NIM + agentic-coding cookbook + technical blog; baseline empirical trace pending.
+- [`z-ai/glm-4.5-air:free`](https://github.com/tosin2013/helmdeck/blob/main/models/z-ai-glm-4.5-air-free.yaml) — *profile stub*; 106B/12B MoE GLM-4.5 Air; sourced from Z.ai HF card + chat template + technical report; baseline empirical trace pending.
+
+Stub profiles ship the schema scaffold with docs-sourced prompting guidance. They invite community contributions per [`docs/howto/add-free-models.md` § 7](../howto/add-free-models.md): operators running custom Tier C agents can submit trace excerpts to populate `community_traces[]` or open issues against any per-model YAML.
 
 ## How tier affects behavior
 
@@ -118,11 +126,15 @@ Reliable on most tasks but with documented degradation modes — trailing-comma 
 
 Inconsistent on multi-step plans; chronic empty completions on the free tier; structured-output failures (constrained-decoding deadlock); hybrid-reasoning models that leak `<think>` content. **`helmdeck.plan` routes these to the `single_pick` variant by default** — one step per call, agent re-plans for the next — per [ADR 053](../adrs/053-tier-aware-plan-prompt-variants.md). The two-pass LLM filter cascade is on by default because the catalog won't fit a single-pass call.
 
+The tier table rows below describe **routing-level** behavior — input ceiling, output budget, strict-JSON support, and the like. For **prompting-level** behavior — what prompt shape this model expects, what reasoning-effort knob it exposes, what failure modes are documented — see the per-model profile library linked in the previous section. Per-model profiles override the row-level Notes column with specific best practices, anti-patterns, and prompt templates sourced from official model docs.
+
 | Model id (prefix or exact) | Input ceiling | Output budget | Strict JSON | Hybrid reasoning | Notes |
 |---|---|---|---|---|---|
 | `openrouter/openrouter/free` | 16K | 1.5K | — | — | OpenRouter's free routing tier — chronic empty completions due to infrastructure drops |
-| `openrouter/nvidia/nemotron-` | 16K | 1.5K | — | — | Reasoning-trace models; the [validation arc post](/blog/validation-arc-caught-its-own-first-bug) measured 50% success at multi-step plan, ~71-char near-empty responses with 423 completion tokens (canonical reasoning leak). `single_pick` plan variant addresses both failure modes |
-| `openrouter/z-ai/glm-` | 16K | 1.5K | — | — | BFCL 70.85%; infrastructure drops on the free routing tier |
+| `openrouter/nvidia/nemotron-` | 16K | 1.5K | — | — | Reasoning-trace models; the [validation arc post](/blog/validation-arc-caught-its-own-first-bug) measured 50% success at multi-step plan, ~71-char near-empty responses with 423 completion tokens (canonical reasoning leak). `single_pick` plan variant addresses both failure modes. Profile: [`nvidia/nemotron-3-super-120b-a12b:free`](https://github.com/tosin2013/helmdeck/blob/main/models/nvidia-nemotron-3-super-120b-a12b-free.yaml) (stub) |
+| `openrouter/z-ai/glm-` | 16K | 1.5K | — | — | BFCL 70.85%; infrastructure drops on the free routing tier. Profile: [`z-ai/glm-4.5-air:free`](https://github.com/tosin2013/helmdeck/blob/main/models/z-ai-glm-4.5-air-free.yaml) (stub) |
+| `openrouter/google/gemma-4-` | 16K | 1.5K | — | — | 26B-A4B MoE Gemma 4; 256K context window, multimodal; binary thinking-mode toggle (no graded knob). Profile: [`google/gemma-4-26b-a4b-it:free`](https://github.com/tosin2013/helmdeck/blob/main/models/google-gemma-4-26b-a4b-it-free.yaml) |
+| `openrouter/meta-llama/llama-3.3-70b-instruct:free` | 16K | 1.5K | — | — | Free routing of Llama 3.3 70B; the non-`:free` route is Tier B. Profile: [`meta-llama/llama-3.3-70b-instruct:free`](https://github.com/tosin2013/helmdeck/blob/main/models/meta-llama-llama-3.3-70b-instruct-free.yaml) (stub) |
 | `openrouter/qwen/qwen-2.5-` | 16K | 1.5K | — | — | Aider 71.4%; injects ` ```json ` code fences even in strict mode — [ADR 051](../adrs/051-failure-mode-aware-dispatch.md) helper unwraps them |
 | `openrouter/moonshotai/kimi-k2` | 256K | 1.5K | — | ✓ | HYBRID reasoning (large `<think>` output); observed 5-minute timeouts on long prompts |
 | `openrouter/moonshotai/kimi-` | 256K | 1.5K | — | ✓ | Covers `kimi-latest` and future Kimi releases until empirically reclassified |

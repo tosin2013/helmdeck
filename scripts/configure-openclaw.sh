@@ -18,7 +18,9 @@
 #   ./scripts/configure-openclaw.sh                           # configure agents.defaults
 #   ./scripts/configure-openclaw.sh --agent coder             # configure agents.coder only
 #   ./scripts/configure-openclaw.sh --skill helmdeck-debug    # install just one skill (default: all)
-#   ./scripts/configure-openclaw.sh --seed-identity           # also seed IDENTITY/USER/SOUL
+#   ./scripts/configure-openclaw.sh --seed-canonical-layout   # seed SOUL/IDENTITY/USER/AGENTS skeletons
+#   ./scripts/configure-openclaw.sh --seed-identity           # alias for --seed-canonical-layout (kept for backwards compat)
+#   ./scripts/configure-openclaw.sh --force-overwrite         # when seeding, .bak existing files and write fresh
 #   ./scripts/configure-openclaw.sh --rotate-jwt              # force fresh JWT
 #   ./scripts/configure-openclaw.sh --model <id>              # pin a different primary model
 #   ./scripts/configure-openclaw.sh --fallbacks a,b,c         # comma-separated fallback chain
@@ -43,6 +45,7 @@ AGENT="defaults"
 MODEL="openrouter/anthropic/claude-sonnet-4.6"
 FALLBACKS_CSV="openrouter/minimax/minimax-m2.7"
 SEED_IDENTITY="false"
+FORCE_OVERWRITE="false"
 ROTATE_JWT="false"
 SKIP_MCP="false"
 SKIP_SKILLS="false"
@@ -90,6 +93,8 @@ while [[ $# -gt 0 ]]; do
 		--model)          MODEL="$2"; shift 2 ;;
 		--fallbacks)      FALLBACKS_CSV="$2"; shift 2 ;;
 		--seed-identity)  SEED_IDENTITY="true"; shift ;;
+		--seed-canonical-layout) SEED_IDENTITY="true"; shift ;;
+		--force-overwrite) FORCE_OVERWRITE="true"; shift ;;
 		--rotate-jwt)     ROTATE_JWT="true"; shift ;;
 		--skip-mcp)       SKIP_MCP="true"; shift ;;
 		--skip-skills)    SKIP_SKILLS="true"; shift ;;
@@ -428,7 +433,7 @@ fi
 # --- 6. optional: seed identity so BOOTSTRAP.md doesn't loop -------------
 
 if [[ "$SEED_IDENTITY" == "true" ]]; then
-	log "identity: seeding IDENTITY/USER/SOUL.md in workspace so bootstrap completes"
+	log "identity: seeding canonical SOUL/IDENTITY/USER/AGENTS.md in workspace"
 	# The workspace is per-agent when the agent has its own, otherwise
 	# the shared 'main' workspace. Ask the container which exists.
 	workspace="$(docker exec "$OPENCLAW_CONTAINER" sh -c "
@@ -438,53 +443,162 @@ if [[ "$SEED_IDENTITY" == "true" ]]; then
 			echo /home/node/.openclaw/workspace
 		fi" 2>/dev/null || echo "/home/node/.openclaw/workspace")"
 
-	# Write the three seed files to a host tmpdir first so the heredoc
+	# Write the four seed files to a host tmpdir first so the heredoc
 	# content is never nested inside a quoted docker-exec payload —
 	# safer than sh-c stacking heredocs over a ssh-like channel.
+	# Each file is intentionally well under OpenClaw's 12,000-char
+	# bootstrap injection cap, with operator-tunable TODO comments
+	# at the head of each section. Concerns are split per OpenClaw's
+	# canonical model (SOUL=voice, IDENTITY=name, USER=operator,
+	# AGENTS=operating rules) so editing one doesn't leak into another.
+	# See docs/integrations/openclaw.md §5d and
+	# docs/howto/personalize-an-openclaw-agent.md for the layering rationale.
 	seed_tmp="$(mktemp -d -t helmdeck-identity.XXXXXX)"
 	# shellcheck disable=SC2064  # want $seed_tmp expanded now, not on signal
 	trap "rm -rf '$seed_tmp'" EXIT
 
-	cat > "$seed_tmp/IDENTITY.md" <<'EOF'
-# Identity
-
-Name: helmdeck-agent
-Role: Capability-pack operator paired with helmdeck (self-hosted browser + AI tooling platform)
-Surface: OpenClaw agent in the main session channel, MCP-backed tools prefixed `helmdeck__*`
-EOF
-
-	cat > "$seed_tmp/USER.md" <<'EOF'
-# User
-
-The operator of this agent is a helmdeck developer. Expect technical prompts around:
-- Building and testing Capability Packs (see SKILLS.md for the full list)
-- Repo orientation via `helmdeck__repo_fetch` and `helmdeck__repo_map`
-- Browser automation, web scraping, slide rendering, document parsing
-Assume the operator is comfortable reading audit logs and JSON tool-call transcripts.
-EOF
-
+	# SOUL.md — voice, tone, banned phrases (NOT operating rules)
 	cat > "$seed_tmp/SOUL.md" <<'EOF'
 # Soul
 
-Default temperament: terse, precise, action-oriented. Use helmdeck tools by their
-full MCP name (e.g. `helmdeck__repo_fetch`) and trust the JSON envelopes they
-return — do not hallucinate fields or paper over errors. When a tool call fails,
-surface the exact error code and message rather than summarising.
+Voice posture for this agent. Edit to match your style — defaults are intentionally generic.
 
-The SKILLS.md system prompt describes every pack's input/output shape and error
-semantics. Follow its decision tables (especially the `repo.fetch` `signals`
-branch for orientation) before falling back to generic shell exec.
+<!-- TODO: tone — architect-voiced? practitioner? academic? casual-but-precise? -->
+- First-person, terse, action-oriented
+- Skeptical of vendor marketing; favor "I tested this on..." over abstract claims
+- One sentence, one idea
+
+<!-- TODO: editorial discipline — adjust to your publishing surface -->
+- Sentence case for headings
+- Subheading every 2-4 paragraphs (for long-form content)
+- Acronyms spelled out on first use ("Model Context Protocol (MCP)" then "MCP")
+
+<!-- TODO: banned phrases — add domain-specific weasel words -->
+- No marketing jargon: "game-changer", "10x", "transformative", "synergy", "leverage" (as verb)
+- No filler: "great question", "let's dive in", "in conclusion"
+
+See docs/howto/personalize-an-openclaw-agent.md § "Walkthrough — tuning SOUL.md" for the
+canonical guidance. Generally don't customize this file heavily; voice rules apply broadly.
+EOF
+
+	# IDENTITY.md — name / emoji / one-line theme (target ~150 chars)
+	cat > "$seed_tmp/IDENTITY.md" <<'EOF'
+# Identity
+
+<!-- TODO: customize for this agent. Keep small (target ~150 chars). -->
+- name: helmdeck-agent
+- emoji: 🛠️
+- theme: Capability-pack operator paired with helmdeck self-hosted MCP server
+EOF
+
+	# USER.md — who the operator is (their profile)
+	cat > "$seed_tmp/USER.md" <<'EOF'
+# User
+
+<!-- TODO: replace with YOUR profile. See docs/howto/personalize-an-openclaw-agent.md
+     § "Walkthrough — populating USER.md" for the template. -->
+
+## Who I am
+- Name: <your name>
+- Role: helmdeck operator (default; replace with your actual role)
+- Geographic context: <city / region — informs timezone, regulatory context>
+
+## My domain
+- Primary expertise: <one or two sentences>
+- Secondary areas I write about: <list>
+
+## My audience
+- Where I publish: <list your platforms>
+- Who reads me: <reader persona>
+
+## Current focus
+- Active projects: <list with one-line descriptions>
+- Ongoing themes: <2-4 ideas you keep returning to>
+
+## Editorial preferences
+- Tone: <override SOUL.md's defaults if needed>
+- Length defaults: <e.g., 800-1300 words for technical-deep-dive>
+- Things I avoid: <e.g., listicle clickbait, marketing recap intros>
+EOF
+
+	# AGENTS.md — operating rules / workflow shape / tool whitelist
+	cat > "$seed_tmp/AGENTS.md" <<'EOF'
+# Agents
+
+Operating instructions for this agent. Tune to your workflow shape and model.
+
+<!-- TODO: customize per your use case. See docs/howto/per-model-agents/ for model-specific recipes
+     (e.g., gemma-4-iterative-workflow.md) — copy the closest match and adapt. -->
+
+## Tool whitelist
+
+You MAY call helmdeck packs (prefixed `helmdeck__`) per the contracts in
+`~/.openclaw/skills/helmdeck/SKILL.md`. Use packs by their full MCP name
+(e.g., `helmdeck__repo-fetch`).
+
+<!-- TODO: tighten to a specific allow-list if your workflow doesn't need all packs.
+     Empirically (PR #481 + PR #484), explicit whitelists prevent goal drift to
+     unauthorized tools. -->
+
+## Workflow shape
+
+<!-- TODO: pick a workflow shape that matches your model's chain-call reliability
+     per `models/<provider>-<model>.yaml`. For Tier C models the three-turn
+     iterative pattern (outline → draft + ground → deposit + verify) is
+     empirically validated. See docs/howto/per-model-agents/ for recipes. -->
+
+## Hard constraints
+
+- Trust the JSON envelopes pack responses return. Do NOT hallucinate fields or
+  paper over errors — surface the exact error code and message instead of summarizing.
+- Follow the decision tables in `~/.openclaw/skills/helmdeck/SKILL.md` for pack
+  routing (especially the `repo.fetch` `signals` branch for orientation) before
+  falling back to generic shell exec.
+- When a workflow says "exactly N tool calls per turn," honor it. The
+  pack-status / pack-result polling pattern for async packs (e.g.,
+  content.ground) does NOT count against that budget when the agent waits for
+  state:completed before proceeding.
+
+## Etiquette
+
+- Ask ONE clarifying question if a load-bearing decision is ambiguous; otherwise
+  state your assumption and proceed.
+- When uncertain, say what you tested vs. what you assumed; don't conflate.
+
+<!-- TODO: persona-specific etiquette overrides — e.g., specific handoff lines,
+     literal phrasing requirements, response-shape invariants. -->
 EOF
 
 	docker exec "$OPENCLAW_CONTAINER" mkdir -p "$workspace"
-	for f in IDENTITY.md USER.md SOUL.md; do
-		docker cp "$seed_tmp/$f" "${OPENCLAW_CONTAINER}:${workspace}/$f"
+	wrote_any="false"
+	skipped_any="false"
+	for f in SOUL.md IDENTITY.md USER.md AGENTS.md; do
+		if docker exec "$OPENCLAW_CONTAINER" test -f "${workspace}/$f" 2>/dev/null; then
+			if [[ "$FORCE_OVERWRITE" == "true" ]]; then
+				ts="$(date +%Y%m%d-%H%M%S)"
+				docker exec "$OPENCLAW_CONTAINER" cp "${workspace}/$f" "${workspace}/${f}.bak.${ts}"
+				docker cp "$seed_tmp/$f" "${OPENCLAW_CONTAINER}:${workspace}/$f"
+				log "identity: overwrote ${workspace}/$f (backup: ${f}.bak.${ts})"
+				wrote_any="true"
+			else
+				log "identity: skipped ${workspace}/$f (already exists; pass --force-overwrite to .bak and write fresh)"
+				skipped_any="true"
+			fi
+		else
+			docker cp "$seed_tmp/$f" "${OPENCLAW_CONTAINER}:${workspace}/$f"
+			wrote_any="true"
+		fi
 	done
-	log "identity: seeded $workspace/{IDENTITY,USER,SOUL}.md"
+	if [[ "$wrote_any" == "true" ]]; then
+		log "identity: seeded canonical layout in $workspace (SOUL+IDENTITY+USER+AGENTS)"
+	fi
+	if [[ "$skipped_any" == "true" && "$FORCE_OVERWRITE" != "true" ]]; then
+		log "identity: see docs/howto/personalize-an-openclaw-agent.md for guidance on editing existing files"
+	fi
 
 	# BOOTSTRAP.md is a presence-based gate — its own final line says
 	# "Delete this file. You don't need a bootstrap script anymore —
-	# you're you now." Since we've just filled in IDENTITY/USER/SOUL,
+	# you're you now." Since we've just filled in SOUL/IDENTITY/USER/AGENTS,
 	# remove it so the agent doesn't loop on the bootstrap preamble
 	# on every startup (startup-context-B0ypI-Q1.js in the OpenClaw
 	# bundle keys off its mere existence).

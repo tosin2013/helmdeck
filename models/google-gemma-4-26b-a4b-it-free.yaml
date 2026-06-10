@@ -1,12 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
-# google/gemma-4-26b-a4b-it:free — model prompting profile
+# google/gemma-4-26b-a4b-it:free — model prompting profile (STUB)
 #
 # Second per-model profile in the library proposed by issue #464.
 # Sourced from OFFICIAL Google Gemma 4 documentation only — see
-# `official_docs` below for the citation list. `validated_against` and
-# `comparison_traces` ship populated from a pre-merge empirical baseline
-# trace; the trace methodology mirrors PR #469 (Tier A baseline) and
-# PR #470 (Tier C iterative-workflow refinement).
+# `official_docs` below for the citation list. This profile ships as a
+# STUB: metadata + prompting guidance are populated from official docs,
+# but `validated_against`, `community_traces`, and `comparison_traces`
+# are empty. A baseline empirical trace is tracked as a follow-up issue.
+#
+# 2026-06-10 empirical finding (rate-limit, captured but not a model
+# evaluation): a Tier C agent on this slug attempted the standard
+# tech-blog-publisher-shape multi-deposit prompt and received
+# "429 Provider returned error: google/gemma-4-26b-a4b-it:free is
+# temporarily rate-limited upstream" from OpenRouter (provider_name:
+# Google AI Studio, is_byok: false) at zero token cost. The Google AI
+# Studio shared free pool gates at the upstream-provider level, NOT at
+# the model level — this affects ALL google/* free routes simultaneously.
+# Use BYOK (https://openrouter.ai/settings/integrations) for sustained
+# empirical work; the free pool is best-effort.
 
 provider: openrouter
 model: google/gemma-4-26b-a4b-it:free
@@ -163,48 +174,15 @@ prompt_template: |
 
 # --- empirical-validation pointer --------------------------------
 #
-# Populated pre-merge from a baseline trace captured on a sanitized
-# agent running the tech-blog-publisher-shape multi-deposit prompt.
-# Same shape as PR #469 / PR #470 captured for gpt-oss.
+# Awaiting baseline empirical trace — see follow-up issue (filed with
+# this PR). Operators running custom Gemma 4 agents are invited to submit
+# traces here via PR; see docs/howto/add-free-models.md § 7. Trace work
+# requires BYOK against the Google AI Studio free pool; the shared
+# OpenRouter `:free` pool is best-effort (429-prone per the 2026-06-10
+# header note).
 
-validated_against:
-  - skill: tech-blog-publisher
-    workspace: <operator-personal — sanitized for public docs>
-    agent: <Tier C agent on google/gemma-4-26b-a4b-it:free, three-turn iterative workflow>
-    baseline: <same skill, single-response variant>
-    metric: real pack calls + verify_manifest call + all_present result + claims_grounded count
-    trace_dates: []  # PENDING — operator empirical trace to be appended pre-merge
-    finding: |
-      PENDING — operator empirical trace. Expected metrics to capture:
-
-      | Metric                          | Baseline (no profile) | Profile-aware (iterative) |
-      |---------------------------------|-----------------------|---------------------------|
-      | real artifact.put calls         | <int>                 | <int>                     |
-      | real verify_manifest calls      | <int>                 | <int>                     |
-      | verify all_present              | n/a                   | <bool>                    |
-      | real content.ground calls       | <int>                 | <int>                     |
-      | claims_grounded / considered    | <int> / <int>         | <int> / <int>             |
-      | citation URLs fabricated        | <int>                 | <int>                     |
-      | hallucination count             | <int>                 | <int>                     |
-      | thinking mode (<|think|>)       | on / off              | on                        |
-
-      Trace will be appended to this entry once captured. If the trace
-      surfaces a docs-mismatch (e.g., Gemma 4 actually prefers Markdown
-      headers over the role-template approach for these tasks), the
-      `prompting_style` / `prompt_template` / `best_practices` fields
-      above will be revised to match the empirical evidence before merge.
-
-# --- community-contributed traces -------------------------------
-#
-# Operators running custom Tier C agents on Gemma 4 are invited to
-# submit trace excerpts here via PR. See docs/howto/add-free-models.md
-# § 7 for the contribution paths. Schema mirrors the gpt-oss profile.
+validated_against: []
 
 community_traces: []   # awaiting submissions
 
-# --- comparison traces (cross-tier) ----------------------------
-#
-# Maintainer-captured comparison runs on OTHER tiers using the SAME
-# skill + prompt. Surfaced here for cross-tier comparison.
-
-comparison_traces: []  # PENDING — operator empirical trace to be appended pre-merge
+comparison_traces: []  # awaiting cross-tier comparison runs

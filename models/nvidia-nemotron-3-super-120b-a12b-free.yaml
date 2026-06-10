@@ -1,0 +1,188 @@
+# SPDX-License-Identifier: Apache-2.0
+# nvidia/nemotron-3-super-120b-a12b:free — model prompting profile (STUB)
+#
+# Fourth per-model profile in the library proposed by issue #464.
+# Sourced from OFFICIAL Nvidia Nemotron-3 documentation only — see
+# `official_docs` below for the citation list. This profile ships as a
+# STUB: metadata + prompting guidance are populated from official docs,
+# but `validated_against`, `community_traces`, and `comparison_traces`
+# are empty. A baseline empirical trace is tracked as a follow-up issue.
+
+provider: openrouter
+model: nvidia/nemotron-3-super-120b-a12b:free
+family: nemotron-3
+parameters: 120_000_000_000     # 120B total
+active_parameters: 12_000_000_000 # 12B active per pass
+tier: C                          # see docs/reference/models.md
+
+context_window: 1_000_000
+context_window_notes: |
+  Native 1M-token window — the largest in this profile library by
+  an order of magnitude. Architecture is hybrid Mamba-Transformer
+  Mixture-of-Experts with Multi-Token Prediction (MTP). Pre-training
+  cutoff: June 2025; post-training: February 2026. Supported
+  languages: English, French, German, Italian, Japanese, Spanish,
+  Chinese.
+
+  The 1M window is real but operators should be skeptical of treating
+  it as a free pass — Nvidia itself documents "Goal Drift" and
+  "context explosion" as residual failure modes despite the window
+  size. Long-horizon tasks benefit from explicit checkpointing
+  regardless of available context.
+
+official_docs:
+  - https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16  # Hugging Face model card
+  - https://developer.nvidia.com/blog/introducing-nemotron-3-super-an-open-hybrid-mamba-transformer-moe-for-agentic-reasoning/  # Nvidia announcement blog
+  - https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-super-120b-a12b  # Nvidia NIM API reference
+  - https://docs.nvidia.com/nemotron/latest/usage-cookbook/Nemotron-3-Super/OpenScaffoldingResources/README.html  # Nemotron agentic-coding cookbook
+  - https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard  # Nvidia build catalog
+  - https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free          # OpenRouter routing + pricing
+
+# --- prompting style ---------------------------------------------
+
+prompting_style: chatml_structured
+prompting_style_notes: |
+  Nemotron-3 Super uses ChatML-style turn markers (`<|im_start|>` /
+  `<|im_end|>`). The `<think>` (token id 12) / `</think>` (token id 13)
+  tags wrap the reasoning channel. Apply via
+  `tokenizer.apply_chat_template()` rather than hand-rolling markers.
+
+  No system-prompt structure is prescribed by Nvidia — operators have
+  latitude to shape the system turn for their use case.
+
+reasoning_effort_control: true
+reasoning_effort_levels: [low, on, off]
+reasoning_effort_mechanism: |
+  Toggled via `chat_template_kwargs` passed through the template:
+  - `enable_thinking: True` (default) — full reasoning enabled
+  - `enable_thinking: True, low_effort: True` — reduced reasoning tokens
+  - `enable_thinking: False` — direct-answer mode, no reasoning channel
+
+  Unlike gpt-oss's graded `low | medium | high`, Nemotron exposes
+  a binary on/off plus a `low_effort` sub-mode within "on."
+reasoning_effort_defaults:
+  summarization: off
+  extraction: off
+  formatting: off
+  product_requirements: low
+  code_review: on
+  tool_use: on
+  architecture: on
+  debugging: on
+  multi_document_synthesis: on
+
+source_priority_directive: optional
+source_priority_directive_notes: |
+  Not documented in primary Nvidia sources. Conservative default:
+  include an explicit source-priority section in any skill that wires
+  Nemotron-3 Super in for grounded generation.
+
+harmony_format: false
+harmony_format_notes: |
+  Nemotron uses Nvidia's ChatML-style format, not OpenAI Harmony.
+
+function_calling_format: |
+  OpenAI-compatible chat-completions `tool_calls` deltas. Recommended
+  tool-call parser across vLLM / SGLang / TRT-LLM is `qwen3_coder`
+  (pass `--tool-call-parser qwen3_coder` to the inference engine).
+
+  For coding-agent workflows, Nvidia recommends passing
+  `chat_template_kwargs={"force_nonempty_content": True}` to suppress
+  the documented "reasoning-only turn with empty visible content"
+  failure mode (corroborates helmdeck ADR 053).
+
+# --- skill-prose guidance ----------------------------------------
+
+best_practices:
+  - "Use `temperature=1.0` and `top_p=0.95` across all tasks and serving backends (Nvidia explicitly: 'reasoning, tool calling, and general chat alike')."
+  - "Toggle thinking deliberately: `enable_thinking: True` for multi-step planning, `low_effort: True` for routine reasoning, `enable_thinking: False` for short deterministic tasks."
+  - "For coding agents add `force_nonempty_content: True` to chat-template kwargs — prevents the empty-content reasoning-only-turn failure mode (ADR 053)."
+  - "Lean into the 1M context window for long agentic sessions — Nvidia frames the goal as 'full working context without forced truncation across long sessions.'"
+  - "Pair with Nemotron-3 Nano for individual-step execution; Nemotron-3 Super excels at 'complex, multi-step activities' but Nvidia's own recommendation is a Super-plus-Nano deployment for long chains."
+  - "Use the `qwen3_coder` tool-call parser across vLLM / SGLang / TRT-LLM — Nvidia's recommended choice for parsing tool-call deltas."
+  - "Leverage MTP (multi-token prediction): Nvidia claims '2-3x wall-clock speedup on structured generation like code and tool calls.'"
+
+anti_patterns:
+  - "Goal drift: Nvidia's agentic-coding cookbook explicitly names 'the agent loses alignment with the original task as context accumulates' as a residual failure mode. Mitigate with explicit checkpointing even within the 1M window."
+  - "Tool-call failures: Nvidia documents 'malformed or hallucinated function calls that break the execution loop' as the second residual failure mode. Mitigate with the audit-callback pattern (issues #461 / #471 / #472)."
+  - "Reasoning-only-empty-content turns: addressed via `force_nonempty_content: True` — without this flag, Nemotron may emit thoughts and stop without a visible answer (corroborates ADR 053)."
+  - "Context explosion in long agentic traces: 1M context window does not eliminate goal drift; treat the window as a tool, not a guarantee."
+  - "Trusting Super alone for 5+ step chains — Nvidia's own deployment guidance recommends Super + Nano handoff for 'complex, multi-step activities.'"
+  - "Conflicting sampling defaults — Nvidia says `temperature=1.0, top_p=0.95` for ALL tasks; community-sourced lower values (e.g., 0.6) conflict with Nvidia's universal guidance."
+
+# --- chain-call reliability (the load-bearing helmdeck concern) --
+
+chain_call_reliability:
+  short_chains: high      # 1-2 pack calls per turn
+  medium_chains: medium   # 3-4 pack calls per turn — Nvidia's design sweet spot
+  long_chains: medium     # 5+ pack calls per turn — Nvidia recommends Super+Nano handoff
+  notes: |
+    Nvidia explicitly designed Nemotron-3 Super for "consistent,
+    reliable behavior across many sequential steps" and post-trained
+    it "across 15 environments in NeMo Gym covering multi-step tool
+    use." The 1M context window plus MTP are marketed as mitigations
+    for goal drift and tool-call failures.
+
+    However: no quantitative chain-success benchmarks are surfaced in
+    primary sources, and Nvidia itself recommends a Super + Nano
+    deployment pattern for "complex, multi-step activities" — which
+    implies Super alone is not the optimal long-chain executor.
+
+    The estimate above is conservative: high confidence on 1-2 step
+    chains (explicit training + Qwen-style parser support), medium on
+    3-4 (Nvidia's sweet spot but no benchmarks), medium on 5+
+    (Nvidia's own multi-model recommendation lowers single-model
+    confidence). Empirical refinement pending — see follow-up issue.
+
+# --- skill prose template for nemotron-3-super --------------------
+
+prompt_template: |
+  <|im_start|>system
+  ## Role
+  {what the agent IS — voice, expertise, scope}
+
+  ## Source priority
+  1. {primary source}
+  2. {secondary source}
+  3. {fallback source}
+  4. If not supported, say what is missing — do not guess.
+
+  ## Constraints
+  - {hard rule 1}
+  - {hard rule 2}
+
+  ## Output format
+  - {required sections, in order, with explicit content shape}
+
+  ## Success criteria
+  - {criterion 1 — machine-checkable}
+  - {criterion 2}
+
+  ## Thinking
+  enable_thinking: {True | False}
+  low_effort: {True | False}   # only when enable_thinking is True
+
+  ## For coding agents
+  force_nonempty_content: True   # prevents reasoning-only-empty turns
+
+  ## Sampling
+  temperature=1.0, top_p=0.95   # Nvidia's universal recommendation
+  <|im_end|>
+  <|im_start|>user
+  {user message}<|im_end|>
+  <|im_start|>assistant
+  <think>{reasoning trace if enable_thinking}</think>
+  {final response}<|im_end|>
+
+# --- empirical-validation pointer --------------------------------
+#
+# Awaiting baseline empirical trace — see follow-up issue (filed with
+# this PR). Operators running custom Nemotron-3 Super agents are
+# invited to submit traces here via PR; see docs/howto/add-free-models.md
+# § 7 for the contribution paths.
+
+validated_against: []
+
+community_traces: []   # awaiting submissions
+
+comparison_traces: []  # awaiting cross-tier comparison runs

@@ -1,0 +1,166 @@
+# SPDX-License-Identifier: Apache-2.0
+# meta-llama/llama-3.3-70b-instruct:free — model prompting profile (STUB)
+#
+# Third per-model profile in the library proposed by issue #464.
+# Sourced from OFFICIAL Meta Llama 3.3 documentation only — see
+# `official_docs` below for the citation list. This profile ships as a
+# STUB: metadata + prompting guidance are populated from official docs,
+# but `validated_against`, `community_traces`, and `comparison_traces`
+# are empty. A baseline empirical trace is tracked as a follow-up issue.
+
+provider: openrouter
+model: meta-llama/llama-3.3-70b-instruct:free
+family: llama-3.3
+parameters: 70_000_000_000     # 70B total
+active_parameters: 70_000_000_000 # dense, not MoE
+tier: C                          # see docs/reference/models.md
+
+context_window: 131072
+context_window_notes: |
+  OpenRouter advertises 131K (Together AI / Meta cite 128K as the
+  base figure). Multilingual support: English, German, French, Italian,
+  Portuguese, Hindi, Spanish, Thai. Knowledge cutoff: December 2023.
+
+official_docs:
+  - https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct          # Hugging Face model card
+  - https://www.llama.com/docs/model-cards-and-prompt-formats/llama3_3/  # Meta Llama 3.3 prompt formats
+  - https://www.llama.com/docs/model-cards-and-prompt-formats/llama3_1/  # Llama 3.1 format (3.3 reuses)
+  - https://www.llama.com/docs/how-to-guides/prompting/              # Meta Llama prompting guide
+  - https://openrouter.ai/meta-llama/llama-3.3-70b-instruct:free     # OpenRouter routing + pricing
+
+# --- prompting style ---------------------------------------------
+
+prompting_style: role_header_chatml
+prompting_style_notes: |
+  Llama 3.3 uses Meta's own header-token chat format (NOT OpenAI
+  ChatML, despite the rough shape). Each turn is wrapped in
+  `<|start_header_id|>{role}<|end_header_id|>` ... `<|eot_id|>`, with
+  the conversation rooted under `<|begin_of_text|>`. The system turn
+  optionally declares `Environment: ipython` and `Tools:` lines plus
+  `Cutting Knowledge Date:` / `Today Date:` lines that Meta's docs
+  recommend including.
+
+  Quote (Meta prompting guide): "Detailed, explicit instructions
+  produce better results than open-ended prompts."
+
+reasoning_effort_control: false
+reasoning_effort_notes: |
+  Llama 3.3 has no documented reasoning-effort knob. The model does
+  not expose a thinking-mode toggle the way gpt-oss / Gemma 4 /
+  Nemotron / GLM-4.5 do. Scaffold chain-of-thought via explicit
+  numbered-step instructions in the system prompt instead.
+
+source_priority_directive: optional
+source_priority_directive_notes: |
+  Not documented in primary Meta sources. Meta's prompting guide
+  emphasizes explicit instructions and restrictions but does not pin
+  a "system > user > tool" precedence directive. Conservative
+  default: include an explicit source-priority section in any skill
+  that wires Llama 3.3 in for grounded generation.
+
+harmony_format: false
+harmony_format_notes: |
+  Llama 3.3 uses Meta's header-token format, not OpenAI Harmony.
+
+function_calling_format: |
+  Two documented paths:
+  (a) Zero-shot bracketed list: `[func_name(param=value, ...)]`. Meta
+      says: "You SHOULD NOT include any other text in the response."
+  (b) JSON tool call after `<|python_tag|>`: `{"name": "func_name",
+      "parameters": {...}}`. Built-in tools (brave_search,
+      wolfram_alpha, code_interpreter) terminate with `<|eom_id|>`;
+      custom tools terminate with `<|eot_id|>`.
+
+  The executor must round-trip results back via a `tool`-role turn.
+  Meta explicitly notes: "The model doesn't actually call the
+  functions; it only specifies which functions should be called."
+
+# --- skill-prose guidance ----------------------------------------
+
+best_practices:
+  - "Use detailed, explicit instructions over open-ended prompts (Meta prompting guide)."
+  - "Include examples of desired output — 'specific examples of your desired output generally results in a more accurate, consistent output' (Meta)."
+  - "Combine role + rules + restrictions + explicit instructions + example for best results (Meta's recommended structure)."
+  - "Apply explicit restrictions inline ('Never give sources older than 2020') to constrain output rather than relying on model defaults."
+  - "Structure chain-of-thought sequentially through numbered steps — Llama 3.3 has no thinking-mode toggle, so reasoning scaffolds must be explicit."
+  - "Declare `Cutting Knowledge Date: December 2023` and `Today Date: <YYYY-MM-DD>` in the system header — Meta documents this convention."
+  - "For tool use: pick ONE format (bracket-list OR JSON-after-`<|python_tag|>`) and stay consistent within a session."
+  - "Pair Llama 3.3 with Llama Guard 3 / Prompt Guard / Code Shield for agentic deployments — Meta explicitly recommends this in the model card."
+
+anti_patterns:
+  - "Open-ended prompts without explicit instructions — Meta's guide leads with this; vague prompts produce variable output."
+  - "Mixing zero-shot bracket-list and JSON-after-`<|python_tag|>` tool formats in the same session — format drift is documented as a multi-step reliability risk."
+  - "Assuming Llama 3.3 executes function calls — it only specifies which functions should be called; the orchestrator must round-trip results."
+  - "Using out-of-the-box on languages outside the 8 supported (English / German / French / Italian / Portuguese / Hindi / Spanish / Thai) — Meta warns you must 'implement finetuning and system controls' first."
+  - "Treating reasoning effort as a knob — Llama 3.3 has none. Scaffold reasoning explicitly via numbered steps in the system prompt."
+  - "Conversation alongside tool calling at the 8B size — Meta documents this as unreliable. The 70B variant is more robust but the family-level pattern is on record; isolate tool-call sessions from chat when in doubt."
+
+# --- chain-call reliability (the load-bearing helmdeck concern) --
+
+chain_call_reliability:
+  short_chains: high      # 1-2 pack calls per turn
+  medium_chains: medium   # 3-4 pack calls per turn — needs empirical refinement
+  long_chains: low        # 5+ pack calls per turn — needs empirical refinement
+  notes: |
+    Documented evidence: Meta confirms parallel + multiple function
+    calls are supported ("The output supports multiple function calls,
+    as well as function calls running in parallel") but Hugging Face
+    flags the official walkthrough as "a very brief introduction to
+    tool calling," deferring deeper multi-turn guidance to external
+    docs. The 8B family has an explicit on-record limitation around
+    mixing chat with tools; no equivalent disclaimer is published
+    for 70B.
+
+    Conservative best-effort estimate. The default reflects the
+    family-level pattern (dense 70B without harmony / reasoning
+    scaffold; format drift between bracket-list vs JSON-after-
+    `<|python_tag|>` is an empirical risk). Empirical refinement
+    pending — see follow-up issue.
+
+# --- skill prose template for llama-3.3 --------------------------
+
+prompt_template: |
+  <|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+  Environment: ipython
+  Tools: brave_search, wolfram_alpha
+  Cutting Knowledge Date: December 2023
+  Today Date: {YYYY-MM-DD}
+
+  ## Role
+  {what the agent IS — voice, expertise, scope}
+
+  ## Rules and restrictions
+  - {hard rule 1}
+  - {hard rule 2}
+
+  ## Source priority
+  1. {primary source}
+  2. {secondary source}
+  3. {fallback source}
+  4. If not supported, say what is missing — do not guess.
+
+  ## Explicit instructions
+  {numbered steps if reasoning scaffold is needed}
+
+  ## Output format
+  {required sections, in order}
+
+  ## Example
+  {one example of desired output shape}
+
+  <|eot_id|><|start_header_id|>user<|end_header_id|>
+
+  {user message}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+# --- empirical-validation pointer --------------------------------
+#
+# Awaiting baseline empirical trace — see follow-up issue (filed with
+# this PR). Operators running custom Llama 3.3 agents are invited to
+# submit traces here via PR; see docs/howto/add-free-models.md § 7.
+
+validated_against: []
+
+community_traces: []   # awaiting submissions
+
+comparison_traces: []  # awaiting cross-tier comparison runs

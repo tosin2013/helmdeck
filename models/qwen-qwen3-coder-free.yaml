@@ -1,0 +1,183 @@
+# SPDX-License-Identifier: Apache-2.0
+# qwen/qwen3-coder:free — model prompting profile (STUB)
+#
+# Fifth per-model profile in the library proposed by issue #464.
+# Sourced from OFFICIAL Alibaba Qwen documentation only — see
+# `official_docs` below for the citation list. This profile ships as a
+# STUB: metadata + prompting guidance are populated from official docs,
+# but `validated_against`, `community_traces`, and `comparison_traces`
+# are empty. A baseline empirical trace is tracked as a follow-up issue.
+#
+# Added in place of the originally-listed z-ai/glm-4.5-air:free, which
+# was deprecated from OpenRouter on or before 2026-06-10 (live API
+# enumeration confirms no `:free` variant exists; only the paid
+# z-ai/glm-4.5-air remains).
+
+provider: openrouter
+model: qwen/qwen3-coder:free
+family: qwen-3
+parameters: 480_000_000_000     # 480B total
+active_parameters: 35_000_000_000 # 35B active per pass (8 of 160 experts)
+tier: C                          # see docs/reference/models.md
+
+context_window: 1_000_000
+context_window_notes: |
+  Native 256K window; extends to 1M tokens via YaRN per the official
+  GitHub README. OpenRouter advertises the 1M ceiling. Released
+  2025-07-23. Coder-specialized variant of the Qwen 3 family — 7.5T
+  token pretrain with 70% code ratio (Qwen blog).
+
+  The `:free` route is subject to OpenRouter's shared-pool rate
+  limiting (see 2026-06-10 gemma-4-26b-a4b 429 finding — Google AI
+  Studio's shared free pool gates at the upstream-provider level).
+  Qwen3-Coder's upstream pool is independent of the Google pool, but
+  similar rate-limit behavior is plausible at peak loads.
+
+official_docs:
+  - https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct       # Hugging Face model card
+  - https://github.com/QwenLM/Qwen3-Coder                            # Official repo
+  - https://qwenlm.github.io/blog/qwen3-coder/                       # Qwen announcement blog
+  - https://openrouter.ai/qwen/qwen3-coder:free                       # OpenRouter routing + pricing
+
+# --- prompting style ---------------------------------------------
+
+prompting_style: chatml_structured
+prompting_style_notes: |
+  Qwen3-Coder uses ChatML-style turn markers (`<|im_start|>` /
+  `<|im_end|>`) with `add_generation_prompt=True` appending
+  `<|im_start|>assistant\n` for the next turn. The coder variant
+  additionally supports FIM (fill-in-the-middle) tokens
+  (`<|fim_prefix|>` / `<|fim_suffix|>` / `<|fim_middle|>`) for
+  inline code completion contexts.
+
+  Coder-specialization detail: Qwen3-Coder was post-trained with
+  long-horizon Agent RL specifically for multi-turn tool-use trajectories
+  in agentic coding tasks. The official Qwen Code CLI is adapted from
+  Gemini CLI; the model also works with CLINE and Claude Code per the
+  GitHub README.
+
+reasoning_effort_control: false
+reasoning_effort_notes: |
+  Qwen3-Coder is the NON-thinking-mode variant of the Qwen 3 family.
+  HF card explicitly: "This model supports only non-thinking mode and
+  does not generate `<think></think>` blocks in its output."
+
+  DO NOT prepend any thinking trigger; the model will not honor it.
+  For the (rare) thinking-mode Qwen 3 variant, use a different slug.
+
+source_priority_directive: optional
+source_priority_directive_notes: |
+  Not documented in primary Qwen sources. Conservative default:
+  include an explicit source-priority section in any skill that wires
+  Qwen3-Coder in for grounded generation, even though Alibaba's own
+  docs don't pin it as required.
+
+harmony_format: false
+harmony_format_notes: |
+  Qwen3-Coder uses Alibaba's ChatML-style format, not OpenAI Harmony.
+
+function_calling_format: |
+  Qwen-specific tool-call format parsed by the official SGLang / vLLM
+  tool parsers. GitHub README directs callers to the Qwen-specific
+  parser (NOT the generic OpenAI tool-call parser) for reliability.
+  OpenAI-compatible function schema is the wire format
+  (`type: "function"`, `name`, `description`, `parameters`); the
+  parser handles Qwen-specific extraction conventions on the response
+  side.
+
+  Recommended deployment: SGLang or vLLM with the Qwen tool parser
+  enabled. The `:free` route's downstream tool parser is opaque from
+  OpenRouter; mismatched parsing may surface as malformed tool calls.
+
+# --- skill-prose guidance ----------------------------------------
+
+best_practices:
+  - "Use the official sampling defaults: `temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05` (Qwen HF card recommendation)."
+  - "Set output length to 65,536 tokens for most queries (Qwen HF card recommendation) — long code spans benefit from the generous output budget."
+  - "Use OpenAI-style function schemas (`type: function`, `name`, `description`, `parameters`) — Qwen3-Coder's parser handles extraction; you write the standard wire format."
+  - "Lean into the 1M (256K native + YaRN-extended) context for repo-scale reasoning — Qwen blog explicitly frames `long-context reasoning over repositories` as a design goal."
+  - "Function calling + tool use are first-class capabilities; post-trained via long-horizon Agent RL for multi-turn tool trajectories. Trust the model on coder-agent workflows."
+  - "If running locally / your own deployment: use SGLang or vLLM with the Qwen-specific tool parser — `--tool-call-parser qwen-coder` or equivalent."
+  - "FIM (fill-in-the-middle) tokens are available for inline-completion contexts (IDE plugins, suggest-next-line); not used for chat/agent workflows."
+  - "Pair with the official Qwen Code CLI for terminal-based coder-agent workflows; also compatible with CLINE and Claude Code per the GitHub README."
+
+anti_patterns:
+  - "Prepending any thinking-mode trigger (`<think>`, `<|think|>`, etc.) — Qwen3-Coder explicitly does NOT support thinking mode and will not honor the trigger. For thinking-mode Qwen 3, use a different slug."
+  - "Using a generic OpenAI tool-call parser instead of Qwen's purpose-built one — GitHub README directs to the SGLang / vLLM Qwen parser specifically; mismatched parsing surfaces as malformed tool calls."
+  - "Treating Qwen3-Coder as a general-purpose chat model — it's coder-specialized (70% code in pretrain mix); strong on agentic coding workflows, weaker on creative writing / domain-non-code reasoning."
+  - "Assuming the `:free` route honors all sampling defaults exactly — OpenRouter routing may override repetition_penalty or top_k on free pools; verify with a test trace."
+  - "Forcing source-priority rules without explicit declaration — Qwen docs don't pin a behavior, so unstated priority is undefined behavior; declare explicitly in the system prompt."
+
+# --- chain-call reliability (the load-bearing helmdeck concern) --
+
+chain_call_reliability:
+  short_chains: high      # 1-2 pack calls per turn
+  medium_chains: high     # 3-4 pack calls per turn — Agent RL post-training targets this
+  long_chains: medium     # 5+ pack calls per turn — needs empirical refinement
+  notes: |
+    Documented evidence: Qwen blog states post-training used "long-horizon
+    RL (Agent RL)" to "solve real-world tasks through multi-turn
+    interactions using tools," explicitly targeting long chains. Qwen
+    blog claims "state-of-the-art results among open models on Agentic
+    Coding, Agentic Browser-Use, and Agentic Tool-Use, comparable to
+    Claude Sonnet 4." Benchmark scores in primary sources: SWE-Bench
+    Pro 38.7, Terminalbench 2 23.9 (HF card). No TAU-bench number
+    surfaced in Qwen primary sources.
+
+    Agentic coder positioning is a first-class design goal, not an
+    afterthought. The 256K-native context comfortably holds long
+    trajectories. The `:free` route's risk is provider-side (rate limits
+    / parser mismatch on shared pools), not model capability.
+
+    Conservative estimate: high on short/medium chains (Agent RL +
+    purpose-built tool parser); medium on long chains pending empirical
+    refinement. The "Sonnet 4 comparable" claim is upstream-provider
+    marketing; helmdeck empirical work should validate before raising
+    long-chain tier.
+
+# --- skill prose template for qwen3-coder ------------------------
+
+prompt_template: |
+  <|im_start|>system
+  ## Role
+  {what the agent IS — coder-agent voice, expertise, scope}
+
+  ## Source priority
+  1. {primary source — repository contents, uploaded code}
+  2. {secondary source — pack output / web fetches}
+  3. {fallback source — model general knowledge}
+  4. If not supported by data, say what is missing — do not guess.
+
+  ## Constraints
+  - {hard rule 1 — coding style, restricted operations, etc.}
+  - {hard rule 2}
+
+  ## Output format
+  - {required sections, in order, with explicit content shape}
+  - For code: diffs preferred over full file rewrites; include tests
+
+  ## Success criteria
+  - {criterion 1 — machine-checkable, e.g. "every tool call returns 0"}
+  - {criterion 2}
+
+  ## Tool descriptions
+  {OpenAI-style function schemas; Qwen parser handles extraction}
+
+  ## Sampling
+  temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05
+  <|im_end|>
+  <|im_start|>user
+  {user message}<|im_end|>
+  <|im_start|>assistant
+
+# --- empirical-validation pointer --------------------------------
+#
+# Awaiting baseline empirical trace — see follow-up issue (filed with
+# this PR). Operators running custom Qwen3-Coder agents are invited to
+# submit traces here via PR; see docs/howto/add-free-models.md § 7.
+
+validated_against: []
+
+community_traces: []   # awaiting submissions
+
+comparison_traces: []  # awaiting cross-tier comparison runs

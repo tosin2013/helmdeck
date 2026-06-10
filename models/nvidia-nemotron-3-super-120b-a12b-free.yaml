@@ -101,14 +101,19 @@ best_practices:
   - "Pair with Nemotron-3 Nano for individual-step execution; Nemotron-3 Super excels at 'complex, multi-step activities' but Nvidia's own recommendation is a Super-plus-Nano deployment for long chains."
   - "Use the `qwen3_coder` tool-call parser across vLLM / SGLang / TRT-LLM — Nvidia's recommended choice for parsing tool-call deltas."
   - "Leverage MTP (multi-token prediction): Nvidia claims '2-3x wall-clock speedup on structured generation like code and tool calls.'"
+  - "EMPIRICAL 2026-06-10: per-use-case AGENTS.md hardening matters MORE than profile guidance alone. Three specific hardenings empirically closed both Nvidia-documented failure modes (PR #481→#484 A/B: 24 calls/0 deposit → 7 calls/deposit+verify): (a) explicit tool whitelist forbidding filesystem write/read packs, (b) async pattern bounds for content.ground (call ONCE, poll max 5x, no parallel jobs), (c) invalidation rule for tool calls generated as plain-text XML."
+  - "EMPIRICAL 2026-06-10: bounded polling pattern for ASYNC packs. content.ground returns a job_id + state:working; without explicit 'max 5 polls then honest timeout' guidance, Nemotron spawns 6+ concurrent jobs per the 2026-06-10 baseline. Bound polling explicitly in AGENTS.md."
+  - "EMPIRICAL 2026-06-10: workflow honest-failure recovery survives upstream pack failures. content.ground job ACTUALLY failed upstream mid-session in the hardened v2 trace; agent honored 'don't retry' rule, reported failure honestly, ended Turn 2 with literal handoff line; operator's deposit reply triggered Turn 3 which fired artifact.put + verify_manifest with all_present:true on the un-grounded draft. The audit-callback pattern is resilient, not just clean-path."
 
 anti_patterns:
-  - "Goal drift: Nvidia's agentic-coding cookbook explicitly names 'the agent loses alignment with the original task as context accumulates' as a residual failure mode. Mitigate with explicit checkpointing even within the 1M window."
-  - "Tool-call failures: Nvidia documents 'malformed or hallucinated function calls that break the execution loop' as the second residual failure mode. Mitigate with the audit-callback pattern (issues #461 / #471 / #472)."
-  - "Reasoning-only-empty-content turns: addressed via `force_nonempty_content: True` — without this flag, Nemotron may emit thoughts and stop without a visible answer (corroborates ADR 053)."
+  - "Goal drift: Nvidia's agentic-coding cookbook explicitly names 'the agent loses alignment with the original task as context accumulates' as a residual failure mode. EMPIRICALLY REPRODUCED 2026-06-10 (PR #481): baseline AGENTS.md without explicit tool whitelist saw the agent drift to filesystem write/read packs (4 write + 1 read calls) NOT prescribed by the workflow. Mitigation: AGENTS.md whitelist forbidding non-helmdeck packs (PR #484 closed this empirically)."
+  - "Tool-call failures: Nvidia documents 'malformed or hallucinated function calls that break the execution loop' as the second residual failure mode. EMPIRICALLY REPRODUCED 2026-06-10 (PR #481): final assistant turn started generating `<tool_call><function=helmdeck__pack-status>...` as PLAIN TEXT instead of the OpenAI toolCall format. Mitigation: AGENTS.md invalidation rule explicitly catching plain-text tool calls (PR #484 closed this empirically)."
+  - "Reasoning-only-empty-content turns: addressed via `force_nonempty_content: True` — without this flag, Nemotron may emit thoughts and stop without a visible answer (corroborates ADR 053). EMPIRICALLY OBSERVED 2026-06-10 (PR #484 v2 trace): the first 'proceed' reply triggered this; operator had to retry."
   - "Context explosion in long agentic traces: 1M context window does not eliminate goal drift; treat the window as a tool, not a guarantee."
   - "Trusting Super alone for 5+ step chains — Nvidia's own deployment guidance recommends Super + Nano handoff for 'complex, multi-step activities.'"
   - "Conflicting sampling defaults — Nvidia says `temperature=1.0, top_p=0.95` for ALL tasks; community-sourced lower values (e.g., 0.6) conflict with Nvidia's universal guidance."
+  - "EMPIRICAL 2026-06-10: deploying Nemotron with PROFILE GUIDANCE BUT NO HARDENED AGENTS.md. The docs-sourced profile (ChatML format, sampling, enable_thinking, force_nonempty_content) was insufficient to prevent the documented failures from firing — both anti-patterns above reproduced in the v1 baseline. Per-use-case AGENTS.md hardening is the load-bearing layer, not the profile alone."
+  - "EMPIRICAL 2026-06-10: parallel async pack jobs. The v1 baseline spawned 6 simultaneous content.ground jobs; most hung at progress:10%; only ONE completed (on a tiny 46-byte test file). Bound async polling explicitly: 'call ONCE, poll max 5x, then pack-result OR honest timeout/failure. NEVER start a parallel job.'"
 
 # --- chain-call reliability (the load-bearing helmdeck concern) --
 
@@ -132,7 +137,18 @@ chain_call_reliability:
     chains (explicit training + Qwen-style parser support), medium on
     3-4 (Nvidia's sweet spot but no benchmarks), medium on 5+
     (Nvidia's own multi-model recommendation lowers single-model
-    confidence). Empirical refinement pending — see follow-up issue.
+    confidence).
+
+    EMPIRICAL REFINEMENT 2026-06-10 (PR #481 → PR #484 A/B): chain-call
+    reliability is WORKFLOW-SHAPE-DEPENDENT, not a pure model property.
+    The same model on the same prompt produced 24 pack calls / 0 deposit
+    with a docs-only AGENTS.md (v1 baseline) vs 7 pack calls / deposit
+    + verify with all_present:true after AGENTS.md hardening (v2). The
+    short/medium/long buckets above describe the model's CAPACITY; the
+    actual call counts depend on whether the operator's AGENTS.md
+    constrains the workflow with explicit tool whitelists, async pattern
+    bounds, and plain-text tool call invalidation. See community_traces
+    below for both ends of the A/B.
 
 # --- skill prose template for nemotron-3-super --------------------
 
@@ -181,7 +197,56 @@ prompt_template: |
 # invited to submit traces here via PR; see docs/howto/add-free-models.md
 # § 7 for the contribution paths.
 
-validated_against: []
+validated_against:
+  - skill: tech-blog-publisher  # shape-equivalent; operator workspace per memory rule
+    workspace: <operator-personal — sanitized for public docs>
+    agent: <Tier C agent on nvidia/nemotron-3-super-120b-a12b:free, three-turn iterative workflow>
+    baseline: <same model + prompt, docs-only AGENTS.md (no per-use-case hardening)>
+    metric: real pack calls + verify_manifest call + all_present result + workflow shape adherence
+    trace_dates: [2026-06-10]
+    finding: |
+      Direct A/B on the same Tier C model (`nvidia/nemotron-3-super-120b-a12b:free`)
+      with the SAME prompt (eBPF kernel rootkit detection deep-dive) but two
+      different AGENTS.md variants:
+
+      | Metric                          | Baseline AGENTS.md | Hardened AGENTS.md |
+      |---------------------------------|--------------------|--------------------|
+      | Total pack calls                | 24                 | 7                  |
+      | helmdeck__content-ground calls  | 6 (parallel chaos) | 1                  |
+      | helmdeck__pack-status polls     | 12                 | 4                  |
+      | Filesystem write/read calls     | 5 (not authorized) | 0                  |
+      | helmdeck__artifact-put          | ❌                 | ✅                 |
+      | helmdeck__verify_manifest       | ❌                 | ✅                 |
+      | all_present                     | n/a                | TRUE               |
+      | Plain-text tool calls           | YES (Nvidia anti)  | 0                  |
+      | Decision                        | profile-not-enough | profile-works      |
+
+      Three hardenings in the v2 AGENTS.md empirically closed BOTH
+      Nvidia-documented residual failure modes (Goal Drift + Tool-Call
+      Failures): (1) explicit tool whitelist forbidding filesystem
+      write/read packs, (2) async pattern bounds for content.ground
+      (call ONCE, poll max 5x, no parallel jobs), (3) invalidation
+      rule for tool calls generated as plain-text XML.
+
+      Resilience: the content.ground job ACTUALLY failed upstream in
+      v2 (state transitioned working → failed by poll #4). The agent
+      honored the "don't retry" rule, reported the failure honestly,
+      ended Turn 2 with the literal handoff line. Operator's "deposit"
+      reply triggered Turn 3 which fired artifact.put +
+      verify_manifest correctly with the un-grounded draft, returning
+      all_present:true.
+
+      Strategic lesson: the YAML profile (sampling, reasoning controls,
+      Nvidia-documented best practices) is necessary but NOT sufficient
+      for reliable agentic behavior on Tier C Nemotron. Per-use-case
+      AGENTS.md hardening is the load-bearing layer. The empirical
+      bar for "profile-works" on Tier C models is: the workflow shape
+      constrains the documented failure modes; the profile guidance
+      tunes what the model CAN do.
+
+      See community_traces[] below for the per-trace metric_summary
+      data and PRs #481 (baseline) + #484 (hardened) for the
+      narrative-level analysis.
 
 # Empirical 2026-06-10: first community trace captured via
 # scripts/helmdeck-trace CLI. The Nvidia-documented "Goal Drift" and

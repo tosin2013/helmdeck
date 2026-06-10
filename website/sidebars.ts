@@ -55,6 +55,7 @@ const sidebars: SidebarsConfig = {
       label: 'Per-model agent adaptation',
       collapsed: false,
       items: [
+        'howto/personalize-an-openclaw-agent',
         'howto/per-model-agents/gemma-4-iterative-workflow',
       ],
     },

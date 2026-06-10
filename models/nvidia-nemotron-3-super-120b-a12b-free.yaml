@@ -183,6 +183,60 @@ prompt_template: |
 
 validated_against: []
 
-community_traces: []   # awaiting submissions
+# Empirical 2026-06-10: first community trace captured via
+# scripts/helmdeck-trace CLI. The Nvidia-documented "Goal Drift" and
+# "Tool-Call Failures" residual failure modes both fired exactly as
+# described in the agentic-coding cookbook. See entry below.
+community_traces:
+  - contributor: tosin2013
+    use_case: blog-drafter-iterative
+    session_date: 2026-06-10
+    metric_summary:
+      real_pack_calls: 24       # 6 content-ground + 12 pack-status + 1 pack-result + 4 filesystem-write + 1 filesystem-read
+      verify_manifest_called: false
+      all_present: null
+      hallucination_count: 0    # no FALSE-claim hallucinations — model just never reached the deposit step
+      simplification_observed: false   # workflow EXPANDED chaotically, not simplified
+    decision: profile-not-enough
+    notes: |
+      First Press-Nemotron trace; 15-minute session that never reached
+      the deposit step despite the model running freely (no 429 from
+      Nvidia upstream). Reproduces BOTH Nvidia-documented Nemotron-3
+      failure modes from the agentic-coding cookbook:
+
+      1. **Goal Drift** — agent drifted from "blog draft + deposit"
+         to "spam content.ground with multiple concurrent jobs and
+         write random files." Used filesystem `write`/`read` packs
+         (NOT prescribed by AGENTS.md) to save outline.md, draft.md,
+         temp_draft.md, test.md to the workspace dir. Six simultaneous
+         content.ground jobs started; most hung at "progress: 10%";
+         only ONE completed and only on a tiny 46-byte test file.
+
+      2. **Tool-Call Failures** — final assistant turn started
+         generating `<tool_call><function=helmdeck__pack-status>
+         <parameter=job_id>...` as PLAIN TEXT instead of using the
+         OpenAI toolCall format. This is the literal "malformed
+         function call" anti-pattern Nvidia documents.
+
+      The per-model profile (ChatML format, sampling, enable_thinking,
+      force_nonempty_content) was NOT sufficient to prevent these
+      failures. Per-use-case AGENTS.md hardening — explicit "no
+      filesystem packs," "content.ground is async; wait for
+      state:completed before retry," "one tool call at a time" — is
+      the apparent next step. Iterating the Press-Nemotron AGENTS.md
+      (operator-local per memory rule) sets up a v2-vs-v1 A/B for
+      the next community_traces[] entry.
+
+      Useful empirical observations beyond the failure modes:
+      - content.ground is ASYNC (returns job_id + state:"working").
+        AGENTS.md says "Call content.ground ONCE" but doesn't mention
+        the polling pattern. Operators iterating on the Nemotron
+        recipe should add explicit "Call once, then poll pack-status
+        until state:completed, then call pack-result" guidance.
+      - The agent has access to filesystem packs (write/read) that
+        AGENTS.md never authorized. These probably come from a
+        separate Claude Code MCP integration in OpenClaw. AGENTS.md
+        should explicitly enumerate allowed packs.
+    pr_or_issue_url: https://github.com/tosin2013/helmdeck/issues/475
 
 comparison_traces: []  # awaiting cross-tier comparison runs

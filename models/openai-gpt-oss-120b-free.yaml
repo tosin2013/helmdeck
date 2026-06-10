@@ -214,6 +214,52 @@ community_traces:
       is required for full skill compliance.
     pr_or_issue_url: https://github.com/tosin2013/helmdeck/pull/462
 
+  - contributor: tosin2013
+    use_case: blog-drafter-test          # generic three-turn iterative drafter
+    session_date: 2026-06-10
+    metric_summary:
+      real_pack_calls: 5        # 1 content-ground + 1 pack-status + 1 pack-result + 1 artifact-put + 1 verify-manifest
+      verify_manifest_called: true
+      all_present: true
+      hallucination_count: 0
+      simplification_observed: false  # workflow EXPANDED (2→5 calls), not simplified
+    decision: profile-works
+    notes: |
+      First end-to-end success trace captured via the new helmdeck-trace
+      CLI (PR #478 / fix PR #479) on the new trace-test agent (gpt-oss-120b:free,
+      session babfee13). Three observations worth pinning:
+
+      1. **Workflow shape expanded, not simplified.** AGENTS.md prescribes
+         "exactly two tool calls" for Turn 3 (artifact-put + verify_manifest).
+         The agent fired 5 instead — added exploratory pack-status +
+         pack-result calls BEFORE the deposit, apparently to probe runtime
+         state. The deposit + verify still succeeded (all_present:true on
+         1 of 1 artifact). Different deviation direction from the
+         publishing-strategist trace above (which simplified 9 platforms to
+         2). Tier C reasoning models add their own caution-step calls when
+         the workflow doesn't tightly constrain "no exploratory probing."
+
+      2. **Non-deliverable-terminal-turn retry-recovery is a real Tier C
+         resilience pattern.** Operator's FIRST "deposit" reply triggered
+         a `non_deliverable_terminal_turn` (logged in trajectory). Operator
+         retried with the same input; second attempt succeeded. The free
+         gpt-oss-120b route can fail one turn and recover on retry — useful
+         to know when designing agent operator-facing patience guidance.
+
+      3. **Workflow's three-turn shape held under iterative pressure.**
+         Both handoff lines fired literally (Turn 1: "Reply with proceed to
+         write the draft, or send changes to the outline."; Turn 2: "Reply
+         with deposit to save and verify the artifact, or send edits.").
+         Turn 3 ended with "Done. Artifact deposited and verified." per
+         AGENTS.md success criteria. Zero citation URLs fabricated (model
+         honored the content.ground rule and didn't author URLs).
+
+      Namespace deviation: artifact landed at `artifact.put/...md`, not
+      `blog.publish/...md` as AGENTS.md prescribes. Pack default kicked in
+      where the model should have honored the explicit `namespace` arg.
+      Minor but worth tightening in future AGENTS.md revisions.
+    pr_or_issue_url: https://github.com/tosin2013/helmdeck/pull/478
+
 # --- comparison traces (cross-tier) ----------------------------
 #
 # Not strictly community contributions — these are maintainer-captured

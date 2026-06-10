@@ -239,4 +239,84 @@ community_traces:
         should explicitly enumerate allowed packs.
     pr_or_issue_url: https://github.com/tosin2013/helmdeck/issues/475
 
+  # ----- v2-hardened entry (same agent, same prompt, hardened AGENTS.md) -----
+  - contributor: tosin2013
+    use_case: blog-drafter-hardened-v2
+    session_date: 2026-06-10
+    metric_summary:
+      real_pack_calls: 7        # 1 content-ground + 4 pack-status + 1 artifact-put + 1 verify-manifest
+      verify_manifest_called: true
+      all_present: true
+      hallucination_count: 0
+      simplification_observed: false   # workflow tracked the prescribed shape closely
+    decision: profile-works
+    notes: |
+      Second nemotron trace — direct A/B against the v1 baseline above
+      using the SAME model, SAME prompt (eBPF kernel rootkit detection
+      topic), and a hardened AGENTS.md (operator-local per memory rule).
+
+      ## A/B summary
+      | Metric                          | v1 baseline | v2 hardened |
+      |---------------------------------|-------------|-------------|
+      | Total pack calls                | 24          | 7           |
+      | helmdeck__content-ground calls  | 6           | 1           |
+      | helmdeck__pack-status polls     | 12          | 4           |
+      | Filesystem write/read calls     | 5           | 0           |
+      | helmdeck__artifact-put called   | NO          | YES         |
+      | helmdeck__verify_manifest called| NO          | YES         |
+      | all_present                     | n/a         | TRUE        |
+      | Plain-text tool calls (Nvidia's | YES         | 0           |
+      |   documented anti-pattern)      |             |             |
+
+      ## Three hardenings that empirically closed the gap
+
+      1. **Explicit tool whitelist** ("You MAY call ONLY these tools")
+         forbidding filesystem write/read packs. Empirically: 0
+         filesystem calls (vs 5 in v1). The model honored the
+         negative constraint cleanly.
+
+      2. **Async pattern bounds** for content.ground: "Call ONCE,
+         poll pack-status max 5x, then pack-result OR honest timeout/
+         failure. NEVER start a parallel job." Empirically: 1
+         content.ground call (vs 6 in v1) + 4 pack-status polls
+         (within the 5-budget).
+
+      3. **Plain-text tool call invalidation** — explicit rule that
+         tool calls generated as plain text (e.g., `<tool_call>
+         <function=...>`) invalidate the response. Empirically: 0
+         plain-text tool calls in v2 (vs the documented anti-pattern
+         that fired in v1's final assistant turn).
+
+      ## Resilience observation worth pinning
+
+      The content.ground job ACTUALLY FAILED upstream in v2 (state
+      transitioned working → failed by poll #4). The agent honored
+      the "don't retry" rule from the hardened AGENTS.md and
+      reported the failure honestly in the Turn 2 response,
+      ending with the literal handoff line. Operator replied
+      "deposit"; Turn 3 fired artifact.put + verify_manifest
+      correctly with the un-grounded draft, returning
+      all_present:true.
+
+      This demonstrates the hardened workflow is **resilient to
+      upstream pack failure**, not just clean-path. The audit-callback
+      pattern survives a real upstream failure in the middle of the
+      session.
+
+      ## Decision rationale
+
+      `profile-works`: with per-use-case AGENTS.md hardening on top of
+      the docs-only profile, the audit-callback pattern fires reliably
+      and the model honors complex negative constraints (no filesystem,
+      no parallel jobs, no plain-text tool calls). The Nvidia-documented
+      failure modes that fired uncontested in v1 are empirically
+      closed in v2.
+
+      Strategic lesson for future Nemotron operators: the YAML profile
+      gives you the prompting shape, sampling, and reasoning controls
+      Nvidia recommends. The AGENTS.md gives you the workflow constraints
+      that turn those mechanics into reliable agentic behavior. You
+      need both layers.
+    pr_or_issue_url: https://github.com/tosin2013/helmdeck/issues/475
+
 comparison_traces: []  # awaiting cross-tier comparison runs

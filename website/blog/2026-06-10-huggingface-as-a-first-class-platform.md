@@ -6,7 +6,6 @@ tags: [field-report, strategy, huggingface]
 description: PR #489 added HF Inference Providers as alternative routing. The bigger opportunity is everything else HF offers — datasets, embeddings, Spaces, tokenizers — that helmdeck currently ignores. Epic #490 frames the strategic direction.
 image: /img/social-card.png
 date: 2026-06-10
-draft: true
 ---
 
 The 2026-06-10 empirical work surfaced something I've been avoiding: OpenRouter's shared `:free` pool isn't a reliable foundation for sustained Tier C agentic work. Three of five Phase 1 models hit upstream rate limits today — Google AI Studio 429'd `google/gemma-4-26b-a4b-it:free`; "Venice"-attributed 429s caught `meta-llama/llama-3.3-70b-instruct:free` and `qwen/qwen3-coder:free` within minutes of each other.
@@ -29,7 +28,7 @@ Each in one sentence:
 
 - **Datasets**: Maya — a security researcher writing about kernel rootkits — could ground her drafts against the [`pierreguillou/dataset-kaggle-public`](https://huggingface.co/datasets) security corpora rather than scraping random blog posts via Firecrawl. Same with Together's research-deep on niche topics.
 - **Embeddings**: when an operator asks "what did the agent remember about deployment workflows last month," semantic similarity beats keyword matching.
-- **Spaces**: a `helmdeck__hf-space-invoke` pack could let a publishing agent call out to a remote OCR demo, an image-restoration Space, an audio classifier — without helmdeck shipping those capabilities directly.
+- **Spaces**: helmdeck packs could both *consume* existing Spaces (a `helmdeck__hf-space-invoke` pack calls out to remote OCR, image-restoration, audio-classifier demos) and *publish* new ones (a `hf-space-create` / `update` / `delete` trio lets any helmdeck workflow deploy as a hosted UI under the operator's HF account). The agent runtime stays helmdeck; the front door is a Space. Operator-self-service: internal team tools, client deliverables, MVPs, portfolio pieces, conference demos — whatever the operator wants to publish.
 - **Tokenizers**: the per-model profile library's `chain_call_reliability` notes today say "high for 1-2 calls, medium for 3-4" without knowing whether 3 calls of `content.ground` actually fit in the 131K window after the system prompt, tool catalog, and conversation history. Accurate tokenization gives operators real budgeting instead of estimation.
 
 ## Open questions worth pinning honestly
@@ -47,7 +46,7 @@ The strategic upside is real. The trade-offs are also real:
 1. **Inference Providers** (foundation, mostly shipped via PR #489)
 2. **Datasets** (new packs for search + stream + grounding integration)
 3. **Embeddings** (semantic memory)
-4. **Spaces** (remote capability composition)
+4. **Spaces** (consume existing + publish helmdeck workflows as hosted Spaces)
 5. **Tokenizers** (accurate context budgeting)
 6. **Self-hosted runtime patterns** (vLLM / TGI / SGLang walkthroughs)
 

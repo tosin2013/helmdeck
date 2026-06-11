@@ -11,7 +11,8 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
-_(no unreleased changes)_
+- HuggingFace epic ([#490](https://github.com/tosin2013/helmdeck/issues/490)) Phase 4 expanded: Track A (consume via `hf-space-invoke`) + Track B (publish via `hf-space-create` / `update` / `delete` trio). Track B framed around operator self-service — any helmdeck workflow becomes a hosted UI under the operator's HF account — with scoped tokens, default-private semantics, per-deployment consent flow, quota caps, and mandatory delete pairing as the security envelope.
+- Companion blog post [_HuggingFace isn't just another LLM router — it's a platform helmdeck barely uses_](/blog/huggingface-as-a-first-class-platform) promoted from `draft: true` after the Phase 4 expansion synced the post's framing with the epic.
 
 ## [0.27.0] - 2026-06-10
 

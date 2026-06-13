@@ -1,0 +1,105 @@
+{
+  "generated": "generate-recent-data.mjs",
+  "count": 8,
+  "posts": [
+    {
+      "slug": "huggingface-as-a-first-class-platform",
+      "title": "HuggingFace isn't just another LLM router — it's a platform helmdeck barely uses",
+      "description": "PR #489 added HF Inference Providers as alternative routing. The bigger opportunity is everything else HF offers — datasets, embeddings, Spaces, tokenizers — that helmdeck currently ignores. Epic #490 frames the strategic direction.",
+      "date": "2026-06-10",
+      "tags": [
+        "field-report",
+        "strategy",
+        "huggingface"
+      ],
+      "permalink": "/blog/huggingface-as-a-first-class-platform"
+    },
+    {
+      "slug": "empirical-validation-per-model-profile",
+      "title": "Empirical validation: the audit-callback pattern fires (and the profile only gets you partway)",
+      "description": "A profile-aware Tier C agent ran the audit-callback pattern end-to-end on openai/gpt-oss-120b:free — real artifacts, real verify_manifest with all_present:true. It also simplified the skill's 9-platform table to 2 variations. The library is a starting point, not a finished product.",
+      "date": "2026-06-09",
+      "tags": [
+        "weak-models",
+        "agent-architecture",
+        "field-report",
+        "reproduction"
+      ],
+      "permalink": "/blog/empirical-validation-per-model-profile"
+    },
+    {
+      "slug": "plausibility-shaped-output",
+      "title": "Plausibility-shaped output: when Tier C models manifest deposits they never made",
+      "description": "A Tier C free model produced a confidently-formatted six-entry deposit manifest, with byte sizes and a policy citation, for artifacts that never existed. One real pack call, six fabricated. The architectural fix is verify-against-ground-truth.",
+      "date": "2026-06-09",
+      "tags": [
+        "weak-models",
+        "agent-architecture",
+        "field-report",
+        "friction"
+      ],
+      "permalink": "/blog/plausibility-shaped-output"
+    },
+    {
+      "slug": "the-audit-callback-pattern",
+      "title": "The audit-callback pattern: verify-against-ground-truth as anti-hallucination middleware",
+      "description": "For any pack call an LLM might transform in its text response, ship a paired audit pack that reads ground truth. The architecture is the same shape as ADR 052 av-validate — applied at the chat-response layer instead of the artifact layer.",
+      "date": "2026-06-09",
+      "tags": [
+        "agent-architecture",
+        "mcp",
+        "weak-models",
+        "field-report"
+      ],
+      "permalink": "/blog/the-audit-callback-pattern"
+    },
+    {
+      "slug": "cookbook-recipes-beat-tutorials",
+      "title": "Recipe-style docs are dramatically underused. Here's the case for them.",
+      "description": "We shipped a cookbook of intent → prompt recipes alongside our reference docs. Within 48 hours it had eclipsed the prompt-templates page as the most-linked-to doc in our reference site. The pattern is simple, the per-recipe cost is ~15 minutes, and most projects don't do it.",
+      "date": "2026-06-05",
+      "tags": [
+        "contributor-experience",
+        "field-report",
+        "agent-architecture"
+      ],
+      "permalink": "/blog/cookbook-recipes-beat-tutorials"
+    },
+    {
+      "slug": "validation-arc-caught-its-own-first-bug",
+      "title": "We shipped a 4-phase reliability arc. The first bug it caught was itself.",
+      "description": "A four-phase validation arc shipped across PRs #428–#433. The first time we ran it production-shaped, it caught a Dockerfile/runtime image mismatch that had been silently masking changes for months. Plus what a 120B free-tier model did to our planner.",
+      "date": "2026-06-05",
+      "tags": [
+        "friction",
+        "agent-architecture",
+        "weak-models"
+      ],
+      "permalink": "/blog/validation-arc-caught-its-own-first-bug"
+    },
+    {
+      "slug": "empirical-tier-context-management",
+      "title": "Free models empty-completed our 35KB tool catalog. So we tier-classified them by failure mode, not vendor spec.",
+      "description": "A live test exposed that some free LLMs return empty completions when a tool catalog exceeds their effective working set. We responded by classifying models by their observed structured-output reliability — not their advertised context windows — and compacting the catalog with explicit dispatch invariants.",
+      "date": "2026-06-01",
+      "tags": [
+        "weak-models",
+        "agent-architecture",
+        "friction"
+      ],
+      "permalink": "/blog/empirical-tier-context-management"
+    },
+    {
+      "slug": "the-render-that-pegged-1-of-8-cores",
+      "title": "The render that pegged 1 of 8 cores",
+      "description": "A pipeline render sat at 100% CPU for 25 minutes while seven cores idled. The fix wasn't a bigger box — it was teaching the runtime which packs deserve them.",
+      "date": "2026-05-30",
+      "tags": [
+        "friction",
+        "agent-architecture",
+        "field-report"
+      ],
+      "permalink": "/blog/the-render-that-pegged-1-of-8-cores"
+    }
+  ]
+}

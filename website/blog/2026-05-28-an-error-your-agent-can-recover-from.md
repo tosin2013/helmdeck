@@ -4,7 +4,7 @@ title: "unknown provider: minimax: an error your agent couldn't recover from"
 authors: [tosin]
 tags: [friction]
 description: 'A pack failed with handler_failed and an opaque "unknown provider: minimax" message, and the agent — told nothing actionable — just guessed another bad model. The fix wasn''t a new provider; it was making the error caller-fixable and giving the agent a list to pick from.'
-image: /img/social-card.png
+image: /img/og/an-error-your-agent-can-recover-from.png
 date: 2026-05-28
 draft: false
 ---

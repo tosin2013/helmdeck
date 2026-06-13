@@ -4,7 +4,7 @@ title: "vision.click_anywhere works mechanically. The model still doesn't. Five 
 authors: [tosin]
 tags: [vision, agent-architecture, mcp, open-research, computer-use]
 description: The screenshot loop in helmdeck's vision packs converges. The vision model rarely emits "done". Here are five concrete open-source projects — verifiers, MCP servers, observability standards, prompt harnesses, fine-tuning datasets — that any one of which would solve the gap. None of them need to live in helmdeck. All of them are waiting for the right contributor.
-image: /img/social-card.png
+image: /img/og/vision-click-anywhere-open-research.png
 date: 2026-05-09
 draft: false
 ---

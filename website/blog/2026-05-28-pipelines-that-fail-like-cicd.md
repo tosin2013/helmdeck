@@ -4,7 +4,7 @@ title: "Pipelines that fail like CI/CD: whose fault, and what to do"
 authors: [tosin]
 tags: [agent-architecture]
 description: A failed pipeline used to give you a red badge and a flattened error string. Now each failure is attributed — a pack bug (file an issue), a bad input the agent can fix, or a transient blip worth a re-run — the way a CI job tells you which step broke and why.
-image: /img/social-card.png
+image: /img/og/pipelines-that-fail-like-cicd.png
 date: 2026-05-28
 draft: false
 ---

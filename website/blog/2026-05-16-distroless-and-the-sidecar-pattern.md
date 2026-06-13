@@ -4,7 +4,7 @@ title: "Your distroless control plane just got a request that needs bash. What n
 authors: [tosin]
 tags: [agent-architecture, security]
 description: Helmdeck's control plane ships on gcr.io/distroless/static:nonroot — no shell, no jq, no Python. The v0.13.0 marketplace beta needed all three. The decision we walked, and why "another sidecar image" was the answer that didn't compromise the orchestrator.
-image: /img/social-card.png
+image: /img/og/distroless-control-plane-needs-to-run-bash.png
 date: 2026-05-16
 draft: false
 ---

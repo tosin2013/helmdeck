@@ -4,7 +4,7 @@ title: HuggingFace isn't just another LLM router — it's a platform helmdeck ba
 authors: [tosin]
 tags: [field-report, strategy, huggingface]
 description: "PR #489 added HF Inference Providers as alternative routing. The bigger opportunity is everything else HF offers — datasets, embeddings, Spaces, tokenizers — that helmdeck currently ignores. Epic #490 frames the strategic direction."
-image: /img/social-card.png
+image: /img/og/huggingface-as-a-first-class-platform.png
 date: 2026-06-10
 ---
 

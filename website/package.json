@@ -5,8 +5,10 @@
   "scripts": {
     "docusaurus": "docusaurus",
     "start": "docusaurus start",
-    "build": "node scripts/generate-llms-full.mjs && docusaurus build",
+    "build": "node scripts/generate-llms-full.mjs && node scripts/generate-recent-data.mjs && docusaurus build",
     "generate-llms-full": "node scripts/generate-llms-full.mjs",
+    "generate-recent-data": "node scripts/generate-recent-data.mjs",
+    "og:generate": "node scripts/generate-og-cards.mjs",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
@@ -32,6 +34,7 @@
     "@docusaurus/module-type-aliases": "3.10.1",
     "@docusaurus/tsconfig": "3.10.1",
     "@docusaurus/types": "3.10.1",
+    "@resvg/resvg-js": "^2.6.2",
     "@types/react": "^19.2.17",
     "typescript": "~6.0.2"
   },

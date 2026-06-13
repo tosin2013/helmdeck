@@ -4,7 +4,7 @@ title: "Free models empty-completed our 35KB tool catalog. So we tier-classified
 authors: [tosin]
 tags: [weak-models, agent-architecture, friction]
 description: A live test exposed that some free LLMs return empty completions when a tool catalog exceeds their effective working set. We responded by classifying models by their observed structured-output reliability — not their advertised context windows — and compacting the catalog with explicit dispatch invariants.
-image: /img/social-card.png
+image: /img/og/empirical-tier-context-management.png
 date: 2026-06-01
 draft: false
 ---

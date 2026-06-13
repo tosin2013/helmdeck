@@ -4,7 +4,7 @@ title: Why a $0.10 model can do work that needs a $3 model
 authors: [tosin]
 tags: [cost, mcp, weak-models, agent-architecture]
 description: Helmdeck moves intelligence from the LLM to the pack handler. A look at where the cost actually goes — and how cheap or local models can run agentic workflows that frontier-model APIs charge 10× more for. With the prompts and recipe to test it yourself.
-image: /img/social-card.png
+image: /img/og/cheap-models-do-frontier-work.png
 date: 2026-05-08
 ---
 

@@ -4,7 +4,7 @@ title: "We almost pinned a package that doesn't exist — and the discipline tha
 authors: [tosin]
 tags: [friction, agent-architecture]
 description: The first cut of helmdeck's hyperframes.render sidecar Dockerfile pinned @hyperframes/cli@1.4.0 — a package that has never existed on npm. The real package is hyperframes (no scope), 0.6.7, requires Node ≥22. The build failed loud and we caught it. If we hadn't, every operator pulling the sidecar would have seen the same 404. ADR 037 is the discipline that came out of it.
-image: /img/social-card.png
+image: /img/og/pinning-the-wrong-package.png
 date: 2026-05-18
 draft: false
 ---

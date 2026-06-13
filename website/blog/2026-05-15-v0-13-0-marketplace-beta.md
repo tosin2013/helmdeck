@@ -4,7 +4,7 @@ title: "v0.13.0 ships Marketplace beta — install community packs from a signed
 authors: [tosin]
 tags: [release-notes, agent-architecture]
 description: helmdeck v0.13.0 turns the in-tree pack catalog into one of two paths. Built-ins still ship in the binary, but anything else — from a one-script helper to a video-rendering toolchain — can live in a community marketplace, install with a single REST call or the new CLI, and run inside a dedicated sidecar. Plus hyperframes.render, stock.search, contrast guardrails, and three new ADRs.
-image: /img/social-card.png
+image: /img/og/v0-13-0-marketplace-beta.png
 date: 2026-05-15
 draft: false
 ---

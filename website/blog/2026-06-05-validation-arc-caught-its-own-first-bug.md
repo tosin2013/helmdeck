@@ -4,7 +4,7 @@ title: We shipped a 4-phase reliability arc. The first bug it caught was itself.
 authors: [tosin]
 tags: [friction, agent-architecture, weak-models]
 description: "A four-phase validation arc shipped across PRs #428–#433. The first time we ran it production-shaped, it caught a Dockerfile/runtime image mismatch that had been silently masking changes for months. Plus what a 120B free-tier model did to our planner."
-image: /img/social-card.png
+image: /img/og/validation-arc-caught-its-own-first-bug.png
 date: 2026-06-05
 draft: false
 ---

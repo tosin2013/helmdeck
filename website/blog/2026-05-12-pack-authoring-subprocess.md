@@ -5,6 +5,7 @@ authors: [tosin]
 tags: [field-report, pack-authoring, community]
 description: T811 MVP turns any executable into a helmdeck pack via the stdin-JSON / stdout-JSON protocol. Drop a Python script into $HELMDECK_COMMAND_PACKS_DIR and the control plane registers it as cmd.<name>. Honest about the MVP's cuts — manifests, hot-reload, and egress sandboxing slip to v0.13.0.
 date: 2026-05-12
+image: /img/og/pack-authoring-subprocess.png
 ---
 
 ## The friction

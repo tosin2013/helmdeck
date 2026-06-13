@@ -5,6 +5,7 @@ authors: [tosin]
 tags: [architecture, enterprise, integration, openshell, sandboxing]
 description: Most "secure agent platform" stories conflate tool execution with sandbox enforcement. They're different layers with different failure modes. Helmdeck owns the tool layer (39 packs, MCP, vault, artifact store). NVIDIA OpenShell owns the sandbox layer (MicroVMs, L7 OPA policy, Landlock). The post-v1.0 roadmap composes them — and the four-phase community contribution path is open.
 date: 2026-05-13
+image: /img/og/tool-layer-vs-sandbox-layer.png
 ---
 
 ## Two layers, two failure modes

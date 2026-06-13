@@ -5,6 +5,7 @@ authors: [tosin]
 tags: [field-report, release-engineering, post-mortem]
 description: v0.12.0 shipped a broken Management UI on every fresh docker pull. The release workflow never ran `npm run build` before bundling the image — and nothing in CI caught it because the assets are gitignored and PR CI didn't exercise the image. v0.12.1 fixes the workflow and adds a verify step that fails the release loud rather than waiting for users to notice.
 date: 2026-05-13
+image: /img/og/v0-12-1-same-day-hotfix.png
 ---
 
 ## The signal we missed

@@ -4,7 +4,7 @@ title: Recipe-style docs are dramatically underused. Here's the case for them.
 authors: [tosin]
 tags: [contributor-experience, field-report, agent-architecture]
 description: We shipped a cookbook of intent → prompt recipes alongside our reference docs. Within 48 hours it had eclipsed the prompt-templates page as the most-linked-to doc in our reference site. The pattern is simple, the per-recipe cost is ~15 minutes, and most projects don't do it.
-image: /img/social-card.png
+image: /img/og/cookbook-recipes-beat-tutorials.png
 date: 2026-06-05
 draft: false
 ---

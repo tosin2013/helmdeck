@@ -4,7 +4,7 @@ title: "The render that pegged 1 of 8 cores"
 authors: [tosin]
 tags: [friction, agent-architecture, field-report]
 description: A pipeline render sat at 100% CPU for 25 minutes while seven cores idled. The fix wasn't a bigger box — it was teaching the runtime which packs deserve them.
-image: /img/social-card.png
+image: /img/og/the-render-that-pegged-1-of-8-cores.png
 date: 2026-05-30
 draft: false
 ---

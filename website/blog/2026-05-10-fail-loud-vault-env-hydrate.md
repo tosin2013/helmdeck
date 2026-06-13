@@ -6,6 +6,7 @@ tags: [friction, agent-architecture, security]
 description: A vault-backed pack returned HTTP 200 with a silent MP3 when the credential lookup missed. The per-pack fix surfaced the error; the platform fix made the class of bug impossible.
 date: 2026-05-10
 draft: false
+image: /img/og/fail-loud-vault-env-hydrate.png
 ---
 
 ## Hook

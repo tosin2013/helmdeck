@@ -4,7 +4,7 @@ title: "Helmdeck v0.10.0 — content packs, 38 packs total, registry-published"
 authors: [tosin]
 tags: [release-notes, mcp, content-packs, registry]
 description: v0.10.0 ships two new content packs (blog.publish, podcast.generate), publishes helmdeck to the official MCP Registry, documents the operator upgrade procedure for the first time, and acknowledges the experimental status of the vision packs. Pack count 36 → 38.
-image: /img/social-card.png
+image: /img/og/helmdeck-v0-10-0-content-packs.png
 date: 2026-05-09
 draft: false
 ---

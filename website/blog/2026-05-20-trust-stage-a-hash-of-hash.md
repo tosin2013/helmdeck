@@ -4,7 +4,7 @@ title: "Trust stage A: when the file containing the hash is in the hash"
 authors: [tosin]
 tags: [security, agent-architecture]
 description: Helmdeck's marketplace verifies that a pack's content hasn't been tampered with by comparing a SHA256 of every file in the pack against the hash stored in the pack's manifest. But the manifest IS one of the files in the pack — including it in the hash creates a circular dependency. The one-line fix and the threat-model boundary it draws.
-image: /img/social-card.png
+image: /img/og/trust-stage-a-hash-of-hash.png
 date: 2026-05-20
 draft: false
 ---

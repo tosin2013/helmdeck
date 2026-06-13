@@ -4,7 +4,7 @@ title: "A PDF slide cannot scroll: why your mermaid diagrams were getting clippe
 authors: [tosin]
 tags: [friction]
 description: slides.render quietly cut the edges off big mermaid diagrams and wide tables in PDF decks. The CSS that was supposed to handle it — overflow-x:auto — is a no-op in a paginated format. The fix was four lines of theme-independent CSS, but the lesson is about where the bug actually lived.
-image: /img/social-card.png
+image: /img/og/a-pdf-slide-cannot-scroll.png
 date: 2026-05-26
 draft: false
 ---

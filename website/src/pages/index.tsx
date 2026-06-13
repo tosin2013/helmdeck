@@ -6,6 +6,7 @@ import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
 
 import styles from './index.module.css';
+import recent from '../data/recent.json';
 
 const whyCards = [
   {
@@ -114,6 +115,40 @@ function Quadrants() {
   );
 }
 
+function formatDate(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${months[parseInt(m, 10) - 1]} ${parseInt(d, 10)}, ${y}`;
+}
+
+function RecentlyShipped() {
+  const posts = (recent as {posts: Array<{slug: string; title: string; description: string; date: string; permalink: string; tags: string[]}>}).posts;
+  if (!posts || posts.length === 0) return null;
+  return (
+    <section className={styles.recent}>
+      <div className="container">
+        <Heading as="h2" className={styles.recentHeading}>Recently shipped</Heading>
+        <p className={styles.recentLead}>
+          The latest engineering notes, design rationale, and field reports from the helmdeck project.
+        </p>
+        <div className={styles.recentGrid}>
+          {posts.map((p) => (
+            <Link key={p.slug} to={p.permalink} className={styles.recentCard}>
+              <time className={styles.recentDate} dateTime={p.date}>{formatDate(p.date)}</time>
+              <Heading as="h3" className={styles.recentTitle}>{p.title}</Heading>
+              {p.description && <p className={styles.recentDesc}>{p.description}</p>}
+              <span className={styles.recentArrow}>Read post →</span>
+            </Link>
+          ))}
+        </div>
+        <div className={styles.recentCta}>
+          <Link to="/blog" className="button button--outline button--primary">All posts</Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function Home(): ReactNode {
   const {siteConfig} = useDocusaurusContext();
   return (
@@ -124,6 +159,7 @@ export default function Home(): ReactNode {
       <main>
         <WhyHelmdeck />
         <Quadrants />
+        <RecentlyShipped />
       </main>
     </Layout>
   );

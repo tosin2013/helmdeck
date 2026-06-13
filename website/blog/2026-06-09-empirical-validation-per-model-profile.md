@@ -4,7 +4,7 @@ title: "Empirical validation: the audit-callback pattern fires (and the profile 
 authors: [tosin]
 tags: [weak-models, agent-architecture, field-report, reproduction]
 description: A profile-aware Tier C agent ran the audit-callback pattern end-to-end on openai/gpt-oss-120b:free — real artifacts, real verify_manifest with all_present:true. It also simplified the skill's 9-platform table to 2 variations. The library is a starting point, not a finished product.
-image: /img/social-card.png
+image: /img/og/empirical-validation-per-model-profile.png
 date: 2026-06-09
 draft: false
 ---

@@ -1,5 +1,6 @@
 ---
 sidebar_label: Multi-model recovery matrix
+description: "How to read the weekly multi-model recovery matrix from `.github/workflows/model-discovery.yml` and apply the decision rule for `openrouter/auto` defaults."
 ---
 
 # Reading the multi-model recovery matrix
@@ -87,3 +88,14 @@ Or via the UI: Actions → "model-discovery" → "Run workflow". Optional input 
 - **Cost tracking.** All four models are free-tier; the wall-clock budget is the only real constraint, and even a fully-throttled matrix run fits inside GitHub Actions' 6-hour job ceiling.
 - **A long-term trend dashboard.** The 30-day artifact retention is enough to grep recent results. A Docusaurus page rendering per-scenario score trends across weekly runs is a follow-up if maintainers find themselves diffing artifacts often.
 - **Auto-swap of the `required` row** when an observational row outperforms it. The pinned-model decision is deliberately manual — it triggers `MODEL_LAST_VERIFIED` updates and requires a maintainer to confirm the new pin is the right cheap-model proxy.
+
+## Related ADRs
+
+The dispatch and observability decisions behind multi-model recovery:
+
+- [ADR-005](../adrs/005-openai-compatible-multi-provider-ai-gateway.md) — OpenAI-compatible multi-provider AI gateway
+- [ADR-008](../adrs/008-typed-error-codes-for-weak-model-reliability.md) — Typed error codes for weak-model reliability
+- [ADR-010](../adrs/010-keda-autoscaling-on-custom-metrics.md) — KEDA autoscaling on custom metrics
+- [ADR-013](../adrs/013-opentelemetry-genai-observability.md) — OpenTelemetry GenAI observability
+- [ADR-043](../adrs/043-actionable-gateway-model-errors.md) — Actionable gateway model errors
+- [ADR-051](../adrs/051-failure-mode-aware-dispatch.md) — Failure-mode-aware dispatch

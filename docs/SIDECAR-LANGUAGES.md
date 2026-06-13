@@ -1,3 +1,7 @@
+---
+description: "How helmdeck's per-language sidecar images extend the base browser sidecar with toolchains. Each pack pins its own image; multiple language sidecars coexist cleanly."
+---
+
 # Sidecar language images
 
 Helmdeck packs that need a programming-language toolchain run inside

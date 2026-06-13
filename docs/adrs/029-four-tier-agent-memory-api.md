@@ -1,3 +1,7 @@
+---
+description: "ADR-029: Four-Tier Agent Memory API — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # 29. Four-Tier Agent Memory API
 
 **Status**: Proposed

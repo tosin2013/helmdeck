@@ -1,3 +1,7 @@
+---
+description: "How to extend the helmdeck browser sidecar image (`ghcr.io/tosin2013/helmdeck-sidecar`) with extra binaries (ffmpeg, tesseract, Marp themes) Capability Packs require."
+---
+
 # Extending the Browser Sidecar Image
 
 The browser sidecar image (`ghcr.io/tosin2013/helmdeck-sidecar`, built in T104) is the runtime environment that every browser session container is spawned from. Capability Packs depend on tools being present in this image — if a pack needs `ffmpeg`, `tesseract`, or a Marp theme, it must be in the sidecar, not in the agent's container.

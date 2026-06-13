@@ -1,3 +1,7 @@
+---
+description: "ADR-037: Upstream Package Version Management for Sidecar-Bundled Tools — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # ADR 037 — Upstream Package Version Management for Sidecar-Bundled Tools
 
 **Status:** Accepted

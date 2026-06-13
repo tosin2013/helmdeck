@@ -1,3 +1,7 @@
+---
+description: "ADR-009: Dual-Tier Deployment: Docker Compose and Kubernetes via Helm — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 9. Dual-Tier Deployment: Docker Compose and Kubernetes via Helm
 
 **Status**: Accepted

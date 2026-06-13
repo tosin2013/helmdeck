@@ -1,3 +1,7 @@
+---
+description: "ADR-048: Memory Write Surface and OpenClaw Memory-Corpus Bridge — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 48. Memory Write Surface and OpenClaw Memory-Corpus Bridge
 
 **Status**: Accepted (slice 1 shipped: embedding sidecar + install integration; write surface and OpenClaw corpus bridge are PR #2 and #3 of this roadmap)

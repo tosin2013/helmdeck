@@ -1,3 +1,7 @@
+---
+description: "ADR-007: Credential Vault with Placeholder-Token Injection — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 7. Credential Vault with Placeholder-Token Injection
 
 **Status**: Accepted

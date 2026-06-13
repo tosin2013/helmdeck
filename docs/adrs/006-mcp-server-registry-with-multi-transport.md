@@ -1,3 +1,7 @@
+---
+description: "ADR-006: MCP Server Registry with stdio / SSE / WebSocket Transports — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 6. MCP Server Registry with stdio / SSE / WebSocket Transports
 
 **Status**: Accepted

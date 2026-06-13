@@ -1,3 +1,7 @@
+---
+description: "Reference numbers for helmdeck control-plane and session-sidecar CPU/memory usage, plus the per-profile knobs operators can tune without forking the binary."
+---
+
 # Hardware sizing
 
 Reference numbers for how much CPU and memory the helmdeck control plane and its session sidecars actually use, plus the per-profile knobs you can turn without forking the binary.

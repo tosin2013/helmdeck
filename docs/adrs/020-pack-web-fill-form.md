@@ -1,3 +1,7 @@
+---
+description: "ADR-020: Pack: `web.fill_form` — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 20. Pack: `web.fill_form`
 
 **Status**: Accepted

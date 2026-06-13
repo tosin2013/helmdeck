@@ -1,3 +1,7 @@
+---
+description: "ADR-012: WebAssembly Executor for Custom Pack Handlers — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # 12. WebAssembly Executor for Custom Pack Handlers
 
 **Status**: Proposed

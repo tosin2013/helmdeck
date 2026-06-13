@@ -1,3 +1,7 @@
+---
+description: "ADR-010: KEDA Autoscaling on Custom Session Metrics — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 10. KEDA Autoscaling on Custom Session Metrics
 
 **Status**: Accepted

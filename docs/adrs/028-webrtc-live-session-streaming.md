@@ -1,3 +1,7 @@
+---
+description: "ADR-028: WebRTC Live Session Streaming — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # 28. WebRTC Live Session Streaming
 
 **Status**: Proposed

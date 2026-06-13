@@ -1,3 +1,7 @@
+---
+description: "Recipe for an OpenClaw blog-drafter agent running `google/gemma-4-26b-a4b-it:free` with a per-model AGENTS.md matching Gemma 4's role-turn-conversational style."
+---
+
 # How to build a Gemma 4 blog-drafter agent (iterative workflow)
 
 This recipe shows how to set up an OpenClaw agent running `google/gemma-4-26b-a4b-it:free` for blog-drafting work, using a per-model AGENTS.md that matches Gemma 4's preferred prompting style. It closes part of [issue #464](https://github.com/tosin2013/helmdeck/issues/464) Phase 4: per-model agent identities for the helmdeck publishing skill chain.

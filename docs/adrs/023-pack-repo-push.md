@@ -1,3 +1,7 @@
+---
+description: "ADR-023: Pack: `repo.push` — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 23. Pack: `repo.push`
 
 **Status**: Accepted

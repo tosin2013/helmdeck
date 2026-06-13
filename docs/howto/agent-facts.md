@@ -1,3 +1,7 @@
+---
+description: "How OpenClaw agents persist and recall user-supplied facts via helmdeck's per-caller memory layer. Covers the contract, surfaces, and lifecycle of stored facts."
+---
+
 # How agents persist and recall user facts
 
 Helmdeck's memory layer doesn't just track *what the engine learned* (audit history, learned defaults) — as of ADR 048 PR #2, agents can also persist *what the user told them* under the same per-caller namespace. This page covers the contract, the surfaces, and the lifecycle.

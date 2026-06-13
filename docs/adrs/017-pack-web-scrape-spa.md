@@ -1,3 +1,7 @@
+---
+description: "ADR-017: Pack: `web.scrape_spa` — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 17. Pack: `web.scrape_spa`
 
 **Status**: Accepted

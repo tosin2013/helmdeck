@@ -1,3 +1,7 @@
+---
+description: "Phase milestones + per-task issue checklists for helmdeck development. Drop-in source for `gh milestone create` and `gh issue create` flows aligned with TASKS.md."
+---
+
 # Helmdeck — GitHub Milestones & Issue Checklists
 
 Drop-in source for `gh issue create` and GitHub Projects. Each phase = one milestone. Each task ID from `TASKS.md` = one issue. Copy a section into `gh milestone create` + `gh issue create --milestone ...`.

@@ -1,3 +1,7 @@
+---
+description: "How to add a new chat-completion model to helmdeck's tier table (A/B/C) and tune the cascade trim, two-pass filter, and context budget for production behavior."
+---
+
 # How to calibrate a new model for helmdeck's tier table
 
 Helmdeck classifies every chat completion model into one of three tiers (A, B, C) plus an implicit "unsupported" bucket. The tier determines how aggressively the cascade trims the catalog projection before the model sees it, whether the two-pass LLM filter pass fires, and what budgets `helmdeck://context-budgets` advertises to MCP clients. Tier assignments live in `internal/llmcontext/budgets.go`.

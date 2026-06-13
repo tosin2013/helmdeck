@@ -1,3 +1,7 @@
+---
+description: "ADR-050: LLM Context Manager for Catalog-Heavy Packs — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 50. LLM Context Manager for Catalog-Heavy Packs
 
 **Status**: Accepted — fully shipped in v0.22.0 (all PRs: per-model budgets + catalog compaction unblocking `helmdeck.plan` on free models, generalization to `helmdeck.route` + `helmdeck://context-budgets` operator visibility, cascading select + lexical rank + `helmdeck://my-plans`, and the two-pass LLM filter with JSON-decoder tolerance)

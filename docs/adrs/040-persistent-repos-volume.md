@@ -1,3 +1,7 @@
+---
+description: "ADR-040: Persistent Repos Volume and Cross-Session Clone Reuse — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # 40. Persistent Repos Volume and Cross-Session Clone Reuse
 
 **Status**: Proposed

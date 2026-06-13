@@ -1,3 +1,7 @@
+---
+description: "ADR-025: First-Class MCP Client Integrations: Claude Code, Claude Desktop, OpenClaw, Gemini CLI — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 25. First-Class MCP Client Integrations: Claude Code, Claude Desktop, OpenClaw, Gemini CLI
 
 **Status**: Accepted

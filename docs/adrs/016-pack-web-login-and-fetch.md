@@ -1,3 +1,7 @@
+---
+description: "ADR-016: Pack: `web.login_and_fetch` — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 16. Pack: `web.login_and_fetch`
 
 **Status**: Accepted

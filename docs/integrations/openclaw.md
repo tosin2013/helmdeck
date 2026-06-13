@@ -458,3 +458,20 @@ For non-OpenClaw clients (custom A2A bridges, Slack bots, anything else) the sam
 - [OpenClaw MCP CLI docs](https://docs.openclaw.ai/cli/mcp)
 - [OpenClaw Docker install](https://docs.openclaw.ai/install/docker)
 - [Helmdeck MCP SSE transport (T302a)](../../internal/api/mcp_sse.go)
+
+## Related ADRs
+
+The agent-runtime and session-layer decisions that shape OpenClaw integration:
+
+- [ADR-001](../adrs/001-sidecar-pattern-for-browser-isolation.md) — Sidecar pattern for browser isolation
+- [ADR-004](../adrs/004-ephemeral-stateless-browser-sessions.md) — Ephemeral stateless browser sessions
+- [ADR-011](../adrs/011-tiered-isolation-docker-gvisor-firecracker.md) — Tiered isolation (Docker / gVisor / Firecracker)
+- [ADR-028](../adrs/028-webrtc-live-session-streaming.md) — WebRTC live session streaming
+- [ADR-029](../adrs/029-four-tier-agent-memory-api.md) — Four-tier agent memory API
+- [ADR-031](../adrs/031-object-store-garage-default-and-pluggable-s3.md) — Object store: Garage default + pluggable S3
+- [ADR-032](../adrs/032-artifact-explorer-and-inline-images.md) — Artifact explorer + MCP inline image content
+- [ADR-033](../adrs/033-github-webhook-listener.md) — GitHub webhook listener
+- [ADR-039](../adrs/039-universal-memory-delivery-layer.md) — Universal memory delivery layer
+- [ADR-040](../adrs/040-persistent-repos-volume.md) — Persistent repos volume + cross-session clone reuse
+- [ADR-047](../adrs/047-pipeline-routing-and-memory.md) — Pipeline routing + memory
+- [ADR-048](../adrs/048-memory-write-surface-openclaw-bridge.md) — Memory write surface + OpenClaw memory-corpus bridge

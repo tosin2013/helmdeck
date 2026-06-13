@@ -1,3 +1,7 @@
+---
+description: "ADR-024: User-Authored Pack Extensibility — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 24. User-Authored Pack Extensibility
 
 **Status**: Accepted

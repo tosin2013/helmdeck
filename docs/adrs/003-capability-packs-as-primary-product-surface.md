@@ -1,3 +1,7 @@
+---
+description: "ADR-003: Capability Packs as the Primary Product Surface — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 3. Capability Packs as the Primary Product Surface
 
 **Status**: Accepted

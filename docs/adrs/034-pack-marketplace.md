@@ -1,3 +1,7 @@
+---
+description: "ADR-034: Pack Marketplace (App Store for Capability Packs) — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # ADR 034 — Pack Marketplace (App Store for Capability Packs)
 
 **Status:** Accepted

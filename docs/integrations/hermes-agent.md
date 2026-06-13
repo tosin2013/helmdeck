@@ -1,3 +1,7 @@
+---
+description: "How to integrate Hermes Agent with helmdeck via the `base_url` LLM gateway field — every chat completion lands in helmdeck's provider_calls observability surface."
+---
+
 # Hermes Agent
 
 > **Status:** 🟡 Documented, not yet verified end-to-end

@@ -1,3 +1,7 @@
+---
+description: "ADR-019: Pack: `doc.ocr` — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 19. Pack: `doc.ocr`
 
 **Status**: Accepted

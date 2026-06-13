@@ -179,3 +179,20 @@ All packs live in `internal/packs/builtin/`. Registration happens in `cmd/contro
 | `vision_packs.go` | `vision.*` |
 | `python_run.go` | `python.run` |
 | `node_run.go` | `node.run` |
+
+## Related ADRs
+
+Architectural decisions behind helmdeck's pack model and per-pack design:
+
+- [ADR-003](adrs/003-capability-packs-as-primary-product-surface.md) — Capability packs as the primary product surface
+- [ADR-012](adrs/012-wasm-executor-for-pack-handlers.md) — Wasm executor for pack handlers
+- [ADR-014](adrs/014-pack-slides-render.md) / [ADR-015](adrs/015-pack-slides-video.md) — Slides packs (render + video)
+- [ADR-016](adrs/016-pack-web-login-and-fetch.md) / [ADR-017](adrs/017-pack-web-scrape-spa.md) / [ADR-020](adrs/020-pack-web-fill-form.md) / [ADR-021](adrs/021-pack-browser-screenshot-url.md) — Web automation packs
+- [ADR-018](adrs/018-pack-desktop-run-app-and-screenshot.md) — Desktop runtime + screenshot pack
+- [ADR-019](adrs/019-pack-doc-ocr.md) — Document OCR pack
+- [ADR-022](adrs/022-pack-repo-fetch.md) / [ADR-023](adrs/023-pack-repo-push.md) / [ADR-036](adrs/036-pack-repo-map.md) — Repository packs
+- [ADR-024](adrs/024-user-authored-pack-extensibility.md) — User-authored pack extensibility
+- [ADR-027](adrs/027-dual-mode-action-api-structured-and-vision.md) — Dual-mode action API (structured + vision)
+- [ADR-034](adrs/034-pack-marketplace.md) — Pack marketplace
+- [ADR-038](adrs/038-marketplace-pack-execution-via-sidecar.md) — Marketplace pack execution via sidecar
+- [ADR-045](adrs/045-pack-resource-sizing.md) — Pack resource sizing via CPU profiles

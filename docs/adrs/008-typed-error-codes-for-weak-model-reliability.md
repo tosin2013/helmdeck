@@ -1,3 +1,7 @@
+---
+description: "ADR-008: Closed-Set Typed Error Codes on All Pack Outputs — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 8. Closed-Set Typed Error Codes on All Pack Outputs
 
 **Status**: Accepted

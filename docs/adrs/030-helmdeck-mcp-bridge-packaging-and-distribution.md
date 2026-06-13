@@ -1,3 +1,7 @@
+---
+description: "ADR-030: `helmdeck-mcp` Bridge Packaging and Distribution — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 30. `helmdeck-mcp` Bridge Packaging and Distribution
 
 **Status**: Accepted

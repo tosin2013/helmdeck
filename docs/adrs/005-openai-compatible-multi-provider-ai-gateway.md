@@ -1,3 +1,7 @@
+---
+description: "ADR-005: OpenAI-Compatible Multi-Provider AI Gateway — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 5. OpenAI-Compatible Multi-Provider AI Gateway
 
 **Status**: Accepted

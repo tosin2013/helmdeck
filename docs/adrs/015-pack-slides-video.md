@@ -1,3 +1,7 @@
+---
+description: "ADR-015: Pack: `slides.video` — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 15. Pack: `slides.video`
 
 **Status**: Accepted

@@ -1,3 +1,7 @@
+---
+description: "How to receive long-running pack results from helmdeck via HTTP webhooks. Re-inject pack output as a fresh chat turn — the only way to get true push-to-LLM semantics."
+---
+
 # Helmdeck Webhooks — Push Pack Results to Your Agent Gateway
 
 When a long-running pack (`slides.narrate`, `research.deep`, `content.ground`, etc.) finishes, helmdeck can POST the result to a URL you supply instead of making the LLM poll. The receiver (a tiny gateway service you run) then re-injects the result into your agent's chat as a fresh user/system message — which triggers a new LLM turn.

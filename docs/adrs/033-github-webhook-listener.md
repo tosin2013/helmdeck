@@ -1,3 +1,7 @@
+---
+description: "ADR-033: GitHub Webhook Listener — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # ADR 033 — GitHub Webhook Listener
 
 **Status:** Accepted

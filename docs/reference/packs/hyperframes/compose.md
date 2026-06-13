@@ -39,6 +39,7 @@ narration `<audio>`). The structural contract holds regardless of model quality.
 | `audio_url` | `string` | no | — | A presigned audio URL (e.g. `podcast.generate`'s `audio_url`). When set, the pack embeds an `<audio>` element so the rendered MP4 carries narration. Empty → a silent video. **When set, `duration_seconds` is required** (issue [#498](https://github.com/tosin2013/helmdeck/issues/498)). |
 | `style` | `string` | no | — | Freeform visual style hint (e.g. "dark, minimal, bold type"). |
 | `max_tokens` | `number` | no | derived | Completion-token budget (clamped to [2048, 8192]). |
+| `metadata_model` | `string` | no | `openrouter/auto` | Gateway model id for the engagement-metadata generation step. Pass `""` to opt out (no second LLM call, no `engagement` output). Pass any model id (e.g. `openrouter/openai/gpt-oss-120b:free`) to pin the chain to free tier. String-ptr-shaped: omitted → use default. |
 
 ## Outputs
 
@@ -51,6 +52,24 @@ narration `<audio>`). The structural contract holds regardless of model quality.
 | `duration_seconds` | `number` | The video length baked into the composition. |
 | `has_audio` | `boolean` | Whether a narration `<audio>` element was embedded. |
 | `duration_source` | `string` | `"audio"` when synced to an embedded track, else `"timeline"`. |
+| `engagement` | `object` | Duration-band-aware engagement payload (see [Engagement metadata](#engagement-metadata) below). Absent when `metadata_model: ""` or when generation failed (composition is still produced — engagement is best-effort). |
+| `engagement_artifact_key` | `string` | Stable artifact key to the JSON sidecar with the same payload. Useful for chaining downstream packs. Absent when engagement is absent or artifact storage failed. |
+
+## Engagement metadata
+
+When `metadata_model` is non-empty (default: `openrouter/auto`), `hyperframes.compose` makes a second gateway LLM call to produce video-shaped engagement metadata aligned with the rendered MP4's duration band. The shape is selected from `duration_seconds`:
+
+| Band | Duration | Output shape | Target distribution |
+|---|---|---|---|
+| `short_form` | < 60s | `{title, hook, hashtags, caption, thumbnail_prompt}` | TikTok / YouTube Shorts / Reels |
+| `mid_form` | 60–179s | `{title, hook, hashtags, caption, social_blurb, thumbnail_prompt}` | Shorts (long edge) / Twitter / LinkedIn-native |
+| `long_form` | ≥ 180s | `{title, description, chapters, hashtags, tags, hook_30s, category, language, thumbnail_prompt}` | YouTube proper |
+
+All bands include a `format` field naming the band (defense against the model returning a different shape than the prompt asked for) and a `thumbnail_prompt` ready to feed `image.generate` for hero artwork.
+
+**Cost discipline**: the default `openrouter/auto` routes to a paid model. To keep the chain on free tier (e.g. when the agent itself runs on `openai/gpt-oss-120b:free`), pass `metadata_model: "openrouter/openai/gpt-oss-120b:free"`. This mirrors `podcast.generate`'s `metadata_model` pattern.
+
+**Failure handling**: if the engagement LLM call returns an error or unparseable JSON, the pack logs a warning and returns the composition without `engagement` / `engagement_artifact_key`. The composition itself is the load-bearing output; engagement is value-add.
 
 ## Async behavior
 

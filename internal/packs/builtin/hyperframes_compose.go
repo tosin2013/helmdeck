@@ -86,6 +86,16 @@ type hyperframesComposeInput struct {
 	AudioURL        string  `json:"audio_url"`
 	Style           string  `json:"style"`
 	MaxTokens       int     `json:"max_tokens"`
+	// MetadataModelRaw is a string-ptr-shaped opt-in/opt-out for video
+	// engagement metadata generation (title, hook, hashtags, etc.).
+	// Pointer semantics distinguish three states:
+	//   nil          → default to "openrouter/auto" (paid; safe default
+	//                  matching podcast.generate's behavior)
+	//   ""           → operator explicitly disabled engagement gen
+	//   "<model id>" → use the named model (e.g. the agent's own free
+	//                  model for end-to-end free-tier discipline)
+	// Mirrors podcast.generate's MetadataModelRaw pattern.
+	MetadataModelRaw *string `json:"metadata_model"`
 }
 
 // composeSpec is the creative payload the model returns; the pack assembles the
@@ -122,6 +132,9 @@ func HyperframesCompose(d vision.Dispatcher) *packs.Pack {
 				"audio_url":        "string",
 				"style":            "string",
 				"max_tokens":       "number",
+				// metadata_model: string-ptr-shaped opt-in for engagement
+				// metadata (default "openrouter/auto"; "" disables).
+				"metadata_model": "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -135,6 +148,12 @@ func HyperframesCompose(d vision.Dispatcher) *packs.Pack {
 				"duration_seconds": "number",
 				"has_audio":        "boolean",
 				"duration_source":  "string",
+				// engagement: duration-band-aware object (short_form /
+				// mid_form / long_form). engagement_artifact_key: stable
+				// key to the JSON sidecar with the same payload, useful
+				// when chaining downstream packs.
+				"engagement":              "object",
+				"engagement_artifact_key": "string",
 			},
 		},
 		Handler: hyperframesComposeHandler(d),
@@ -268,6 +287,44 @@ func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 			"has_audio":        hasAudio,
 			"duration_source":  durationSource,
 		}
+
+		// Engagement metadata — duration-band-aware, opt-out via empty
+		// string, default to "openrouter/auto" (matches podcast.generate).
+		// Failures soft-degrade: we log + skip rather than fail the
+		// composition itself, mirroring the slides.narrate / podcast.generate
+		// pattern. The composition_html is the load-bearing output; engagement
+		// is a value-add sidecar.
+		var engagementModel string
+		switch {
+		case in.MetadataModelRaw == nil:
+			engagementModel = "openrouter/auto"
+		case *in.MetadataModelRaw == "":
+			engagementModel = "" // operator explicitly disabled
+		default:
+			engagementModel = *in.MetadataModelRaw
+		}
+		if d != nil && engagementModel != "" {
+			band := composeEngagementBand(duration)
+			ec.Report(98, "generating "+band+" engagement metadata")
+			engagement, err := generateComposeEngagement(ctx, d, engagementModel, band, in.Description, in.AudioURL, duration)
+			if err != nil {
+				if ec.Logger != nil {
+					ec.Logger.Warn("hyperframes.compose engagement generation failed", "err", err, "band", band)
+				}
+			} else {
+				out["engagement"] = engagement
+				if ec.Artifacts != nil {
+					if mdBytes, err := json.Marshal(engagement); err == nil {
+						if art, err := ec.Artifacts.Put(ctx, "hyperframes.compose", "engagement.json", mdBytes, "application/json"); err == nil {
+							out["engagement_artifact_key"] = art.Key
+						} else if ec.Logger != nil {
+							ec.Logger.Warn("hyperframes.compose engagement artifact upload failed", "err", err)
+						}
+					}
+				}
+			}
+		}
+
 		return json.Marshal(out)
 	}
 }
@@ -359,4 +416,211 @@ func assembleComposition(w, h int, duration float64, audioURL string, spec compo
 </html>
 `, spec.Timeline)
 	return b.String()
+}
+
+// composeEngagementBand picks the duration-band-appropriate engagement
+// shape. Boundaries chosen from distribution-target conventions:
+//   - <60s         → short_form (TikTok / YouTube Shorts cap is 60s)
+//   - 60–179s      → mid_form   (still social-form; Twitter / LinkedIn)
+//   - ≥180s        → long_form  (YouTube proper; chapters become meaningful)
+func composeEngagementBand(durationSeconds float64) string {
+	switch {
+	case durationSeconds < 60:
+		return "short_form"
+	case durationSeconds < 180:
+		return "mid_form"
+	default:
+		return "long_form"
+	}
+}
+
+// Engagement-metadata prompt templates. Each band yields a different JSON
+// shape tuned to its distribution targets. Same prose conventions as
+// podcast.generate / slides.narrate engagement prompts: ONE JSON object,
+// no fences, hard rules enforced.
+
+const composeEngagementShortPrompt = `You are a short-form video engagement-metadata writer for an animated explainer (≤60 seconds, TikTok / YouTube Shorts / Reels distribution). Produce ONE JSON object — no surrounding prose, no markdown fences — with exactly these fields:
+
+{
+  "format": "short_form",
+  "title": "...",
+  "hook": "...",
+  "hashtags": ["...", "..."],
+  "caption": "...",
+  "thumbnail_prompt": "..."
+}
+
+HARD RULES (the output is rejected by automated tests if violated):
+
+Title:
+- 30-50 characters. Hook-first ("How X works", "The Y problem", "Why Z fails").
+- Plain text. No emoji. No clickbait punctuation.
+
+Hook:
+- ONE punchy sentence the narrator says in the first 3-5 seconds. Pattern interrupt: surprising specific claim, NOT "today we're talking about".
+
+Hashtags:
+- 3-5 hashtags, each genuinely relevant. Format as plain strings WITHOUT the leading #.
+- ZERO generic hashtags (#viral, #fyp, #foryou, #trending, #subscribe) — algorithmic signal is near-zero and they often get downranked.
+
+Caption:
+- ≤140 characters. The caption an operator can drop into Twitter/X / LinkedIn / Mastodon when sharing the artifact. Plain text.
+
+Thumbnail prompt:
+- 1-2 sentences describing the thumbnail / cover image. Concrete visual (subject + style + composition). The operator can feed this to image.generate or use as-is.`
+
+const composeEngagementMidPrompt = `You are a mid-form video engagement-metadata writer for an animated explainer (60-180 seconds, social-native distribution: Twitter / LinkedIn / Reels longer / Shorts-edge). Produce ONE JSON object — no surrounding prose, no markdown fences — with exactly these fields:
+
+{
+  "format": "mid_form",
+  "title": "...",
+  "hook": "...",
+  "hashtags": ["...", "..."],
+  "caption": "...",
+  "social_blurb": "...",
+  "thumbnail_prompt": "..."
+}
+
+HARD RULES (the output is rejected by automated tests if violated):
+
+Title:
+- 40-60 characters. Hook-first. Front-load the primary keyword.
+- Plain text. No emoji. No clickbait punctuation.
+
+Hook:
+- 1-2 sentences for the first 8-12 seconds of the narration. Pattern interrupt + payoff promise.
+
+Hashtags:
+- 5-8 hashtags, each genuinely relevant. Format as plain strings WITHOUT the leading #.
+- ZERO generic hashtags (#viral, #fyp, #foryou, #trending, #subscribe).
+
+Caption:
+- ≤280 characters (Twitter cap). The share-blurb for Twitter / Mastodon. Plain text.
+
+Social blurb:
+- 300-500 characters. The longer-form intro for LinkedIn / blog embedding. Conversational, third-paragraph deep. Plain text.
+
+Thumbnail prompt:
+- 1-2 sentences describing the thumbnail / cover image. Concrete visual (subject + style + composition).`
+
+const composeEngagementLongPrompt = `You are a long-form video engagement-metadata writer for a narrated animated video (3-12 minutes, YouTube-primary distribution). Produce ONE JSON object — no surrounding prose, no markdown fences — with exactly these fields:
+
+{
+  "format": "long_form",
+  "title": "...",
+  "description": "...",
+  "chapters": [{"timestamp": "0:00", "title": "...", "seconds": 0}, ...],
+  "hashtags": ["...", "..."],
+  "tags": ["...", "..."],
+  "hook_30s": "...",
+  "category": "Science & Technology",
+  "language": "en",
+  "thumbnail_prompt": "..."
+}
+
+HARD RULES (the output is rejected by automated tests if violated):
+
+Title:
+- 45-55 characters target, NEVER exceed 60 (mobile truncates beyond).
+- Front-load the primary keyword in the first 4-5 words.
+- One power word max. Numeric specificity ("3 steps", "5 patterns") if natural.
+- Plain text. No emoji. No clickbait punctuation.
+
+Description:
+- First 100 characters are the hook (this is what appears above-the-fold in search). Make them land.
+- Total length under 1000 characters.
+- Plain text. No keyword stuffing — algorithms read the transcript directly.
+
+Chapters:
+- The FIRST chapter MUST have timestamp "0:00" and seconds=0.
+- Provide AT LEAST 3 chapters when the video is >7 minutes; fewer is acceptable below but still aim for ≥2.
+- Minimum 10 seconds between consecutive chapter starts.
+- Use timestamps from the supplied total duration; format as M:SS (e.g. "0:00", "1:32", "10:05").
+- Chapter titles ≤45 characters, descriptive (not "Intro" / "Part 1" — use the actual topic).
+
+Hashtags:
+- 3-5 hashtags, each genuinely relevant. Format as plain strings WITHOUT the leading #.
+- ZERO generic hashtags (#viral, #fyp, #foryou, #trending, #subscribe).
+
+Tags:
+- 10-15 backend keywords covering the main topics for discoverability.
+
+Hook (hook_30s):
+- A 2-4 sentence opening that follows the research-validated structure:
+  (a) Pattern interrupt — a specific surprising claim or question. NOT "Welcome to my channel".
+  (b) Payoff promise — what concrete thing the viewer gets.
+  (c) Commitment hook — open a loop ("here's why" / "this changes when") that resolves later.
+- This is a recommended VO script the creator can adopt; do not include in the description.
+
+Thumbnail prompt:
+- 1-2 sentences describing the thumbnail / cover image. Concrete visual (subject + style + composition).`
+
+func composeEngagementPromptFor(band string) string {
+	switch band {
+	case "short_form":
+		return composeEngagementShortPrompt
+	case "mid_form":
+		return composeEngagementMidPrompt
+	default:
+		return composeEngagementLongPrompt
+	}
+}
+
+// generateComposeEngagement asks the gateway to produce a video engagement
+// payload appropriate to the duration band. The dispatcher + model are
+// the same shape podcast.generate's engagement helper uses. Errors are
+// returned so the handler can decide to soft-degrade (log + skip) rather
+// than fail the composition outright. The "max_tokens" budget is tight
+// (1024) — the JSON shape is bounded.
+func generateComposeEngagement(
+	ctx context.Context,
+	d vision.Dispatcher,
+	model, band, description, audioURL string,
+	durationSeconds float64,
+) (map[string]any, error) {
+	if d == nil {
+		return nil, fmt.Errorf("engagement: dispatcher unavailable")
+	}
+	system := composeEngagementPromptFor(band)
+	userParts := []string{
+		fmt.Sprintf("Video duration: %.0f seconds (band: %s).", durationSeconds, band),
+	}
+	if strings.TrimSpace(audioURL) != "" {
+		userParts = append(userParts, "The video has a narration audio track.")
+	} else {
+		userParts = append(userParts, "The video is silent (no narration audio).")
+	}
+	userParts = append(userParts, "Source description:")
+	userParts = append(userParts, description)
+
+	mt := 1024
+	chat, err := d.Dispatch(ctx, gateway.ChatRequest{
+		Model:     model,
+		MaxTokens: &mt,
+		Messages: []gateway.Message{
+			{Role: "system", Content: gateway.TextContent(system)},
+			{Role: "user", Content: gateway.TextContent(strings.Join(userParts, "\n"))},
+		},
+	})
+	if err != nil {
+		return nil, dispatchError("hyperframes.compose engagement", err)
+	}
+	if len(chat.Choices) == 0 {
+		return nil, fmt.Errorf("engagement: gateway returned no choices")
+	}
+	raw := strings.TrimSpace(chat.Choices[0].Message.Content.Text())
+	raw = unwrapCodeFence(raw)
+	var out map[string]any
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		snippet := raw
+		if len(snippet) > 256 {
+			snippet = snippet[:256] + "…"
+		}
+		return nil, fmt.Errorf("engagement: model did not return parseable JSON: %s", snippet)
+	}
+	// Stamp the band as a defense against the model emitting a different
+	// shape than the prompt asked for — operators inspecting the artifact
+	// know which schema to apply.
+	out["format"] = band
+	return out, nil
 }

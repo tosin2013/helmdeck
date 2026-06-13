@@ -250,6 +250,172 @@ func TestCompose_NoAudioStillDefaults(t *testing.T) {
 	}
 }
 
+// --- Engagement metadata (duration-band-aware) ---------------------------
+
+// Minimal valid engagement payloads per band — exact-field detail is enforced
+// by prompt rules; for tests we just need the JSON to parse.
+const (
+	engagementShortJSON = `{"title":"How eBPF tracepoint catches rootkits","hook":"Most rootkits hide from /proc — eBPF tracepoints don't care.","hashtags":["ebpf","linux","kernel","security"],"caption":"How tracepoint observability catches kernel rootkits without writing a kernel module.","thumbnail_prompt":"A stylized kernel diagram with a green checkmark over a tracepoint hook."}`
+	engagementMidJSON   = `{"title":"eBPF tracepoint detection in 90 seconds","hook":"Rootkits hide. But the kernel can't unsee a tracepoint.","hashtags":["ebpf","linux","kernel","security","observability"],"caption":"How eBPF tracepoint observability catches kernel rootkits — explained in 90 seconds.","social_blurb":"You don't need to write a kernel module to spot a rootkit. This short shows the trace flow from syscall entry to userspace alert using only eBPF tracepoints — the same primitives bcc and bpftrace already give you, applied to a real detection pipeline.","thumbnail_prompt":"A kernel-diagram with the syscall path highlighted in cyan and a tracepoint glyph."}`
+	engagementLongJSON  = `{"title":"eBPF tracepoint observability for kernel rootkit detection","description":"Most rootkits hide their state from procfs and the conventional ps/lsof toolchain. They don't hide from kernel tracepoints. This explainer walks through the trace flow from syscall entry to userspace alert using only eBPF — no kernel modules required.","chapters":[{"timestamp":"0:00","title":"The detection problem","seconds":0},{"timestamp":"1:30","title":"Tracepoints vs. kprobes","seconds":90},{"timestamp":"3:15","title":"From event to alert","seconds":195}],"hashtags":["ebpf","linux","kernel","security"],"tags":["ebpf tracepoint","kernel observability","rootkit detection","syscall tracing","linux security","kernel security","bpf programs","kernel modules","bcc","bpftrace"],"hook_30s":"Most rootkits hide from procfs. They cannot hide from a kernel tracepoint. In the next ten minutes I show you the exact trace flow from a syscall entry to a userspace alert — no kernel modules, no boot-time kludges, just tracepoints and a BPF program. Here's why every defender should know this pipeline by 2026.","category":"Science & Technology","language":"en","thumbnail_prompt":"A clean kernel-architecture diagram with the syscall→tracepoint→BPF→userspace path highlighted in cyan against a black background."}`
+)
+
+// TestCompose_EngagementShortBand — duration <60s picks the short_form prompt
+// and emits the corresponding engagement object on the output.
+func TestCompose_EngagementShortBand(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec, engagementShortJSON}}
+	raw, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/auto","metadata_model":"openrouter/test","duration_seconds":30}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out map[string]any
+	if uerr := json.Unmarshal(raw, &out); uerr != nil {
+		t.Fatalf("decode: %v", uerr)
+	}
+	eng, ok := out["engagement"].(map[string]any)
+	if !ok {
+		t.Fatalf("engagement field missing or wrong type: %T", out["engagement"])
+	}
+	if eng["format"] != "short_form" {
+		t.Errorf("format = %v, want short_form", eng["format"])
+	}
+	// Engagement-call prompt should be the short-form template.
+	if len(disp.captured) < 2 {
+		t.Fatalf("expected 2 dispatch calls (composition + engagement), got %d", len(disp.captured))
+	}
+	sys := disp.captured[1].Messages[0].Content.Text()
+	if !strings.Contains(sys, "short-form video engagement-metadata writer") {
+		t.Errorf("second dispatch system prompt is not the short-form template: %q", sys)
+	}
+}
+
+// TestCompose_EngagementMidBand — duration 60–179s picks the mid_form prompt.
+func TestCompose_EngagementMidBand(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec, engagementMidJSON}}
+	raw, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/auto","metadata_model":"openrouter/test","audio_url":"https://store/a.mp3","duration_seconds":120}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	eng, ok := out["engagement"].(map[string]any)
+	if !ok || eng["format"] != "mid_form" {
+		t.Fatalf("expected mid_form engagement, got %v", out["engagement"])
+	}
+	if _, hasSocial := eng["social_blurb"]; !hasSocial {
+		t.Errorf("mid_form engagement should include social_blurb; got %v", eng)
+	}
+	sys := disp.captured[1].Messages[0].Content.Text()
+	if !strings.Contains(sys, "mid-form video engagement-metadata writer") {
+		t.Errorf("second dispatch system prompt is not the mid-form template: %q", sys)
+	}
+}
+
+// TestCompose_EngagementLongBand — duration ≥180s picks the long_form prompt
+// and the engagement object contains chapters + description.
+func TestCompose_EngagementLongBand(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec, engagementLongJSON}}
+	raw, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/auto","metadata_model":"openrouter/test","audio_url":"https://store/a.mp3","duration_seconds":300}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	eng, ok := out["engagement"].(map[string]any)
+	if !ok || eng["format"] != "long_form" {
+		t.Fatalf("expected long_form engagement, got %v", out["engagement"])
+	}
+	if _, hasChapters := eng["chapters"]; !hasChapters {
+		t.Errorf("long_form engagement should include chapters")
+	}
+	if _, hasDesc := eng["description"]; !hasDesc {
+		t.Errorf("long_form engagement should include description")
+	}
+	sys := disp.captured[1].Messages[0].Content.Text()
+	if !strings.Contains(sys, "long-form video engagement-metadata writer") {
+		t.Errorf("second dispatch system prompt is not the long-form template: %q", sys)
+	}
+}
+
+// TestCompose_EngagementOptOut — metadata_model:"" disables engagement gen
+// entirely. The pack runs ONE dispatch (composition) and the engagement
+// fields are absent on the output.
+func TestCompose_EngagementOptOut(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec}}
+	raw, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/auto","metadata_model":""}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if disp.calls != 1 {
+		t.Errorf("opt-out should make exactly 1 dispatch call, got %d", disp.calls)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, has := out["engagement"]; has {
+		t.Errorf("opt-out should produce no engagement field, got %v", out["engagement"])
+	}
+	if _, has := out["engagement_artifact_key"]; has {
+		t.Errorf("opt-out should produce no engagement_artifact_key, got %v", out["engagement_artifact_key"])
+	}
+}
+
+// TestCompose_EngagementFailureGracefulDegrade — if engagement generation
+// fails (unparseable JSON), the composition still succeeds and the
+// engagement field is just absent. composition_html is the load-bearing
+// output; engagement is best-effort.
+func TestCompose_EngagementFailureGracefulDegrade(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec, "this is not JSON"}}
+	raw, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/auto","metadata_model":"openrouter/test","duration_seconds":30}`)
+	if err != nil {
+		t.Fatalf("composition should not fail when engagement parsing fails: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, hasEng := out["engagement"]; hasEng {
+		t.Errorf("engagement field should be absent on parse failure, got %v", out["engagement"])
+	}
+	if _, hasHTML := out["composition_html"]; !hasHTML {
+		t.Errorf("composition_html should still be produced on engagement failure")
+	}
+}
+
+// TestCompose_EngagementBandSelector — direct unit test for the band
+// boundaries so refactors that change the constants surface immediately.
+func TestCompose_EngagementBandSelector(t *testing.T) {
+	cases := []struct {
+		duration float64
+		want     string
+	}{
+		{0, "short_form"},
+		{8, "short_form"},
+		{59.9, "short_form"},
+		{60, "mid_form"},
+		{120, "mid_form"},
+		{179.9, "mid_form"},
+		{180, "long_form"},
+		{600, "long_form"},
+		{720, "long_form"},
+	}
+	for _, tc := range cases {
+		if got := composeEngagementBand(tc.duration); got != tc.want {
+			t.Errorf("composeEngagementBand(%v) = %q, want %q", tc.duration, got, tc.want)
+		}
+	}
+}
+
 // TestCompose_BadAspectRatio — an unsupported aspect_ratio rejects (reusing the
 // renderer's preset matrix) rather than producing a mismatched composition.
 func TestCompose_BadAspectRatio(t *testing.T) {

@@ -35,8 +35,8 @@ narration `<audio>`). The structural contract holds regardless of model quality.
 | `model` | `string` | yes | — | Gateway model id (`provider/model`; see `helmdeck://models`). |
 | `aspect_ratio` | `string` | no | `16:9` | `16:9`, `9:16`, or `1:1` — drives the exact canvas size (reuses `hyperframes.render`'s preset matrix). |
 | `resolution` | `string` | no | `1080p` | `1080p` or `4k` — sets the canvas pixel dimensions. |
-| `duration_seconds` | `number` | no | `8` | Video length (cap 720s). With `audio_url`, set this to the audio's length. |
-| `audio_url` | `string` | no | — | A presigned audio URL (e.g. `podcast.generate`'s `audio_url`). When set, the pack embeds an `<audio>` element so the rendered MP4 carries narration. Empty → a silent video. |
+| `duration_seconds` | `number` | conditional | `8` (silent only) | Video length (cap 720s). **Required when `audio_url` is provided** — set to the audio's length (e.g. `podcast.generate`'s `duration_s` output, rounded up). The 8s default applies ONLY to silent compositions. |
+| `audio_url` | `string` | no | — | A presigned audio URL (e.g. `podcast.generate`'s `audio_url`). When set, the pack embeds an `<audio>` element so the rendered MP4 carries narration. Empty → a silent video. **When set, `duration_seconds` is required** (issue [#498](https://github.com/tosin2013/helmdeck/issues/498)). |
 | `style` | `string` | no | — | Freeform visual style hint (e.g. "dark, minimal, bold type"). |
 | `max_tokens` | `number` | no | derived | Completion-token budget (clamped to [2048, 8192]). |
 
@@ -61,7 +61,7 @@ calls the gateway, then `hyperframes.render` does the session-bound rendering).
 
 | Code | Triggers |
 |---|---|
-| `invalid_input` | Missing `description`/`model`; unsupported `aspect_ratio`/`resolution`; the model returned an unparseable spec or no visible elements. |
+| `invalid_input` | Missing `description`/`model`; `audio_url` provided without `duration_seconds > 0` (issue [#498](https://github.com/tosin2013/helmdeck/issues/498)); unsupported `aspect_ratio`/`resolution`; the model returned an unparseable spec or no visible elements. |
 | `internal` | Registered without a gateway dispatcher. |
 | `handler_failed` | Gateway returned no choices. |
 

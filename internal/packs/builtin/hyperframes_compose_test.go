@@ -211,6 +211,45 @@ func TestCompose_MissingFields(t *testing.T) {
 	}
 }
 
+// TestCompose_AudioURLRequiresDuration — audio_url with duration_seconds omitted
+// (or <=0) is a load-bearing foot-gun: the timeline would default to 8s and
+// silently truncate longer narration tracks. The pack must reject this at the
+// input boundary with a CodeInvalidInput error so callers see the constraint
+// immediately. Issue #498.
+func TestCompose_AudioURLRequiresDuration(t *testing.T) {
+	for _, tc := range []struct{ name, input string }{
+		{"audio_url + no duration", `{"description":"x","model":"openrouter/auto","audio_url":"https://store/a.mp3"}`},
+		{"audio_url + duration=0", `{"description":"x","model":"openrouter/auto","audio_url":"https://store/a.mp3","duration_seconds":0}`},
+		{"audio_url + duration<0", `{"description":"x","model":"openrouter/auto","audio_url":"https://store/a.mp3","duration_seconds":-3}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runCompose(t, &scriptedDispatcherWT{}, tc.input)
+			pe := &packs.PackError{}
+			if !errors.As(err, &pe) || pe.Code != packs.CodeInvalidInput {
+				t.Fatalf("want CodeInvalidInput; got %v", err)
+			}
+			if !strings.Contains(pe.Message, "duration_seconds is required when audio_url is provided") {
+				t.Errorf("error message should reference the duration_seconds + audio_url contract; got %q", pe.Message)
+			}
+		})
+	}
+}
+
+// TestCompose_NoAudioStillDefaults — when audio_url is empty, the silent
+// micro-animation default (8s) is still appropriate. Backwards-compatible for
+// the silent-clip case.
+func TestCompose_NoAudioStillDefaults(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec}}
+	raw, err := runCompose(t, disp, `{"description":"x","model":"openrouter/auto"}`)
+	if err != nil {
+		t.Fatalf("silent clip without duration should still work: %v", err)
+	}
+	out := decodeCompose(t, raw)
+	if out.DurationSeconds != 8 {
+		t.Errorf("silent-clip default duration = %v, want 8", out.DurationSeconds)
+	}
+}
+
 // TestCompose_BadAspectRatio — an unsupported aspect_ratio rejects (reusing the
 // renderer's preset matrix) rather than producing a mismatched composition.
 func TestCompose_BadAspectRatio(t *testing.T) {

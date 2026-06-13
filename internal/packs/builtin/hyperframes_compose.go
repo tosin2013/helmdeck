@@ -175,6 +175,25 @@ func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
 		}
 
+		// When audio_url is provided, duration_seconds is required.
+		// The pack's default (hyperframesComposeDefaultDuration = 8s) is
+		// only correct for silent micro-animations; chaining a narrated
+		// audio source without an explicit duration silently truncates
+		// the audio at the 8-second timeline boundary in the rendered
+		// MP4 — and downstream av.validate's audio_video_duration check
+		// passes trivially because both clipped at the same point.
+		// Issue #498 documents the empirical repro. Fail caller_fixable
+		// here instead of producing a silently-broken video.
+		hasAudioInput := strings.TrimSpace(in.AudioURL) != ""
+		if hasAudioInput && in.DurationSeconds <= 0 {
+			return nil, &packs.PackError{
+				Code: packs.CodeInvalidInput,
+				Message: "duration_seconds is required when audio_url is provided. " +
+					"Pass the audio's duration in seconds (e.g. podcast.generate's `duration_s` output, " +
+					"rounded up). Without it, the composition timeline defaults to 8s and would silently " +
+					"truncate longer narration tracks.",
+			}
+		}
 		duration := in.DurationSeconds
 		if duration <= 0 {
 			duration = hyperframesComposeDefaultDuration

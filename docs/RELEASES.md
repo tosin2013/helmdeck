@@ -1,3 +1,7 @@
+---
+description: "Forward-looking helmdeck release plan. Each release maps 1:1 to a phase milestone with hard exit criteria from TASKS.md. Includes the agent sync checklist for releases."
+---
+
 # Helmdeck — Release Plan ("What Ships When")
 
 Forward-looking changelog. Each release maps 1:1 to a phase milestone (`MILESTONES.md`) and has hard exit criteria pulled from `TASKS.md`.
@@ -863,3 +867,13 @@ Canonical design doc: [`docs/integrations/openshell.md`](integrations/openshell.
 | Helm chart | `oci://ghcr.io/tosin2013/charts/baas-platform` |
 | `helmdeck-mcp` bridge | Homebrew, Scoop, npm, OCI, GH Releases |
 | Compose stack | `deploy/compose/compose.yaml` in repo |
+
+## Related ADRs
+
+The release-management and deployment decisions behind helmdeck's distribution model:
+
+- [ADR-009](adrs/009-dual-tier-deployment-compose-and-kubernetes.md) — Dual-tier deployment (Compose + Kubernetes)
+- [ADR-030](adrs/030-helmdeck-mcp-bridge-packaging-and-distribution.md) — `helmdeck-mcp` bridge packaging + distribution
+- [ADR-037](adrs/037-upstream-package-version-management.md) — Upstream package version management
+- [ADR-044](adrs/044-cicd-like-pipeline-execution.md) — CI/CD-like pipeline execution (resume / retry / re-run)
+- [ADR-052](adrs/052-av-output-validation-post-step.md) — AV output validation as a default-on post-step

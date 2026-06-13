@@ -1,3 +1,7 @@
+---
+description: "ADR-052: AV Output Validation as a Default-On Post-Encode Step — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 52. AV Output Validation as a Default-On Post-Encode Step
 
 **Status**: Accepted (Phases 1–3 shipped in PRs [#428](https://github.com/tosin2013/helmdeck/pull/428), [#430](https://github.com/tosin2013/helmdeck/pull/430), [#431](https://github.com/tosin2013/helmdeck/pull/431), [#432](https://github.com/tosin2013/helmdeck/pull/432); this ADR is Phase 4 — the architecture record.)

@@ -1,3 +1,7 @@
+---
+description: "ADR-045: Pack Resource Sizing via CPU Profiles — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 45. Pack Resource Sizing via CPU Profiles
 
 **Status**: Accepted (initial slice shipped: profiles + hyperframes.render + slides.narrate migrated)

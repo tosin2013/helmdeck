@@ -1,3 +1,7 @@
+---
+description: "ADR-035: MCP Server Hosting & Capability Pack Evolution — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # ADR 035 — MCP Server Hosting & Capability Pack Evolution
 
 **Status:** Accepted

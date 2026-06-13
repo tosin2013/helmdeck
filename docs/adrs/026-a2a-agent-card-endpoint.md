@@ -1,3 +1,7 @@
+---
+description: "ADR-026: A2A Agent Card Endpoint — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # 26. A2A Agent Card Endpoint
 
 **Status**: Proposed

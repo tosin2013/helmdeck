@@ -1,3 +1,7 @@
+---
+description: "ADR-044: CI/CD-like Pipeline Execution: Resume, Retry, Re-run — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 44. CI/CD-like Pipeline Execution: Resume, Retry, Re-run
 
 **Status**: Accepted (slice 1 shipped: failure attribution + re-run; resume + auto-retry pending)

@@ -1,3 +1,7 @@
+---
+description: "Implementation task breakdown for helmdeck, generated from ADRs 001–030 and PRD §16 roadmap. Each task lists source ADRs, prerequisites, and priority (P0–P3)."
+---
+
 # Helmdeck — Implementation Task Breakdown
 
 Generated from `docs/adrs/001`–`030` and PRD §16 roadmap.

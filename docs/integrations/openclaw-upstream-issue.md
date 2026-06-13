@@ -1,3 +1,7 @@
+---
+description: "Paste-ready GitHub issue draft for `openclaw/openclaw` documenting the SSE-transport 401 bug. File at github.com/openclaw/openclaw/issues/new with bug+mcp+sse labels."
+---
+
 # Draft GitHub issue for openclaw/openclaw
 
 > **Instructions:** This is a paste-ready issue draft. File at

@@ -1,3 +1,7 @@
+---
+description: "Helmdeck's defense-in-depth posture and operator-controlled hardening knobs. Defaults are safe; this page covers tightening for production or high-trust deployments."
+---
+
 # Security hardening
 
 This page documents helmdeck's defense-in-depth posture and the

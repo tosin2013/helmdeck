@@ -1,3 +1,7 @@
+---
+description: "ADR-038: Marketplace pack execution via dedicated sidecar — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # ADR 038 — Marketplace pack execution via dedicated sidecar
 
 **Status:** Accepted

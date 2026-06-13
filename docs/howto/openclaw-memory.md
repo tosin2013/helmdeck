@@ -1,3 +1,7 @@
+---
+description: "How to configure semantic recall in OpenClaw's `memory_search` tool. Verify the default Ollama embeddings sidecar, override it, or fall back to BM25 keyword search."
+---
+
 # How to configure OpenClaw memory (semantic recall)
 
 OpenClaw's `memory_search` tool ranks results semantically when an embedding provider is configured, and falls back to keyword/BM25 search (FTS) when one isn't. Helmdeck ships a default embedding sidecar so semantic recall works out of the box; this page covers how to verify it, how to override it, and how to opt out.

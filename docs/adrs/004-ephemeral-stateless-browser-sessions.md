@@ -1,3 +1,7 @@
+---
+description: "ADR-004: Ephemeral Stateless Browser Sessions — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 4. Ephemeral Stateless Browser Sessions
 
 **Status**: Accepted

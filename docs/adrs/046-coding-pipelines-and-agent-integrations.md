@@ -1,3 +1,7 @@
+---
+description: "ADR-046: Coding Pipelines + Agent-Integration Roadmap — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 46. Coding Pipelines + Agent-Integration Roadmap
 
 **Status**: Accepted (slice 1 shipped: Coding pipelines category + four beta pipelines using `swe.solve`; future agent integrations: roadmap)

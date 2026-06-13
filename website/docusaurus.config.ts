@@ -113,6 +113,22 @@ const config: Config = {
                 i.priority = 0.7;
                 i.changefreq = 'monthly';
               });
+            // Bump ADRs / reference / howto pages from default 0.5 → 0.6.
+            // These are content-bearing pages that GSC has been
+            // deprioritizing in the "Discovered – currently not indexed"
+            // bucket; a modest priority lift signals to Google that the
+            // pages are worth fetching. Skip pages that already have a
+            // higher custom priority from the per-route bumps above.
+            const bumpPrefix = (prefix: string, priority: number, changefreq: 'weekly' | 'monthly' | 'yearly') =>
+              items
+                .filter((i) => i.url.includes(prefix) && (i.priority ?? 0.5) <= 0.5)
+                .forEach((i) => {
+                  i.priority = priority;
+                  i.changefreq = changefreq;
+                });
+            bumpPrefix('/adrs/', 0.6, 'monthly');
+            bumpPrefix('/reference/', 0.6, 'monthly');
+            bumpPrefix('/howto/', 0.6, 'monthly');
             return items;
           },
         },
@@ -180,6 +196,12 @@ const config: Config = {
       },
       {name: 'twitter:card', content: 'summary_large_image'},
       {name: 'twitter:site', content: '@tosin2013'},
+      // OpenGraph site-wide defaults. Per-page og:title / og:description /
+      // og:url are emitted by the BlogPostPage and DocItem theme swizzles
+      // under src/theme/ — those override these fallbacks.
+      {property: 'og:type', content: 'website'},
+      {property: 'og:site_name', content: 'Helmdeck'},
+      {property: 'og:locale', content: 'en_US'},
       // Uncomment + paste the token if you choose URL-prefix verification
       // in Google Search Console. DNS-domain verification (TXT record)
       // doesn't need this.

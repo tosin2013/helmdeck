@@ -1,3 +1,7 @@
+---
+description: "ADR-018: Pack: `desktop.run_app_and_screenshot` — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 18. Pack: `desktop.run_app_and_screenshot`
 
 **Status**: Accepted

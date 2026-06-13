@@ -1,3 +1,7 @@
+---
+description: "Walkthrough for running helmdeck-driven OpenClaw agents against HuggingFace, Together, Groq, Cerebras, SambaNova, or self-hosted vLLM/SGLang/TGI providers."
+---
+
 # Configure a non-OpenRouter LLM provider for helmdeck
 
 A walkthrough for operators wanting to run helmdeck-driven OpenClaw agents against providers OTHER than OpenRouter — HuggingFace Inference Providers, Together AI direct, Groq, Cerebras, SambaNova, or self-hosted vLLM / SGLang / TGI.

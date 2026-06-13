@@ -1,3 +1,7 @@
+---
+description: "ADR-013: OpenTelemetry with GenAI Semantic Conventions — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 13. OpenTelemetry with GenAI Semantic Conventions
 
 **Status**: Accepted

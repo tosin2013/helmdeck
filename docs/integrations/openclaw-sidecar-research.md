@@ -1,3 +1,7 @@
+---
+description: "In-progress research brief on the OpenClaw `bundle-mcp` 401 issue against helmdeck's SSE endpoint. Handoff document for the next debugging session — blocked on T565."
+---
+
 # OpenClaw sidecar — research brief (in-progress, blocker on T565)
 
 > **Status:** ⚠️ Investigation paused — OpenClaw's `bundle-mcp` consumer

@@ -630,3 +630,15 @@ For developers working on the helmdeck codebase:
 - Create a branch, make changes, run `go test ./...`, open a PR
 - Pack count is tracked in `docs/PACKS.md` — update when adding new packs
 - Milestones tracked in `docs/MILESTONES.md` — update task status when completing work
+
+## Related ADRs
+
+The MCP and skill-bundle decisions behind helmdeck's integration surface:
+
+- [ADR-006](../adrs/006-mcp-server-registry-with-multi-transport.md) — MCP server registry with multi-transport
+- [ADR-025](../adrs/025-mcp-client-integrations.md) — MCP client integrations
+- [ADR-026](../adrs/026-a2a-agent-card-endpoint.md) — A2A agent-card endpoint
+- [ADR-030](../adrs/030-helmdeck-mcp-bridge-packaging-and-distribution.md) — `helmdeck-mcp` bridge packaging and distribution
+- [ADR-035](../adrs/035-mcp-server-hosting-and-pack-evolution.md) — MCP server hosting + pack evolution ("host, don't rebuild")
+- [ADR-038](../adrs/038-marketplace-pack-execution-via-sidecar.md) — Marketplace pack execution via sidecar
+- [ADR-048](../adrs/048-memory-write-surface-openclaw-bridge.md) — Memory write surface + OpenClaw memory-corpus bridge

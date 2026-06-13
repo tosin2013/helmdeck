@@ -1,3 +1,7 @@
+---
+description: "How `helmdeck.plan` decomposes multi-intent prompts into ordered tool/pipeline call sequences. Covers wire shape, pipeline-aware behavior, and the self-learning loop."
+---
+
 # How agents decompose multi-intent prompts with `helmdeck.plan`
 
 Helmdeck's catalog answers *"which one tool fits this intent?"* well — `helmdeck://routing-guide` and `helmdeck.route` (ADR 047) make that explicit. But real conversational prompts often span several intents in one message. ADR 049 PR #1 introduced **`helmdeck.plan`** for that case: it decomposes a multi-intent prompt into an ordered sequence of tool/pipeline calls, plus a re-written natural-language step list an agent can execute line-by-line.

@@ -1,3 +1,7 @@
+---
+description: "How helmdeck's per-caller memory layer wires into OpenClaw's `memory_search` tool as a corpus supplement. Covers wiring, failure modes, and the operator opt-out path."
+---
+
 # How the OpenClaw memory-corpus bridge works
 
 ADR 048 PR #3 wires helmdeck's per-caller memory layer into OpenClaw's `memory_search` tool as a corpus supplement. After this lands, an OpenClaw agent asking "what was that thing about Konflux deploys" sees hits from both the user's own conversational memory **and** helmdeck's audit history + agent-written user facts — ranked together by OpenClaw's search pipeline.

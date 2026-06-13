@@ -1,3 +1,7 @@
+---
+description: "YAML schema reference for `models/*.yaml` per-model prompting profiles. Read this before adding a new profile — covers fields, validation, and contribution workflow."
+---
+
 # Model profile YAML schema
 
 Reference documentation for the `models/*.yaml` per-model prompting profile format. External contributors adding a new profile should read this first, then fork the closest existing file under [`models/`](https://github.com/tosin2013/helmdeck/tree/main/models) as a starting template.

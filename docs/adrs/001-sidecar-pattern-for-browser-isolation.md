@@ -1,3 +1,7 @@
+---
+description: "ADR-001: Sidecar Pattern for Browser Isolation — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 1. Sidecar Pattern for Browser Isolation
 
 **Status**: Accepted

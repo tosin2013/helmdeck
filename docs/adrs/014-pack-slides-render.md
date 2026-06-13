@@ -1,3 +1,7 @@
+---
+description: "ADR-014: Pack: `slides.render` — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 14. Pack: `slides.render`
 
 **Status**: Accepted

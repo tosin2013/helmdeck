@@ -1,3 +1,7 @@
+---
+description: "ADR-041: Pipelines as a First-Class Resource — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # 41. Pipelines as a First-Class Resource
 
 **Status**: Proposed

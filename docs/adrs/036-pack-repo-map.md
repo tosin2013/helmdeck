@@ -1,3 +1,7 @@
+---
+description: "ADR-036: Pack: `repo.map` (Aider-style structural symbol map) — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # ADR 036 — Pack: `repo.map` (Aider-style structural symbol map)
 
 **Status:** Accepted

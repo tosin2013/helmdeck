@@ -1,3 +1,7 @@
+---
+description: "ADR-032: Artifact Explorer & MCP Inline Image Content — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # ADR 032 — Artifact Explorer & MCP Inline Image Content
 
 **Status:** Accepted

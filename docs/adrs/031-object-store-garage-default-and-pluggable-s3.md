@@ -1,3 +1,7 @@
+---
+description: "ADR-031: Object Store: Garage as Bundled Default, Pluggable External S3 — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 31. Object Store: Garage as Bundled Default, Pluggable External S3
 
 **Status**: Accepted

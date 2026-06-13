@@ -1,3 +1,7 @@
+---
+description: "ADR-022: Pack: `repo.fetch` — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 22. Pack: `repo.fetch`
 
 **Status**: Accepted

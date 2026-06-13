@@ -1,3 +1,7 @@
+---
+description: "Walkthrough for layering your own SOUL / IDENTITY / USER / AGENTS files over helmdeck's shipped skills so agents adopt your persona, platforms, and goals."
+---
+
 # Personalize an OpenClaw agent (layered SOUL / IDENTITY / USER / AGENTS pattern)
 
 A walkthrough for operators who want to use the helmdeck shipped skills (and skills under `~/.openclaw/skills/`) with **their own** persona, platforms, and goals — not the defaults the skill author baked in.

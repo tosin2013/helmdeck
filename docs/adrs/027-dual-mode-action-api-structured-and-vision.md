@@ -1,3 +1,7 @@
+---
+description: "ADR-027: Dual-Mode Action API: Structured (CDP) and Vision — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # 27. Dual-Mode Action API: Structured (CDP) and Vision
 
 **Status**: Proposed

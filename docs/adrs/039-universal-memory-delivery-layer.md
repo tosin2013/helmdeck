@@ -1,3 +1,7 @@
+---
+description: "ADR-039: Universal Memory Delivery Layer — Proposed. Architectural decision record for the helmdeck control-plane."
+---
+
 # 39. Universal Memory Delivery Layer
 
 **Status**: Proposed

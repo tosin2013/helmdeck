@@ -1,3 +1,7 @@
+---
+description: "ADR-051: Failure-Mode-Aware Dispatch for Mixed-Tier Model Deployments — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 51. Failure-Mode-Aware Dispatch for Mixed-Tier Model Deployments
 
 **Status**: Accepted (slice 1 shipped: reasoning-token stripping, JSON parser parity, research-calibrated tier table. PRs #2–#4 remain.)

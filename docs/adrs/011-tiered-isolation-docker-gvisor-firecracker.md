@@ -1,3 +1,7 @@
+---
+description: "ADR-011: Tiered Session Isolation: Docker, gVisor, Firecracker — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 11. Tiered Session Isolation: Docker, gVisor, Firecracker
 
 **Status**: Accepted

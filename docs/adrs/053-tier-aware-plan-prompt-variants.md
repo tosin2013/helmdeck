@@ -1,3 +1,7 @@
+---
+description: "ADR-053: Tier-Aware Prompt Templates for `helmdeck.plan` — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 53. Tier-Aware Prompt Templates for `helmdeck.plan`
 
 **Status**: Accepted (infrastructure shipped in this PR; tier-default selection is on for all unmapped models; opt-in override available per `Budget` entry.)

@@ -1,3 +1,7 @@
+---
+description: "ADR-002: Golang for the Control Plane — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 2. Golang for the Control Plane
 
 **Status**: Accepted

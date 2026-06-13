@@ -1,3 +1,7 @@
+---
+description: "ADR-043: Actionable Gateway Model/Provider Errors — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 43. Actionable Gateway Model/Provider Errors
 
 **Status**: Accepted

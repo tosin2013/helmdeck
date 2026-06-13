@@ -1,3 +1,7 @@
+---
+description: "ADR-047: Catalog Metadata, Memory-Driven Routing, and Gap Analysis — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 47. Catalog Metadata, Memory-Driven Routing, and Gap Analysis
 
 **Status**: Accepted — fully shipped in v0.22.0 (all four PRs: catalog metadata + `helmdeck://routing-guide`, memory audit hooks + `helmdeck://my-defaults` + `helmdeck.memory_forget`, the `helmdeck.route` meta-pack with gap analysis, and the Routing Memory management UI)

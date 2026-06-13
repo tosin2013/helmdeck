@@ -1,3 +1,7 @@
+---
+description: "ADR-021: Pack: `browser.screenshot_url` — Accepted. Architectural decision record for the helmdeck control-plane."
+---
+
 # 21. Pack: `browser.screenshot_url`
 
 **Status**: Accepted

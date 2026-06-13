@@ -1,3 +1,7 @@
+---
+description: "Step-by-step runbook for upgrading the `openclaw:local` image fronting your helmdeck MCP server. Validated on the 2026.4.10 → 2026.4.18 upgrade path on 2026-04-18."
+---
+
 # OpenClaw upgrade runbook
 
 > Use this when you upgrade the `openclaw:local` image that fronts your helmdeck MCP server. Validated on the 2026.4.10 → 2026.4.18 upgrade path on 2026-04-18; extend the known-issue table as new releases surface problems.

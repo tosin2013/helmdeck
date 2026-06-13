@@ -1,3 +1,7 @@
+---
+description: "How to integrate NVIDIA's NemoClaw sandbox with helmdeck. NemoClaw wraps OpenClaw's MCP schema; sandbox networking and credential isolation impose extra constraints."
+---
+
 # NemoClaw
 
 > **Status:** 🟡 Documented (inherits OpenClaw schema inside the NVIDIA sandbox)

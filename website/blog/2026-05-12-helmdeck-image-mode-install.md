@@ -5,7 +5,7 @@ authors: [tosin]
 tags: [field-report, deployment, kubernetes]
 description: v0.12.0 splits the Compose stack into image-mode (pull versioned ghcr.io tags) vs source-build (overlay adds build:). A clean Linux VM with Docker + curl + openssl now installs helmdeck in under 90 seconds — and the same tag convention unblocks the v1.0 Helm chart.
 date: 2026-05-12
-draft: true
+draft: false
 ---
 
 ## The friction

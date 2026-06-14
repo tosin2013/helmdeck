@@ -6,7 +6,7 @@ tags: [agent-architecture]
 description: We added an agent-memory layer to every pack in helmdeck without changing how a single existing pack behaves. The trick was making the seam default-off at two independent gates.
 image: /img/social-card.png
 date: 2026-05-25
-draft: true
+draft: false
 ---
 
 We shipped the first implementation of the Universal Memory layer (ADR 039)

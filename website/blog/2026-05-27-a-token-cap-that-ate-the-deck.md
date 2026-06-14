@@ -6,7 +6,7 @@ tags: [friction]
 description: A grounded-deck pipeline kept returning decks with the back half missing — no error, no warning. The renderer got the blame. The real culprit was a fixed 2048-token cap on an upstream rewrite step that truncated any document larger than the test fixtures.
 image: /img/social-card.png
 date: 2026-05-27
-draft: true
+draft: false
 ---
 
 A user ran the `grounded-deck` pipeline on a hand-built 20–25 slide markdown deck — fact-check the claims, render to PDF — and got back a deck with roughly the first third of the slides. The rest were just gone. No error, no warning, a clean exit. The obvious suspect was the renderer. The renderer was innocent.

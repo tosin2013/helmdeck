@@ -1,123 +1,239 @@
 ---
-title: HyperFrames composition best practices
-description: Design guidance for hyperframes.compose authors — timeline coverage, visual hierarchy, type-on-screen rules, pacing, color, and GSAP transition patterns that play well with the HyperFrames renderer.
-keywords: [helmdeck, hyperframes, video, best practices, GSAP, composition, design]
+title: HyperFrames composition guide (upstream-sourced)
+description: helmdeck's integration guide for the HyperFrames renderer — what the upstream HyperFrames project documents as hard rules and conventions, what hyperframes.compose enforces locally, and what's helmdeck-specific. Sourced from the upstream AGENTS.md / SKILL.md and hyperframes-student-kit, not synthesized.
+keywords: [helmdeck, hyperframes, video, composition, GSAP, upstream, agents, SKILL.md]
 ---
 
-# HyperFrames composition best practices
+# HyperFrames composition guide
 
-[`hyperframes.compose`](./compose) accepts a plain-language description and returns a render-ready HTML/CSS/JS composition. The pack enforces a strict structural contract (sized canvas, root `data-*` scaffolding, paused `window.__timelines` registration) and a [timeline-coverage check](./compose#timeline-coverage) that rejects compositions whose `class="clip"` elements leave a meaningful blank-screen gap. Those guards prevent **broken** compositions, not **mediocre** ones.
+This page is helmdeck's integration guide for the [upstream HyperFrames project](https://github.com/decision-crafters/hyperframes). It documents what HyperFrames itself enforces as hard rules, where those rules are sourced from upstream, and where [`hyperframes.compose`](./compose) layers its own validation. **The canonical reference is the upstream `AGENTS.md` and `SKILL.md` files**; this guide is a helmdeck-side mirror so the [Tier A/B system prompt](./compose#tier-aware-system-prompt) can reference it from an MCP / Docusaurus URL.
 
-This page is the design guidance for what makes a HyperFrames composition genuinely good. The pack's Tier-A/B system prompts reference this doc explicitly; Tier-C prompts inline the most important rules verbatim because weak models don't reliably follow external references.
+A previous version of this page synthesized rules from training-data knowledge ("one focal element per 3 seconds", "minimum font size 60px", etc.) without citation. That content has been replaced. See the [2026-06-14 epistemic-discipline blog post](/blog/upstream-spec-drift) for the lesson and how this rewrite came about.
 
-## 1. Timeline coverage
+## Where HyperFrames fits in the helmdeck pipeline
 
-Every second of the composition's `[0, duration_seconds)` range needs at least one visible `class="clip"` element behind it. The body's reset CSS sets `background: #000;` so any uncovered range renders as visible black in the final MP4. `hyperframes.compose` rejects compositions with gaps longer than `min(2.0s, duration * 0.05)`.
+The upstream HyperFrames project documents a **seven-step production pipeline** for generating full videos from a brief:
 
-The canonical pattern is a **permanent background element** plus foreground content that comes and goes:
+| Step | Artifact | Upstream-documented owner |
+|---|---|---|
+| 1. Capture | `capture/` directory | Source-of-truth ingestion (URL / PDF / brand reference) |
+| 2. Design | `DESIGN.md` | Brand palette / typography / do's & don'ts |
+| 3. Script | `SCRIPT.md` | Narrative — hook, beats, proof points, CTA |
+| 4. Storyboard | `STORYBOARD.md` | Per-beat creative direction |
+| 5. VO + Timing | `narration.wav` + `transcript.json` | TTS + word-level timestamps |
+| 6. Build | `compositions/*.html` | One animated HTML per beat |
+| 7. Validate | snapshot PNGs + `npx hyperframes lint` pass | Visual + layout verification |
+
+helmdeck's `hyperframes.compose` covers **step 6 only** — the build phase. Steps 1-5 are operator-driven (or driven by other helmdeck packs: `podcast.generate` covers VO + timing for narrated chains). Step 7 is partially covered: the pack does its own [timeline-coverage check](./compose#timeline-coverage) and [track-index collision check](./compose#track-index-collision-check) before returning. The upstream `npx hyperframes lint` is more comprehensive and runs on rendered output — see [Failure modes](#failure-modes) for the full picture.
+
+## Layout first, animation second (upstream hard rule)
+
+The upstream `SKILL.md` is explicit: agents must write the **static "hero frame"** — the moment the composition rests in its final, steady-state layout — using standard CSS (`display: flex`, `gap`, padding inside elements) **before** any GSAP logic is applied.
 
 ```html
-<!-- background: solid color (or simple gradient) covering the full duration -->
+<!-- HERO FRAME (static) — must be readable BEFORE any animation runs -->
 <div id="bg" class="clip" data-start="0" data-duration="60" data-track-index="0"
-     style="background: linear-gradient(135deg, #1a1a2e, #16213e);
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%"></div>
-
-<!-- foreground: title fades in for the first 6 seconds -->
-<div id="title" class="clip" data-start="0" data-duration="6" data-track-index="1"
-     style="color: #fff; font-size: 96px; position: absolute; top: 40%; left: 6%">
+     style="background: #1a1a2e; position: absolute; inset: 0;"></div>
+<div id="title" class="clip" data-start="0" data-duration="60" data-track-index="1"
+     style="display: flex; align-items: center; justify-content: center; padding: 8% 6%;
+            color: #fff; font-size: 96px; line-height: 1.2;">
   How tracepoint observability works
 </div>
-
-<!-- foreground: animation plays from 6s to end -->
-<div id="diagram" class="clip" data-start="6" data-duration="54" data-track-index="2"
-     style="...">...</div>
 ```
 
-The background covers the whole timeline; the foreground elements overlap and replace each other freely. **Without the background**, any second where the title's animated out and the diagram's animated in but hasn't faded up yet renders as black.
+Only after the hero frame is structurally sound does the agent add motion:
 
-## 2. Visual hierarchy — one focal element per ~3 seconds
+- `tl.from()` for entrances — animate **TO** the established CSS position **FROM** an invisible/off-screen offset (e.g. `opacity: 0`, `y: -50`).
+- `tl.to()` for exits — animate **AWAY FROM** the steady state.
 
-Animated explainers are not infographics. The viewer is watching a moving image at 30 fps; they can only process one new piece of information at a time. Plan for **one focal element per ~3-second beat** — a heading, a single diagram, a single number, a single icon — and let everything else either fade back or stay as supporting background.
+**Why this matters**: if the timeline fails to execute, gets paused at an arbitrary playhead, or hits a deterministic-capture edge case, the visual elements instantly revert to a structurally sound layout. Compositions designed with `position: absolute; top: Npx` on content containers fail this property — content overflows uncontrollably when taller than the remaining viewport, and the upstream layout auditor flags it.
 
-Concretely:
+**Upstream source**: HyperFrames `skills/hyperframes/SKILL.md` (the layout-first rule).
 
-- A 60s video has ~20 beats. That's 20 distinct visual moments, not 60 different elements competing for attention.
-- A 12-minute video (720s) has ~240 beats. Group them into 6–12 chapters of related beats; the chapters become the YouTube `engagement.chapters` payload.
-- **Avoid stacking 5 elements with overlapping `data-start`/`data-duration` and animating them in sequence.** GSAP can do it; the viewer can't track it.
+## `data-track-index` is temporal, not spatial (upstream hard rule)
 
-## 3. Type-on-screen rules
+This is the rule most commonly conflated with `z-index`. The upstream documentation is unambiguous:
 
-Video is not a web page. Type that's legible on a 1920×1080 desktop browser is unreadable on a phone in a feed.
+- **`data-track-index` is a non-linear-editor "row" index.** Clips on the **same integer track** MUST NOT temporally overlap. The upstream auditor and helmdeck's [`composeTrackCollision`](./compose#track-index-collision-check) check both reject overlapping clips on the same track.
+- **Visual stacking is CSS `z-index` entirely.** A clip on `data-track-index="0"` does NOT render below a clip on `data-track-index="9"` — the renderer doesn't read track-index for stacking. Spatial layering happens via standard `z-index` on absolutely / relatively positioned elements.
 
-- **Minimum font size: ~60px** at 1080p (~3.5% of canvas height). 80–96px is more typical for headings.
-- **Minimum on-screen duration for a complete read: 1.5 seconds.** A 5-word heading needs ~2.5 seconds; a sentence needs 4–6 seconds. Compositions that flash text for under a second lose viewers.
-- **Plain background contrast.** White on dark, dark on light. Avoid type on photographic / gradient backgrounds without an explicit contrast guard.
-- **One typeface.** HyperFrames disallows external font loading (it's a determinism guarantee — `font-family: ui-sans-serif, system-ui, ...` is the safe path). Don't try to mix three weights of three families.
+**Upstream convention** for track allocation:
 
-## 4. Pacing
+| Track-index range | Purpose |
+|---|---|
+| `0` | Background plates, atmospheric overlays |
+| `1`–`5` | Primary scenes, typographical elements, foreground visuals |
+| `9`+ | Audio elements (`<audio data-start data-duration data-track-index>`) |
 
-For explainer / how-to / educational content (the primary `hyperframes.compose` use case):
+This separation lets the upstream auditor cleanly distinguish "intentional spatial overlap" (z-stacked design layers) from "unintentional temporal overlap" (broken composition).
 
-- **Short-form (<60s)**: target one explainer beat. A single concept, a single hook, a single payoff. Don't try to teach two things; the audience clicks away. The duration-band-aware engagement payload uses `format: short_form` for these.
-- **Mid-form (60–179s)**: 2–4 beats. Hook, problem, solution, takeaway. Each beat = ~20–60 seconds.
-- **Long-form (≥180s)**: chapter-aware. Each chapter is a self-contained beat with its own intro / problem / payoff. The `engagement.chapters` payload should reflect this structure.
+**Upstream source**: HyperFrames `AGENTS.md` (track semantics + layout auditor distinction).
 
-Pacing rules of thumb:
+## Paused-timeline contract (upstream hard rule)
 
-- **3-second rule**: every 3 seconds, *something visible* should change. A pulse, a fade, a scale, a position shift. Static frames feel broken.
-- **No more than 2 elements animating simultaneously.** Multi-element choreographed sequences are GSAP's strength but a viewer-experience minefield.
-- **Hook by 5 seconds.** Whatever the payoff promise is, signal it within the first 5 seconds — viewers who don't see the promise leave.
+`hyperframes.compose` adds the scaffolding for you; you should not emit it. But understanding **why** the scaffolding exists clarifies why several other rules are non-negotiable.
 
-## 5. Color choices
+The HyperFrames capture engine halts the native browser clock and injects a synthetic timing state, then programmatically seeks the GSAP timeline to precise sub-millisecond decimal values calculated as `frame = floor(time * fps)`. For this to work:
 
-HyperFrames is deterministic — no external image / font / network resources — so all visual richness has to come from CSS. Practical guidance:
+```html
+<script>
+  window.__timelines = window.__timelines || {};
+  const tl = gsap.timeline({ paused: true });   // ← MUST be paused
+  tl.from("#title", { opacity: 0, y: -50, duration: 1 }, 0);
+  window.__timelines["my-video"] = tl;            // ← MUST register globally
+</script>
+```
 
-- **Solid colors > complex gradients.** A two-stop linear gradient is fine; a 5-color radial gradient is rendering risk and visually noisy.
-- **Limit the palette to 3–5 colors.** A dark base (`#0f172a`, `#1a1a2e`, `#16213e`), a contrast highlight (`#22d3ee`, `#f59e0b`), a text color (`#f1f5f9`), an accent (`#94a3b8`).
-- **Avoid full-saturation primaries on saturated backgrounds.** They induce vibration; the audience reads it as "amateur".
-- **Background animations: subtle.** A slow `gsap.to(bg, { rotation: 360, duration: 60, repeat: -1 })` works. Anything jittery competes with the foreground.
+`hyperframes.compose` writes this script block for you wrapping the `===TIMELINE===` content the LLM produces. If a model tries to emit `gsap.timeline()` (no `paused: true`), it overrides the contract and the capture engine produces static frames or hits a 45,000ms registration timeout. The Tier C system prompt forbids emitting the scaffolding for exactly this reason.
 
-## 6. GSAP transition patterns that play well
+**Upstream source**: HyperFrames engine documentation (`packages/engine/`).
 
-The pack's contract requires a single paused `window.__timelines["main"]` and `class="clip"` elements with `data-start` / `data-duration` for the upstream HyperFrames CLI's clock. Inside that contract, GSAP is fully available. Patterns that play well:
+## Attribute vocabulary
 
-- **`tl.from(...)` for entrances** — start at `opacity: 0` or `y: 50` and let GSAP animate to the final state. Pair with `data-start` so the element exists in the DOM at the moment the timeline reaches it.
-- **`tl.to(...)` for exits** — animate to `opacity: 0` toward the end of `data-duration`. Avoid animating past the duration boundary; the renderer cuts at the `data-duration` mark.
-- **Tween chains** — `tl.from(...).from(...)` chains tweens after the previous one finishes; useful for "title fades in, then diagram fades in".
-- **Stagger groups** — `tl.from(".bullet", { opacity: 0, y: 30, stagger: 0.5 })` is the canonical "reveal bullet list" pattern.
-- **Position parameters** — `tl.from(target, props, position)` where `position` is an absolute second offset gives you fine control. Use this for syncing to narration moments when you know the audio timing.
+The full set of `data-*` attributes the upstream engine recognizes:
 
-Anti-patterns:
+### Structural / temporal (required)
 
-- **Imperative animation loops** (`setInterval`, `requestAnimationFrame`) — break determinism and HyperFrames frame capture.
-- **DOM mutation during the timeline** — adding / removing nodes mid-render. Set up everything in the static body; animate in/out with `gsap.set` / `tl.from` / `tl.to`.
-- **External resource loading at runtime** — `<img src="...">` with a network URL, `@font-face` with a URL, `fetch(...)`. The pack rejects them at the LLM prompt level; including them anyway makes the render fail.
-
-## 7. Audio-aware pacing
-
-When `audio_url` is provided (the narrated-video case), the composition's pacing should serve the narration:
-
-- **`duration_seconds` must match the audio's actual length** — see [issue #498](https://github.com/tosin2013/helmdeck/issues/498). The pack rejects mismatches.
-- **Plan visual beats around narration cues.** ~150 wpm narration means ~3 words per beat in a 3-second pacing window. The visual change should land on a sentence break, not mid-clause.
-- **Title cards before the narration starts.** Reserve the first 1–2 seconds for a silent title card; viewers haven't engaged with the audio yet.
-- **Outro slowdown.** The final 5–10 seconds should reduce motion — let the viewer settle on a final state with the conclusion or CTA visible.
-
-## 8. Common failure modes (and how to avoid them)
-
-| Failure | Symptom | Fix |
+| Attribute | Target | Purpose |
 |---|---|---|
-| Blank-screen gap | `hyperframes.compose` returns `CodeInvalidInput` citing a gap range, or `av.validate` flags a `video:black_runs` warn | Add a permanent background `class="clip"` with `data-start="0"` covering the full duration |
-| Duration mismatch | Rendered MP4 is shorter than the narration audio; audio truncated at timeline end | Pass `duration_seconds` matching `podcast.generate`'s `duration_s` output (rounded up) — see [#498](https://github.com/tosin2013/helmdeck/issues/498) |
-| Loudness out of range | `av.validate` warns `audio:loudness_lufs` outside the −14±2 target | Normalize the audio source upstream of `podcast.generate`, or accept the warn as a known limitation of free-tier TTS routing |
-| `data-start + data-duration > duration_seconds` | Render fails caller_fixable | Each element's interval must stay within `[0, duration_seconds)` |
-| Type unreadable on mobile | Final MP4 plays fine on desktop but viewers in social feeds can't read it | Bump minimum font size to ~60px; check contrast against the actual background, not the design canvas |
-| Too many simultaneous animations | Composition reads as visually noisy; viewers click away | One focal element per ~3 seconds; max 2 animating elements at any moment |
+| `data-composition-id` | Root container | Identifies the registered timeline (must match `window.__timelines[<id>]`) |
+| `data-width` / `data-height` | Root container | Explicit canvas pixel dimensions (e.g. 1920×1080 for landscape, 1080×1920 for portrait) |
+| `data-start` / `data-duration` | Root + every `class="clip"` | Temporal bounds. On root, `data-start="0"` and `data-duration` defines total MP4 length |
+| `data-track-index` | Every `class="clip"` | NLE row index — see [the temporal-not-spatial rule above](#data-track-index-is-temporal-not-spatial-upstream-hard-rule) |
+
+### Media-control
+
+| Attribute | Target | Purpose |
+|---|---|---|
+| `data-media-start` | `<audio>` / `<video>` | Trim offset INTO the source media (e.g. `data-media-start="5.5"` starts playback 5.5s into the file) |
+| `data-volume` | `<audio>` / `<video>` | **Static, immutable** amplitude (0.0–1.0). Set once; volume tweens are silently ignored — see [Failure modes](#failure-modes) |
+| `data-composition-src` | Sub-composition host `<div>` | Relative/absolute file path to an external HTML sub-composition payload — enables modular composition |
+
+### Layout-auditor control
+
+| Attribute | Target | Purpose |
+|---|---|---|
+| `data-layout-allow-overflow` | Any visible DOM element | Tells the layout auditor to ignore boundary breach for this element (use for elements that intentionally slide off-screen during entry/exit) |
+| `data-layout-ignore` | Any visible DOM element | Excludes the element from the layout auditor entirely (use for decorative grain, light leaks, intentional vignette overlap) |
+
+### Parameterized batch rendering
+
+| Attribute | Target | Purpose |
+|---|---|---|
+| `data-variable-values` | Sub-composition host | Stringified JSON object with per-instance variable overrides. Variables accessed in the sub-composition via `window.__hyperframes.getVariables()`. Enables hyper-personalized batch rendering from a single master template |
+
+**Upstream source**: HyperFrames `packages/core/` type definitions + schema parsers.
+
+## Reference templates (upstream)
+
+Upstream ships canonical reference compositions via the CLI registry (`npx hyperframes init my-video --example <name>`):
+
+| Template | Aspect | Visual intent | Architectural purpose |
+|---|---|---|---|
+| `blank` | landscape | Minimum viable scaffolding | Agent-driven generation starting point |
+| `warm-grain` | landscape | Organic, textured, cream-toned + overlay grain | Nested sub-compositions + kinetic captions |
+| `swiss-grid` | landscape | International Typographic Style, strictly structured | Corporate / technical demonstrations |
+| `play-mode` | landscape | Energetic elastic animations | Rapid easing curves, bounce dynamics, social hooks |
+| `vignelli` | **portrait** | High contrast, bold type, deep red accent | Mobile-first 9:16 baseline architecture |
+| `product-promo` | landscape | Multi-scene product showcase | Complex shader transitions, ≥20s pacing, elaborate staging |
+| `nyt-graph` | landscape | Editorial data visualization | Statistical animation, chart races |
+| `decision-tree` | landscape | Diagrammatic flowcharts | Branching explainers, educational tutorials |
+| `kinetic-type` | landscape | Aggressive kinetic typography | Promotional intros, title cards |
+
+Additionally, the [`hyperframes-student-kit`](https://github.com/nateherkai/hyperframes-student-kit) repo ships **12 fully-finished, production-grade reference projects** with a `MOTION_PHILOSOPHY.md` ("10 Laws") documenting the framework's aesthetic governance. This is the closest upstream gets to a "design best practices" doc — and the canonical place to source design rules from.
+
+**helmdeck note**: today `hyperframes.compose` generates compositions from scratch via the LLM. [Issue #503](https://github.com/tosin2013/helmdeck/issues/503) proposes a `template.fetch` pack pattern that would let operators seed compositions from these upstream templates instead.
+
+## WebGL shader transitions
+
+For scene-to-scene transitions, upstream provides **14 highly-optimized WebGL shaders** via `HyperShader.init()`. These execute on the GPU within the browser page context (not Node-side compositing — that pipeline was deprecated in a 20× performance refactor). Document them in the body the LLM writes; the engine renders them deterministically.
+
+A representative subset:
+
+| Shader name | Visual mechanism | Optimal duration |
+|---|---|---|
+| `chromatic-split` | R/B radial channel shift outward; channels separate then rejoin | 0.3 – 0.5 s |
+| `gravitational-lens` | Pinch-pull motion toward center + R/B chromatic separation | 0.6 – 1.0 s |
+| `cinematic-zoom` | 12 RGB-offset radial zoom blur passes | 0.4 – 0.6 s |
+| `sdf-iris` | SDF circle expands from center with accent-tinted glow rings | 0.5 – 0.7 s |
+| `ripple-waves` | Radial standing-wave UV displacement crossfade | 0.6 – 1.0 s |
+
+**Upstream source**: HyperFrames `packages/shader-transitions/`.
+
+## Audio handling
+
+HyperFrames decouples audio entirely from the visual capture path:
+
+1. **Visual capture is muted.** The Headless Chromium browser captures the pure visual frame sequence with audio output silenced.
+2. **FFmpeg multiplexes audio post-capture.** The `<audio>` element's `src`, `data-start`, `data-duration`, `data-track-index`, `data-volume`, and `data-media-start` attributes serve purely as **metadata**. The audio file is never "played" live in the DOM during capture; FFmpeg merges it algorithmically after the visual MP4 is assembled.
+
+**Consequence — volume is static, not animatable.** Any JavaScript-driven attempt to change volume during the timeline (`gsap.to(audio, { volume: 0.5 })`, `audio.volume = 0.3`, etc.) is **silently ignored** by the engine. Fades, crossfades, and ducking must be baked into the audio file upstream of `hyperframes.compose` (e.g. via `ffmpeg afade`).
+
+### Audio-reactive animation (advanced — pre-computed FFT)
+
+When visual elements must react to audio frequency content (a logo pulsing to a bass drum, a glow intensifying with treble peaks), the standard Web Audio API is **categorically unusable** — it relies on a continuous live processing clock that shatters under the deterministic frame-capture loop.
+
+Upstream documents the workaround: **pre-extract FFT data offline** using a Python script (`extract-audio-data.py`) leveraging `numpy` + `ffmpeg`. Decode to mono float32 samples; FFT-window at 4096 samples (a per-frame 30fps window is too small to cleanly resolve low frequencies); output a JSON object with pre-computed amplitude per-frame across normalized frequency bands.
+
+```javascript
+var AUDIO_DATA = {
+  fps: 30,
+  totalFrames: 900,
+  frames: [
+    { bands: [0.82, 0.45, 0.31, 0.10, 0.05] },
+    { bands: [0.84, 0.43, 0.30, 0.11, 0.05] },
+    // ...
+  ]
+};
+```
+
+Then in the timeline, **iterate exhaustively** with discrete `tl.call()` invocations at exact temporal offsets (`frame_index / fps`) — NOT a single continuous interpolated tween. This guarantees the deterministic capture engine evaluates the pre-computed amplitude at every frame slice without depending on a live clock.
+
+This pattern is out of scope for `hyperframes.compose`'s current LLM-generated content (the agent would have to handle the offline pre-extraction step). Document it here for completeness; consider a future `audio.extract_fft` pack.
+
+**Upstream source**: HyperFrames `extract-audio-data.py` reference script + audio-reactive documentation.
+
+## Failure modes
+
+Catalog of documented failure modes with cause + mitigation. Most-common-first:
+
+| Failure | Cause | Mitigation |
+|---|---|---|
+| Blank-screen gap | `class="clip"` elements don't cover `[0, duration_seconds)`; reset CSS shows through | `hyperframes.compose` rejects at compose-time. Add a permanent background `class="clip"` covering the full duration. See [timeline-coverage check](./compose#timeline-coverage). |
+| Track-index collision | Two clips on same integer `data-track-index` temporally overlap | `hyperframes.compose` rejects at compose-time. Put overlapping clips on DIFFERENT tracks; use CSS `z-index` for spatial stacking. |
+| Audio volume tween silently ignored | `gsap.to(audio, {volume:...})` or `audio.volume = X` during timeline | FFmpeg multiplexes audio post-capture; runtime DOM changes have no effect. Bake fades into the audio file upstream. |
+| Static frames captured | `gsap.timeline()` without `paused: true` | Don't emit the timeline scaffolding — the pack writes it correctly. If your `===TIMELINE===` content tries to override the registration, the engine produces static frames. |
+| 45 000 ms registration timeout | Sub-composition timelines not registered to `window.__timelines["<composition-id>"]` | Don't emit the scaffolding (pack handles it). For sub-compositions, the pack's `data-composition-src` flow registers them correctly. |
+| `TypeError: Illegal invocation` in sub-composition | `document.getElementById()` inside a sub-composition script | The engine's `wrapScopedCompositionScript` bundles scripts as Function-constructor strings, stripping the global document scope. Use the `window.__hyperframes` namespace for element access instead. |
+| ARM64 + Chromium 147 — `beginFrame` cascade error | Hardware/Chromium version mismatch on Linux ARM64 | Set `PRODUCER_FORCE_SCREENSHOT=true` in the render execution context. Bypasses `beginFrame` for a slower but stable screenshot path. |
+| Render hits `Runtime.callFunctionOn timed out` | Legacy Node-side WebGL transition compositor under parallel workers | Already fixed upstream — current version uses page-side GPU WebGL compositing (20× speedup). Update the upstream HyperFrames version if you hit this. |
+| Studio sub-composition stamping bleeds into render | Old `packages/studio/` regression | Already fixed upstream. Update if you see hidden sub-composition bounding boxes in the final MP4. |
+
+**Upstream source**: HyperFrames changelog + release notes.
+
+## React (Remotion) migration constraints
+
+If you're porting an existing Remotion project to HyperFrames, the following Remotion patterns do NOT translate and must be refactored:
+
+- **`useState` / `useReducer` for animation state** — violates the imperative pre-calculated GSAP timeline. Express state changes as discrete `tl.call()` operations at specific timestamps.
+- **`useEffect` / `useLayoutEffect` with non-empty dependency arrays** — initiates asynchronous calculations outside the deterministic capture loop.
+- **`<Img crossOrigin="anonymous">`** — headless HyperFrames enforces CORS differently; cross-origin images frequently fail to load.
+- **`<Loop>` with internal state increments or cross-iteration data seeding** — stateful loops destroy the deterministic sequence. Purely visual repetition (CSS `animation-iteration-count: infinite`, GSAP `repeat: -1` without state) is fine.
+
+## What `hyperframes.compose` enforces (helmdeck-side)
+
+Two validations layered on top of the upstream contract — both run at compose-time before any render cost is incurred:
+
+1. **Timeline-coverage check** — every `class="clip"` element's `[data-start, data-start+data-duration)` union must cover `[0, duration_seconds)` within `min(2.0s, duration * 0.05)` tolerance. Rejects with `CodeInvalidInput` and cites the gap range + suggested fix.
+2. **Track-index collision check** — clips sharing the same integer `data-track-index` must not temporally overlap. Rejects with `CodeInvalidInput` and cites the colliding track + intervals + reminds the operator that CSS `z-index` is for spatial layering.
+
+These are helmdeck-side replications of upstream's `npx hyperframes lint` rules so the failure surfaces at compose-time rather than after the render bill.
 
 ## See also
 
-- [`hyperframes.compose`](./compose) — the pack reference
-- [`hyperframes.render`](./render) — the renderer the composition feeds
-- [`podcast.generate`](../podcast/generate) — narration audio source
-- [Issue #498](https://github.com/tosin2013/helmdeck/issues/498) — `duration_seconds` enforcement (silent-truncation foot-gun closed)
-- [PR #502](https://github.com/tosin2013/helmdeck/pull/502) — timeline-coverage check + tier-aware system prompts (this guide ships with that PR)
-- [The HyperFrames upstream `blank` template + AGENTS.md](https://github.com/decision-crafters/hyperframes) — the structural contract `hyperframes.compose` assembles around
+- [`hyperframes.compose`](./compose) — the pack reference, with input/output schema, error codes, and Tier-aware system prompt note
+- [`hyperframes.render`](./render) — the renderer consuming the composition
+- [Upstream HyperFrames](https://github.com/decision-crafters/hyperframes) — `AGENTS.md`, `SKILL.md`, packages
+- [hyperframes-student-kit](https://github.com/nateherkai/hyperframes-student-kit) — 12 production-grade reference projects + `MOTION_PHILOSOPHY.md`
+- [Issue #503](https://github.com/tosin2013/helmdeck/issues/503) — proposal to surface upstream templates as a `template.fetch` pack
+- [Blog: When agent-instruction docs drift from upstream spec](/blog/upstream-spec-drift) — the epistemic lesson behind this rewrite

@@ -561,6 +561,139 @@ func TestCompose_CoverageGapUnit(t *testing.T) {
 	}
 }
 
+// --- Track-index collision check (PR #504, upstream-sourced) -------------
+
+// TestCompose_RejectsTrackCollision — two clips sharing the same integer
+// data-track-index that temporally overlap rejects as CodeInvalidInput.
+// This is an upstream HyperFrames hard rule: track-index is non-linear-
+// editor row semantics, not spatial Z-order. Visual stacking is CSS
+// z-index entirely independent of track-index.
+func TestCompose_RejectsTrackCollision(t *testing.T) {
+	// Two clips on track 1: "Hello" covers [0, 5) and "Bye" covers
+	// [3, 8) — they overlap at [3, 5). The pack must reject.
+	spec := "===STYLES===\n" +
+		".t{color:#fff;font-size:80px;position:absolute;top:40px;left:40px}\n" +
+		"===BODY===\n" +
+		`<div id="bg" class="clip" data-start="0" data-duration="9999" data-track-index="0"></div>` + "\n" +
+		`<div id="t1" class="clip" data-start="0" data-duration="5" data-track-index="1">Hello</div>` + "\n" +
+		`<div id="t2" class="clip" data-start="3" data-duration="5" data-track-index="1">Bye</div>` + "\n" +
+		"===TIMELINE===\n" +
+		"tl.from('#t1',{opacity:0,duration:1},0);"
+	disp := &scriptedDispatcherWT{replies: []string{spec}}
+	_, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/auto","metadata_model":"","duration_seconds":10}`)
+	pe := &packs.PackError{}
+	if !errors.As(err, &pe) || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("want CodeInvalidInput on track collision; got %v", err)
+	}
+	for _, must := range []string{
+		"data-track-index=\"1\"",
+		"temporally-overlapping",
+		"DIFFERENT tracks",
+		"CSS z-index for spatial layering",
+	} {
+		if !strings.Contains(pe.Message, must) {
+			t.Errorf("collision error should cite %q; got %q", must, pe.Message)
+		}
+	}
+}
+
+// TestCompose_AcceptsTrackSequential — two clips on the same track that
+// run sequentially (no temporal overlap) are accepted.
+func TestCompose_AcceptsTrackSequential(t *testing.T) {
+	spec := "===STYLES===\n" +
+		".t{color:#fff;font-size:80px;position:absolute;top:40px;left:40px}\n" +
+		"===BODY===\n" +
+		`<div id="bg" class="clip" data-start="0" data-duration="9999" data-track-index="0"></div>` + "\n" +
+		`<div id="t1" class="clip" data-start="0" data-duration="5" data-track-index="1">A</div>` + "\n" +
+		`<div id="t2" class="clip" data-start="5" data-duration="5" data-track-index="1">B</div>` + "\n" +
+		"===TIMELINE===\n" +
+		"tl.from('#t1',{opacity:0,duration:1},0);"
+	disp := &scriptedDispatcherWT{replies: []string{spec}}
+	_, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/auto","metadata_model":"","duration_seconds":10}`)
+	if err != nil {
+		t.Fatalf("sequential clips on same track should succeed; got %v", err)
+	}
+}
+
+// TestCompose_AcceptsOverlapDifferentTracks — overlap is fine when clips
+// are on different track-index values. Z-order is governed by CSS
+// z-index, not the track-index.
+func TestCompose_AcceptsOverlapDifferentTracks(t *testing.T) {
+	spec := "===STYLES===\n" +
+		".t{color:#fff;font-size:80px;position:absolute;top:40px;left:40px}\n" +
+		"===BODY===\n" +
+		`<div id="bg" class="clip" data-start="0" data-duration="9999" data-track-index="0"></div>` + "\n" +
+		`<div id="t1" class="clip" data-start="0" data-duration="10" data-track-index="1" style="z-index:1">A</div>` + "\n" +
+		`<div id="t2" class="clip" data-start="3" data-duration="5" data-track-index="2" style="z-index:2">B-overlay</div>` + "\n" +
+		"===TIMELINE===\n" +
+		"tl.from('#t1',{opacity:0,duration:1},0);"
+	disp := &scriptedDispatcherWT{replies: []string{spec}}
+	_, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/auto","metadata_model":"","duration_seconds":10}`)
+	if err != nil {
+		t.Fatalf("overlap on different tracks should succeed (CSS z-index governs stack); got %v", err)
+	}
+}
+
+// TestCompose_TrackCollisionUnit — direct boundary tests for the track-
+// collision detector: touching intervals (end==start) don't collide,
+// fractional overlaps do collide, missing track-index attributes are
+// skipped (upstream warns but we leave that to the upstream auditor).
+func TestCompose_TrackCollisionUnit(t *testing.T) {
+	cases := []struct {
+		name      string
+		body      string
+		wantCollide bool
+	}{
+		{
+			name: "sequential touching: no collision",
+			body: `<div class="clip" data-start="0" data-duration="5" data-track-index="1">a</div>` +
+				`<div class="clip" data-start="5" data-duration="5" data-track-index="1">b</div>`,
+			wantCollide: false,
+		},
+		{
+			name: "fractional overlap on same track",
+			body: `<div class="clip" data-start="0" data-duration="5.1" data-track-index="1">a</div>` +
+				`<div class="clip" data-start="5" data-duration="5" data-track-index="1">b</div>`,
+			wantCollide: true,
+		},
+		{
+			name: "overlap but different tracks",
+			body: `<div class="clip" data-start="0" data-duration="10" data-track-index="1">a</div>` +
+				`<div class="clip" data-start="5" data-duration="5" data-track-index="2">b</div>`,
+			wantCollide: false,
+		},
+		{
+			name: "three clips on same track, one overlaps the previous",
+			body: `<div class="clip" data-start="0" data-duration="3" data-track-index="0">a</div>` +
+				`<div class="clip" data-start="3" data-duration="3" data-track-index="0">b</div>` +
+				`<div class="clip" data-start="5" data-duration="3" data-track-index="0">c</div>`,
+			wantCollide: true,
+		},
+		{
+			name: "no clips at all",
+			body: `<p>no clips</p>`,
+			wantCollide: false,
+		},
+		{
+			name: "attributes reversed (track-index first) still parsed",
+			body: `<div class="clip" data-track-index="1" data-start="0" data-duration="5">a</div>` +
+				`<div class="clip" data-track-index="1" data-start="3" data-duration="5">b</div>`,
+			wantCollide: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _, _, _, _, _ := composeTrackCollision(tc.body)
+			if got != tc.wantCollide {
+				t.Errorf("composeTrackCollision(...) = %v, want %v", got, tc.wantCollide)
+			}
+		})
+	}
+}
+
 // --- Tier-aware system prompt (PR #502) ----------------------------------
 
 // TestCompose_TierCPromptIsConstraintHeavy — passing a free / weak open
@@ -578,8 +711,18 @@ func TestCompose_TierCPromptIsConstraintHeavy(t *testing.T) {
 	if !strings.Contains(sys, "TIMELINE COVERAGE") {
 		t.Errorf("Tier C prompt should spell out TIMELINE COVERAGE rules verbatim; got %q", sys)
 	}
-	if !strings.Contains(sys, "av.validate flags it") {
-		t.Errorf("Tier C prompt should cite the av.validate consequence")
+	// After the upstream-alignment rewrite (PR #504), the Tier C prompt
+	// is sourced from the upstream HyperFrames AGENTS.md / SKILL.md.
+	// Check for the four upstream-documented hard rules verbatim.
+	for _, must := range []string{
+		"LAYOUT FIRST, ANIMATION SECOND",
+		"data-track-index IS TEMPORAL, NOT SPATIAL",
+		"AUDIO VOLUME IS IMMUTABLE",
+		"DETERMINISTIC ONLY",
+	} {
+		if !strings.Contains(sys, must) {
+			t.Errorf("Tier C prompt should spell out upstream rule %q verbatim", must)
+		}
 	}
 	if strings.Contains(sys, "helmdeck.dev/reference/packs/hyperframes/best-practices") {
 		t.Errorf("Tier C prompt should NOT reference external best-practices URL (Tier C models do not reliably honor external refs)")
@@ -600,9 +743,12 @@ func TestCompose_TierAPromptIsLean(t *testing.T) {
 	if !strings.Contains(sys, "best-practices") || !strings.Contains(sys, "helmdeck.dev") {
 		t.Errorf("Tier A/B prompt should reference the best-practices guide URL; got %q", sys)
 	}
-	// Lean prompt should NOT carry the long verbatim Tier-C consequence text.
-	if strings.Contains(sys, "av.validate flags it") {
-		t.Errorf("Tier A/B prompt should be leaner — no verbatim Tier-C consequence text")
+	// Lean prompt should NOT carry the all-caps verbatim Tier-C rule
+	// headers — those reproduce the upstream rules in full for Tier C
+	// models that don't reliably follow external references. Tier A/B
+	// gets a one-line summary per rule and the doc URL.
+	if strings.Contains(sys, "LAYOUT FIRST, ANIMATION SECOND") {
+		t.Errorf("Tier A/B prompt should be leaner — no verbatim all-caps Tier-C rule headers")
 	}
 }
 

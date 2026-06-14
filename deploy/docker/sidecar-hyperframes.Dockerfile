@@ -26,7 +26,7 @@ USER root
 # us in the upstream-rename incident this ADR was written to prevent.
 # Dependabot proposes patch bumps as PRs that exercise the full build
 # (the sentinel below is the second line of defense).
-ARG HYPERFRAMES_VERSION=0.6.7
+ARG HYPERFRAMES_VERSION=0.6.97
 
 # Layer 1 — Node 22.
 #
@@ -50,16 +50,28 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 RUN npm install -g --no-fund --no-audit "hyperframes@${HYPERFRAMES_VERSION}" \
  && npm cache clean --force
 
-# Install smoke (ADR 037 #214). Cheap `--version` check that catches
+# scripts/hyperframes-init.sh — invoked by hyperframes.compose via
+# ec.Exec (issue #503). Wraps `hyperframes init --example=<x>` and
+# emits the stitched composition HTML. Lives in /usr/local/bin so the
+# pack handler can call it by a stable path without negotiating a
+# working directory — same pattern as av-validate.sh.
+COPY scripts/hyperframes-init.sh /usr/local/bin/hyperframes-init.sh
+RUN chmod +x /usr/local/bin/hyperframes-init.sh
+
+# Install smoke (ADR 037 #214). Cheap `--version` checks that catch
 # a yanked release, a typo-squat, or a flat-out missing install at
-# `docker build` time. The richer flag-by-flag CLI-surface assertion
-# — does `hyperframes render --help` document every flag
-# hyperframes_render.go passes by name (--resolution, --fps, --quality,
-# --output)? — runs in the Go test at
+# `docker build` time. Also verifies the `init` subcommand exists
+# (the surface hyperframes-init.sh depends on) and that our script
+# is present and executable. The richer flag-by-flag CLI-surface
+# assertion — does `hyperframes render --help` document every flag
+# hyperframes_render.go passes by name (--resolution, --fps,
+# --quality, --output)? — runs in the Go test at
 # internal/packs/builtin/cli_surface_invariant_test.go against the
 # built image. See the equivalent comment in sidecar.Dockerfile for
 # the rationale.
-RUN hyperframes --version
+RUN hyperframes --version \
+ && hyperframes init --help >/dev/null \
+ && test -x /usr/local/bin/hyperframes-init.sh
 
 USER helmdeck
 WORKDIR /home/helmdeck

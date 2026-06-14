@@ -727,6 +727,13 @@ func main() {
 			// data-*/window.__timelines scaffolding. LLM-backed; the prompt→video
 			// pipelines (seed.go) chain it before hyperframes.render.
 			builtin.HyperframesCompose(visionDispatcher),
+			// hyperframes.interpolate (#503 Path B, PR 5) — second link in
+			// the scaffold-based video chain. Downloads a project tarball,
+			// runs LLM passes per compositions/*.html file to rewrite
+			// visible text content (HTML text slots or JS TRANSCRIPT
+			// array), re-tars, uploads as a new project_artifact_key.
+			// Dispatcher-driven; chains after hyperframes.scaffold.
+			builtin.HyperframesInterpolate(visionDispatcher),
 			// T406 (revived): slides.narrate — Marp slides → narrated
 			// MP4 video via ElevenLabs TTS + ffmpeg + YouTube metadata
 			// via gateway LLM. Vault-stored ElevenLabs API key; degrades

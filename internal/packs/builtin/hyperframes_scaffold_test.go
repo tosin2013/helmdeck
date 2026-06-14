@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"testing"
 
@@ -22,12 +23,23 @@ import (
 // {path → content} mapping. Used by the happy-path tests to stub the
 // hyperframes-init.sh output without needing a real sidecar +
 // hyperframes CLI install.
+//
+// Paths are written in sorted order so the resulting tar is
+// deterministic — consumers (like hyperframes_interpolate_test) script
+// dispatcher replies in tar-order, which requires the same ordering
+// every run regardless of Go's randomized map iteration.
 func makeFakeScaffoldTarball(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	for path, content := range files {
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		content := files[path]
 		hdr := &tar.Header{
 			Name:     path,
 			Mode:     0644,

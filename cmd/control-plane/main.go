@@ -763,6 +763,15 @@ func main() {
 		logger.Warn("register hyperframes.render pack failed", "err", err)
 	}
 
+	// hyperframes.scaffold (#503 Path B): first link in the scaffold-
+	// based video chain. Runs `hyperframes init --example=<name>`
+	// inside the sidecar, tarballs the project directory, uploads
+	// it as a project_artifact_key that downstream packs (interpolate
+	// → attach_asset → render) consume.
+	if err := packReg.Register(builtin.HyperframesScaffold()); err != nil {
+		logger.Warn("register hyperframes.scaffold pack failed", "err", err)
+	}
+
 	// Operator-supplied command packs (T811 MVP). Drop executables
 	// into $HELMDECK_COMMAND_PACKS_DIR and the control plane
 	// registers each as `cmd.<basename>`. Schemas are passthrough

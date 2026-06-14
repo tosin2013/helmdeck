@@ -27,6 +27,30 @@ final document around the guaranteed scaffolding (canvas sized to the chosen
 aspect ratio, root `data-*`, the `window.__timelines` registration, an optional
 narration `<audio>`). The structural contract holds regardless of model quality.
 
+## Timeline coverage
+
+Every second of the composition's `[0, duration_seconds)` range must be covered by at least one `class="clip"` element. The body's reset CSS sets `background: #000;` so any uncovered range renders as visible black in the final MP4. The pack rejects compositions whose foreground elements leave a gap longer than `min(2.0s, duration_seconds * 0.05)` — added in [PR #502](https://github.com/tosin2013/helmdeck/pull/502) after the 2026-06-13 concept-animator session surfaced a 2+ second black run in an 8-second rendered video.
+
+The canonical pattern is a **permanent background element** plus foreground content:
+
+```html
+<div id="bg" class="clip" data-start="0" data-duration="60" data-track-index="0"
+     style="background: #1a1a2e; position: absolute; top:0; left:0; width:100%; height:100%"></div>
+<div id="title" class="clip" data-start="0" data-duration="6" data-track-index="1">...</div>
+<div id="diagram" class="clip" data-start="6" data-duration="54" data-track-index="2">...</div>
+```
+
+For richer guidance on visual hierarchy, pacing, type-on-screen rules, color choices, and GSAP transition patterns, see [HyperFrames composition best practices](./best-practices).
+
+## Tier-aware system prompt
+
+The system prompt the pack sends to the gateway LLM adapts to the caller-supplied model's tier (per the existing `models/*.yaml` profile registry — also added in [PR #502](https://github.com/tosin2013/helmdeck/pull/502)):
+
+- **Tier C** (free / weak open models) — verbose, constraint-heavy prompt with the hard rules and TIMELINE COVERAGE explanation inlined verbatim. Tier C models reliably follow explicit rules but unreliably honor external references.
+- **Tier A/B** (frontier / mid-tier hosted models) — leaner prompt that trusts the model on creative latitude and references the [best-practices guide](./best-practices) for deeper guidance.
+
+The contract rules (canvas size, deterministic-only, timeline coverage) are identical across tiers; only the depth of guidance differs.
+
 ## Inputs
 
 | Field | Type | Required | Default | Notes |
@@ -80,13 +104,14 @@ calls the gateway, then `hyperframes.render` does the session-bound rendering).
 
 | Code | Triggers |
 |---|---|
-| `invalid_input` | Missing `description`/`model`; `audio_url` provided without `duration_seconds > 0` (issue [#498](https://github.com/tosin2013/helmdeck/issues/498)); unsupported `aspect_ratio`/`resolution`; the model returned an unparseable spec or no visible elements. |
+| `invalid_input` | Missing `description`/`model`; `audio_url` provided without `duration_seconds > 0` (issue [#498](https://github.com/tosin2013/helmdeck/issues/498)); composition's `class="clip"` elements don't cover `[0, duration_seconds)` within tolerance (issue [#502](https://github.com/tosin2013/helmdeck/pull/502)); unsupported `aspect_ratio`/`resolution`; the model returned an unparseable spec or no visible elements. |
 | `internal` | Registered without a gateway dispatcher. |
 | `handler_failed` | Gateway returned no choices. |
 
 ## See also
 
 - [`hyperframes.render`](./render) — renders the composition to MP4.
+- [HyperFrames composition best practices](./best-practices) — design guidance for what makes a HyperFrames composition genuinely good (referenced by the Tier-A/B system prompt).
 - [`podcast.generate`](../podcast/generate) — its presigned `audio_url` drops into `audio_url` for a narrated video.
 - [Pipeline prompt templates](/reference/prompt-templates/pipelines) — `builtin.prompt-video` and `builtin.prompt-narrated-video` chain this before `hyperframes.render`.
 - Source: [`internal/packs/builtin/hyperframes_compose.go`](https://github.com/tosin2013/helmdeck/blob/main/internal/packs/builtin/hyperframes_compose.go).

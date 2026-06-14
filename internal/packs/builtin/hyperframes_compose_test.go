@@ -42,8 +42,26 @@ func decodeCompose(t *testing.T, raw json.RawMessage) composeOut {
 
 // goodSpec is a well-formed creative payload the model is expected to return —
 // marker-delimited raw CSS/HTML/JS (note the unescaped quotes that would break a
-// JSON payload).
+// JSON payload). The composition includes a permanent background element
+// (#bg) with a very large data-duration so the timeline-coverage check
+// (PR #502) accepts the spec across the full range of test durations
+// (8s default through 720s max). This pattern — a full-canvas background
+// plus foreground content — is what the best-practices guide recommends
+// and what production-quality compositions actually do.
 const goodSpec = "===STYLES===\n" +
+	".bg{background:#1a1a2e;position:absolute;top:0;left:0;width:100%;height:100%}\n" +
+	".t{color:#fff;font-size:80px;position:absolute;top:40px;left:40px}\n" +
+	"===BODY===\n" +
+	`<div id="bg" class="clip" data-start="0" data-duration="9999" data-track-index="0"></div>` + "\n" +
+	`<div id="t" class="clip" data-start="0" data-duration="5" data-track-index="1">Hello</div>` + "\n" +
+	"===TIMELINE===\n" +
+	"tl.from('#t',{opacity:0,duration:1},0);"
+
+// goodSpecGappy is a deliberately incomplete spec used to test the
+// timeline-coverage rejection — a foreground "Hello" with no background
+// behind it. For durations longer than ~5s + tolerance the pack must
+// reject this as CodeInvalidInput per PR #502.
+const goodSpecGappy = "===STYLES===\n" +
 	".t{color:#fff;font-size:80px;position:absolute;top:40px;left:40px}\n" +
 	"===BODY===\n" +
 	`<div id="t" class="clip" data-start="0" data-duration="5" data-track-index="1">Hello</div>` + "\n" +
@@ -180,7 +198,10 @@ func TestCompose_EmptyBody(t *testing.T) {
 // and the composition assembles — the opposite of the real failure, where a
 // verbose leading STYLES section truncated before BODY ever appeared.
 func TestCompose_BodyFirstAndTruncatedStyles(t *testing.T) {
+	// Include a covering background so the timeline-coverage check
+	// (PR #502) doesn't reject this test's body-first reply.
 	reply := "===BODY===\n" +
+		`<div id="bg" class="clip" data-start="0" data-duration="9999" data-track-index="0"></div>` + "\n" +
 		`<div id="t" class="clip" data-start="0" data-duration="5" data-track-index="1">Hi</div>` + "\n" +
 		"===TIMELINE===\n" +
 		"tl.from('#t',{opacity:0,duration:1},0);\n" +
@@ -413,6 +434,175 @@ func TestCompose_EngagementBandSelector(t *testing.T) {
 		if got := composeEngagementBand(tc.duration); got != tc.want {
 			t.Errorf("composeEngagementBand(%v) = %q, want %q", tc.duration, got, tc.want)
 		}
+	}
+}
+
+// --- Timeline-coverage validation (PR #502) -----------------------------
+
+// TestCompose_RejectsBlankScreenGap — a spec whose clip elements don't
+// cover the full timeline rejects as CodeInvalidInput with a message
+// pointing at the gap range. Without this check the render would
+// silently produce an MP4 with visible black runs.
+func TestCompose_RejectsBlankScreenGap(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpecGappy}}
+	// 30s video; goodSpecGappy only covers [0, 5). Gap is 25s — well
+	// above any reasonable threshold.
+	_, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/auto","metadata_model":"","duration_seconds":30}`)
+	pe := &packs.PackError{}
+	if !errors.As(err, &pe) || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("want CodeInvalidInput on coverage gap; got %v", err)
+	}
+	for _, must := range []string{"blank-screen gap", "5.0s–30.0s", "background element"} {
+		if !strings.Contains(pe.Message, must) {
+			t.Errorf("coverage-gap error should cite %q; got %q", must, pe.Message)
+		}
+	}
+}
+
+// TestCompose_AcceptsCoveringBackground — the recommended pattern (a
+// full-duration background plus foreground content) covers the timeline
+// and the composition assembles successfully.
+func TestCompose_AcceptsCoveringBackground(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec}}
+	raw, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/auto","metadata_model":"","duration_seconds":60}`)
+	if err != nil {
+		t.Fatalf("covering composition should succeed; got %v", err)
+	}
+	out := decodeCompose(t, raw)
+	if !strings.Contains(out.CompositionHTML, `id="bg"`) {
+		t.Errorf("background element should survive into the composition: %q", out.CompositionHTML)
+	}
+}
+
+// TestCompose_CoverageGapUnit — direct boundary tests for the gap
+// detector so refactors that change the threshold or the regex surface
+// immediately.
+func TestCompose_CoverageGapUnit(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		duration   float64
+		allowedGap float64
+		wantGap    bool
+	}{
+		{
+			name:       "full coverage single element",
+			body:       `<div class="clip" data-start="0" data-duration="60" data-track-index="0">x</div>`,
+			duration:   60,
+			allowedGap: 2.0,
+			wantGap:    false,
+		},
+		{
+			name:       "starts late: gap at beginning",
+			body:       `<div class="clip" data-start="3" data-duration="60" data-track-index="0">x</div>`,
+			duration:   60,
+			allowedGap: 2.0,
+			wantGap:    true,
+		},
+		{
+			name:       "ends early: tail gap",
+			body:       `<div class="clip" data-start="0" data-duration="50" data-track-index="0">x</div>`,
+			duration:   60,
+			allowedGap: 2.0,
+			wantGap:    true,
+		},
+		{
+			name:       "small head gap within tolerance",
+			body:       `<div class="clip" data-start="0.5" data-duration="60" data-track-index="0">x</div>`,
+			duration:   60,
+			allowedGap: 2.0,
+			wantGap:    false,
+		},
+		{
+			name:       "attributes reversed order still parsed",
+			body:       `<div class="clip" data-duration="60" data-start="0" data-track-index="0">x</div>`,
+			duration:   60,
+			allowedGap: 2.0,
+			wantGap:    false,
+		},
+		{
+			name:       "two adjacent clips covering the timeline",
+			body:       `<div class="clip" data-start="0" data-duration="30" data-track-index="0">a</div><div class="clip" data-start="30" data-duration="30" data-track-index="0">b</div>`,
+			duration:   60,
+			allowedGap: 2.0,
+			wantGap:    false,
+		},
+		{
+			name:       "two clips with a meaningful middle gap",
+			body:       `<div class="clip" data-start="0" data-duration="20" data-track-index="0">a</div><div class="clip" data-start="40" data-duration="20" data-track-index="0">b</div>`,
+			duration:   60,
+			allowedGap: 2.0,
+			wantGap:    true,
+		},
+		{
+			name:       "overlapping clips: union still covers",
+			body:       `<div class="clip" data-start="0" data-duration="40" data-track-index="0">a</div><div class="clip" data-start="30" data-duration="40" data-track-index="0">b</div>`,
+			duration:   60,
+			allowedGap: 2.0,
+			wantGap:    false,
+		},
+		{
+			name:       "no clip elements present",
+			body:       `<p>not a clip</p>`,
+			duration:   60,
+			allowedGap: 2.0,
+			wantGap:    false, // empty-body path handles this elsewhere
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _, _ := composeCoverageGap(tc.body, tc.duration, tc.allowedGap)
+			if got != tc.wantGap {
+				t.Errorf("composeCoverageGap(...) = %v, want %v", got, tc.wantGap)
+			}
+		})
+	}
+}
+
+// --- Tier-aware system prompt (PR #502) ----------------------------------
+
+// TestCompose_TierCPromptIsConstraintHeavy — passing a free / weak open
+// model triggers the constraint-heavy compact prompt (verbatim hard rules,
+// no best-practices URL because Tier C models don't reliably follow
+// external references).
+func TestCompose_TierCPromptIsConstraintHeavy(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec}}
+	_, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/openai/gpt-oss-120b:free","metadata_model":"","duration_seconds":60}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	sys := disp.captured[0].Messages[0].Content.Text()
+	if !strings.Contains(sys, "TIMELINE COVERAGE") {
+		t.Errorf("Tier C prompt should spell out TIMELINE COVERAGE rules verbatim; got %q", sys)
+	}
+	if !strings.Contains(sys, "av.validate flags it") {
+		t.Errorf("Tier C prompt should cite the av.validate consequence")
+	}
+	if strings.Contains(sys, "helmdeck.dev/reference/packs/hyperframes/best-practices") {
+		t.Errorf("Tier C prompt should NOT reference external best-practices URL (Tier C models do not reliably honor external refs)")
+	}
+}
+
+// TestCompose_TierAPromptIsLean — passing a frontier model triggers
+// the lean prompt that trusts the model and references the best-practices
+// guide.
+func TestCompose_TierAPromptIsLean(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec}}
+	_, err := runCompose(t, disp,
+		`{"description":"x","model":"openrouter/anthropic/claude-sonnet-4.6","metadata_model":"","duration_seconds":60}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	sys := disp.captured[0].Messages[0].Content.Text()
+	if !strings.Contains(sys, "best-practices") || !strings.Contains(sys, "helmdeck.dev") {
+		t.Errorf("Tier A/B prompt should reference the best-practices guide URL; got %q", sys)
+	}
+	// Lean prompt should NOT carry the long verbatim Tier-C consequence text.
+	if strings.Contains(sys, "av.validate flags it") {
+		t.Errorf("Tier A/B prompt should be leaner — no verbatim Tier-C consequence text")
 	}
 }
 

@@ -779,6 +779,15 @@ func main() {
 		logger.Warn("register hyperframes.scaffold pack failed", "err", err)
 	}
 
+	// hyperframes.attach_asset (#503 Path B, PR 6): third link.
+	// Splices an A-roll image / video (from image.generate, stock.search,
+	// or any pack that uploads an image/video to the artifact store)
+	// into the scaffold's target div in index.html. No dispatcher
+	// dependency — pure-Go in-process tarball manipulation.
+	if err := packReg.Register(builtin.HyperframesAttachAsset()); err != nil {
+		logger.Warn("register hyperframes.attach_asset pack failed", "err", err)
+	}
+
 	// Operator-supplied command packs (T811 MVP). Drop executables
 	// into $HELMDECK_COMMAND_PACKS_DIR and the control plane
 	// registers each as `cmd.<basename>`. Schemas are passthrough

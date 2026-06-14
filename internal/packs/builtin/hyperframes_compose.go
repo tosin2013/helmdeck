@@ -60,10 +60,16 @@ const (
 	// hyperframesComposeSystemPromptTierC is the Tier C (free / weak open
 	// model) system prompt. Constraint-heavy, compact, leads with the
 	// hard rules verbatim because Tier C models reliably honor explicit
-	// rules and unreliably honor "remember to" guidance. Same template
-	// shape as the original prompt — the only real change vs. pre-#502
-	// is the added "TIMELINE COVERAGE" requirement that closes the
-	// blank-screen failure mode the 2026-06-13 session surfaced.
+	// rules and unreliably honor "remember to" guidance.
+	//
+	// Rules are sourced from the upstream HyperFrames AGENTS.md / SKILL.md
+	// research surfaced during PR #504, not synthesized. In particular:
+	// the data-track-index temporal-exclusion rule, the layout-first
+	// pattern (write static hero frame, then animate), the
+	// gsap.from/gsap.to entrance/exit convention (so a failed timeline
+	// reverts to a readable steady state), and the static-volume audio
+	// constraint are all upstream-documented hard rules — not opinions.
+	//
 	// %d=width %d=height %g=duration %s=audio-note %s=style-note %g=duration %d=width %d=height.
 	hyperframesComposeSystemPromptTierC = `You design short HTML video compositions for the HyperFrames renderer (Chromium + GSAP). You will be given a DESCRIPTION of the video to make.
 
@@ -78,20 +84,33 @@ Respond with EXACTLY these three sections in THIS ORDER and NOTHING else. Put ea
 ===STYLES===
 (a FEW concise extra CSS rules — keep this short; the canvas sizing + reset are already provided)
 
-Hard rules (the render fails if you break them):
-- Every visible, timed element MUST have class="clip" and the attributes data-start, data-duration, data-track-index (integers; data-start+data-duration must stay within 0..%g). Give each element a unique id you reference from the timeline.
-- TIMELINE COVERAGE: the union of every class="clip" element's [data-start, data-start+data-duration) interval MUST cover the ENTIRE [0, %g) range without gaps. The first element starts at data-start="0". If you don't have a foreground element to fill a span, add a permanent background element (e.g. a solid-color full-canvas div with data-start="0" data-duration="%g") so the rendered video is never blank. The body's reset CSS sets background:#000; any gap shows up as a visible black run in the final MP4 (and av.validate flags it).
-- Position elements with absolute CSS inside the %d×%d canvas; use large, legible type (this is video, not a web page).
+Hard rules (upstream HyperFrames hard rules — the render fails if you break them):
+
+- LAYOUT FIRST, ANIMATION SECOND: design the static "hero frame" (the moment the composition rests in its final state) using CSS flex + gap + padding INSIDE the elements. Do NOT use position:absolute / top:Npx on content containers — upstream prohibits this because content overflows uncontrollably when taller than the viewport. After the hero frame is structurally sound, add gsap.from() entrance tweens (animate TO the established CSS position FROM an off-screen offset) and gsap.to() exit tweens (animate AWAY from the steady state). This convention ensures a paused or failed timeline reverts to a readable layout, not a chaotic jumble.
+
+- class="clip" CONTRACT: every visible, timed element MUST have class="clip" and the integer attributes data-start, data-duration, data-track-index. data-start+data-duration must stay within 0..%g. Give each element a unique id you reference from the timeline.
+
+- TIMELINE COVERAGE: the union of every class="clip" element's [data-start, data-start+data-duration) interval MUST cover the ENTIRE [0, %g) range without gaps. The first element starts at data-start="0". If you don't have a foreground element to fill a span, add a permanent background element (e.g. a solid-color full-canvas div with data-start="0" data-duration="%g") so the rendered video is never blank.
+
+- data-track-index IS TEMPORAL, NOT SPATIAL: track-index is a non-linear-editor row, NOT a CSS z-index. Clips on the SAME integer track MUST NOT temporally overlap — they must be sequential. To stack visuals at the same moment in time, put them on DIFFERENT tracks and use CSS z-index for spatial layering. Upstream convention: data-track-index="0" for backgrounds, "1" for primary scenes, "9+" for audio elements.
+
+- AUDIO VOLUME IS IMMUTABLE: if you embed an <audio> element, set data-volume="<float 0.0-1.0>" once at element declaration. NEVER tween audio volume with GSAP (e.g. tl.to(audio, { volume: 0.5 })) — the engine multiplexes audio post-capture and silently ignores volume tweens. Bake fades into the audio file upstream of compose.
+
+- Position visual elements inside the %d×%d canvas; use large, legible type (this is video, not a web page).
+
 - Keep STYLES brief — a handful of rules, plain colors and simple gradients; do NOT write long or elaborate CSS (it can truncate the response).
-- DETERMINISTIC ONLY: no Date.now(), no Math.random(), no network/fetch, no external images or fonts. Use solid colors, simple CSS gradients, shapes, and text.
+
+- DETERMINISTIC ONLY: no Date.now(), no performance.now(), no Math.random() (use a seeded PRNG if you need stochasticity), no network/fetch, no external images or fonts. The capture engine steps time artificially; live clocks desynchronize frames.
+
 - Do NOT emit <html>, <head>, <body>, <style> tags, the root div, the GSAP <script>, or the window.__timelines line — those are added for you. Only the three marked sections above.`
 
 	// hyperframesComposeSystemPromptTierAB is the Tier A/B (frontier /
 	// mid-tier hosted model) system prompt. Leaner: the model is trusted
 	// to honor concise instructions and to fetch the linked best-practices
-	// guide when designing more sophisticated compositions. The hard
-	// contract rules are the same as Tier C (any model that breaks them
-	// makes the render fail caller_fixable regardless of capability).
+	// guide. The hard contract rules are the same as Tier C — any model
+	// that breaks them makes the render fail caller_fixable regardless
+	// of capability — but the prompt leans on the doc URL for the full
+	// upstream-sourced ruleset rather than reproducing it verbatim.
 	// %d=width %d=height %g=duration %s=audio-note %s=style-note %g=duration %d=width %d=height %s=best-practices-url.
 	hyperframesComposeSystemPromptTierAB = `You design short HTML video compositions for the HyperFrames renderer (Chromium + GSAP). You will be given a DESCRIPTION of the video to make.
 
@@ -99,13 +118,16 @@ The canvas is %d×%d pixels and the video is %g seconds long. Animate with GSAP 
 
 Respond with three marker-delimited sections in order: ===BODY===, ===TIMELINE===, ===STYLES=== (no JSON, no fences, no escaping). Finish BODY and TIMELINE before STYLES.
 
-Hard contract (the render fails if you break it):
-- Every timed element has class="clip" and integer data-start, data-duration, data-track-index attributes; data-start+data-duration must stay within 0..%g.
-- Timeline coverage: the union of every clip's [data-start, data-start+data-duration) MUST cover [0, %g) without gaps. Use a permanent background element at data-start="0" data-duration="%g" if your foreground has gaps — otherwise the rendered MP4 has visible black runs.
-- Absolute positioning inside the %d×%d canvas. No external resources (fonts, images, fetch, Date.now, Math.random).
-- Do NOT emit <html>/<head>/<body>/<style>, the root div, the GSAP <script>, or the window.__timelines line — those are scaffolding the pack adds.
+Upstream HyperFrames hard contract (the render fails if you break it):
+- Layout first: design the static hero frame with flex/gap/padding, NOT position:absolute on content containers. Animate with gsap.from() for entrances + tl.to() for exits so the steady state is readable when paused.
+- class="clip" + integer data-start, data-duration, data-track-index. data-start+data-duration must stay within 0..%g.
+- Timeline coverage: the union of every clip's [data-start, data-start+data-duration) MUST cover [0, %g) — add a permanent background at data-start="0" data-duration="%g" if foreground has gaps.
+- data-track-index is TEMPORAL (NLE row semantics), not Z-order. Clips on the same track MUST NOT overlap temporally; stack visuals at the same moment by putting them on DIFFERENT tracks + using CSS z-index. Convention: 0=bg, 1=primary, 9+=audio.
+- Audio: data-volume is static and immutable — volume tweens are silently ignored. Bake fades upstream.
+- Deterministic only: no Date.now, no Math.random (use seeded PRNG), no network/fetch, no external resources.
+- Scaffolding is added by the pack: do NOT emit <html>/<head>/<body>/<style>, the root div, the GSAP <script>, or the window.__timelines line.
 
-For richer guidance on visual hierarchy, pacing, type-on-screen rules, color choices, and the GSAP transition patterns that play well with HyperFrames, see the best-practices guide at %s.`
+Canvas: %d×%d. For the full upstream-sourced ruleset (seven-step pipeline, reference template catalog, attribute vocabulary, documented failure modes, audio-reactive FFT pre-extraction pattern, React migration constraints, ARM64 deployment escape hatch), see the helmdeck-side guide at %s — it cites the upstream HyperFrames AGENTS.md / SKILL.md and is the canonical reference.`
 
 	composeSecStyles   = "===STYLES==="
 	composeSecBody     = "===BODY==="
@@ -327,6 +349,22 @@ func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 				Message: fmt.Sprintf(
 					"composition has a %.1fs–%.1fs blank-screen gap (no class=\"clip\" element covers that range) in a %gs video; the rendered MP4 would show %.1fs of black there. Add a permanent background element (e.g. a solid-color full-canvas div with data-start=\"0\" data-duration=\"%g\") or extend existing element durations to cover the timeline.",
 					gapStart, gapEnd, duration, gapEnd-gapStart, duration)}
+		}
+
+		// Track-index collision check (upstream HyperFrames hard rule).
+		// Per the upstream AGENTS.md research surfaced in PR #504: clips
+		// sharing the same integer data-track-index MUST NOT temporally
+		// overlap. Track is a non-linear-editor-style row, not a
+		// z-index. Visual layering is governed by CSS z-index entirely
+		// independent of track-index. If the upstream auditor would
+		// reject the composition with a track-collision error, we reject
+		// it here so the operator doesn't pay for a downstream render
+		// that the producer pipeline would fail anyway.
+		if collide, trackIdx, aStart, aEnd, bStart, bEnd := composeTrackCollision(spec.Body); collide {
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+				Message: fmt.Sprintf(
+					"data-track-index=\"%d\" has two temporally-overlapping clips ([%.1fs, %.1fs) and [%.1fs, %.1fs)). Upstream HyperFrames forbids overlap on the same track — clips on the same integer track must be sequential. To stack visuals at the same time, put them on DIFFERENT tracks and use CSS z-index for spatial layering. Convention: data-track-index=\"0\" for backgrounds, 1 for primary scenes, 9+ for audio.",
+					trackIdx, aStart, aEnd, bStart, bEnd)}
 		}
 
 		durationSource := "timeline"
@@ -579,6 +617,94 @@ func composeCoverageGap(body string, duration, allowedGap float64) (bool, float6
 		return true, cursor, duration
 	}
 	return false, 0, 0
+}
+
+// composeClipTrackRE captures the data-track-index value alongside
+// data-start and data-duration on every class="clip" element. Matches
+// all six attribute-order permutations of the three attributes within a
+// single element open tag. Sibling to composeClipAttrRE but track-aware.
+var composeClipTrackRE = regexp.MustCompile(
+	`class\s*=\s*"clip"[^>]*?` +
+		`(?:` +
+		`data-start\s*=\s*"([0-9.]+)"[^>]*?data-duration\s*=\s*"([0-9.]+)"[^>]*?data-track-index\s*=\s*"([0-9-]+)"` + `|` +
+		`data-start\s*=\s*"([0-9.]+)"[^>]*?data-track-index\s*=\s*"([0-9-]+)"[^>]*?data-duration\s*=\s*"([0-9.]+)"` + `|` +
+		`data-duration\s*=\s*"([0-9.]+)"[^>]*?data-start\s*=\s*"([0-9.]+)"[^>]*?data-track-index\s*=\s*"([0-9-]+)"` + `|` +
+		`data-duration\s*=\s*"([0-9.]+)"[^>]*?data-track-index\s*=\s*"([0-9-]+)"[^>]*?data-start\s*=\s*"([0-9.]+)"` + `|` +
+		`data-track-index\s*=\s*"([0-9-]+)"[^>]*?data-start\s*=\s*"([0-9.]+)"[^>]*?data-duration\s*=\s*"([0-9.]+)"` + `|` +
+		`data-track-index\s*=\s*"([0-9-]+)"[^>]*?data-duration\s*=\s*"([0-9.]+)"[^>]*?data-start\s*=\s*"([0-9.]+)"` +
+		`)`)
+
+// composeTrackCollision detects pairs of class="clip" elements that
+// share the same integer data-track-index AND have overlapping
+// [data-start, data-start+data-duration) intervals. Returns (true,
+// trackIdx, aStart, aEnd, bStart, bEnd) for the first overlapping pair
+// found, or (false, 0, 0, 0, 0, 0) if no collisions exist.
+//
+// Upstream HyperFrames hard rule (per research surfaced 2026-06-14):
+// the layout auditor rejects compositions where clips on the same
+// integer track overlap temporally. Track-index is non-linear-editor
+// row semantics, NOT spatial Z-order. Visual stacking is CSS z-index
+// independent of track-index.
+//
+// Clips that don't declare data-track-index are skipped (the upstream
+// engine treats missing track-index as a layout warning, not a hard
+// error, but we leave that to the upstream auditor).
+func composeTrackCollision(body string) (bool, int, float64, float64, float64, float64) {
+	type clip struct {
+		track int
+		start float64
+		end   float64
+	}
+	matches := composeClipTrackRE.FindAllStringSubmatch(body, -1)
+	clips := make([]clip, 0, len(matches))
+	for _, m := range matches {
+		// Six alternations × three groups each = 18 capture groups.
+		// Match the first non-empty triple and assign by attribute name.
+		var startStr, durStr, trackStr string
+		switch {
+		case m[1] != "" && m[2] != "" && m[3] != "":
+			startStr, durStr, trackStr = m[1], m[2], m[3]
+		case m[4] != "" && m[5] != "" && m[6] != "":
+			startStr, trackStr, durStr = m[4], m[5], m[6]
+		case m[7] != "" && m[8] != "" && m[9] != "":
+			durStr, startStr, trackStr = m[7], m[8], m[9]
+		case m[10] != "" && m[11] != "" && m[12] != "":
+			durStr, trackStr, startStr = m[10], m[11], m[12]
+		case m[13] != "" && m[14] != "" && m[15] != "":
+			trackStr, startStr, durStr = m[13], m[14], m[15]
+		case m[16] != "" && m[17] != "" && m[18] != "":
+			trackStr, durStr, startStr = m[16], m[17], m[18]
+		default:
+			continue
+		}
+		start, err1 := strconv.ParseFloat(startStr, 64)
+		dur, err2 := strconv.ParseFloat(durStr, 64)
+		track, err3 := strconv.Atoi(trackStr)
+		if err1 != nil || err2 != nil || err3 != nil || dur <= 0 {
+			continue
+		}
+		clips = append(clips, clip{track: track, start: start, end: start + dur})
+	}
+	// Group by track index, then walk each track sorted by start to
+	// detect overlaps. Sorting per-track is O(n log n); overall worst
+	// case is O(n log n) when all clips share a single track.
+	byTrack := map[int][]clip{}
+	for _, c := range clips {
+		byTrack[c.track] = append(byTrack[c.track], c)
+	}
+	for track, list := range byTrack {
+		sort.Slice(list, func(i, j int) bool { return list[i].start < list[j].start })
+		for i := 1; i < len(list); i++ {
+			prev, cur := list[i-1], list[i]
+			// Strict half-open intervals: [prev.start, prev.end) vs
+			// [cur.start, cur.end). Touching (prev.end == cur.start)
+			// is fine — the prev clip has ended by the time cur starts.
+			if cur.start < prev.end {
+				return true, track, prev.start, prev.end, cur.start, cur.end
+			}
+		}
+	}
+	return false, 0, 0, 0, 0, 0
 }
 
 // composeEngagementBand picks the duration-band-appropriate engagement

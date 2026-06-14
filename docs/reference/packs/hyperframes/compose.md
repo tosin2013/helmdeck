@@ -31,16 +31,28 @@ narration `<audio>`). The structural contract holds regardless of model quality.
 
 Every second of the composition's `[0, duration_seconds)` range must be covered by at least one `class="clip"` element. The body's reset CSS sets `background: #000;` so any uncovered range renders as visible black in the final MP4. The pack rejects compositions whose foreground elements leave a gap longer than `min(2.0s, duration_seconds * 0.05)` — added in [PR #502](https://github.com/tosin2013/helmdeck/pull/502) after the 2026-06-13 concept-animator session surfaced a 2+ second black run in an 8-second rendered video.
 
-The canonical pattern is a **permanent background element** plus foreground content:
+The canonical pattern is a **permanent background element** plus foreground content on separate tracks:
 
 ```html
 <div id="bg" class="clip" data-start="0" data-duration="60" data-track-index="0"
-     style="background: #1a1a2e; position: absolute; top:0; left:0; width:100%; height:100%"></div>
+     style="background: #1a1a2e; position: absolute; inset: 0"></div>
 <div id="title" class="clip" data-start="0" data-duration="6" data-track-index="1">...</div>
-<div id="diagram" class="clip" data-start="6" data-duration="54" data-track-index="2">...</div>
+<div id="diagram" class="clip" data-start="6" data-duration="54" data-track-index="1">...</div>
 ```
 
-For richer guidance on visual hierarchy, pacing, type-on-screen rules, color choices, and GSAP transition patterns, see [HyperFrames composition best practices](./best-practices).
+## Track-index collision check
+
+Per the upstream HyperFrames hard rule documented in [the composition guide](./best-practices#data-track-index-is-temporal-not-spatial-upstream-hard-rule): clips sharing the same integer `data-track-index` MUST NOT temporally overlap. Track-index is a non-linear-editor row index (temporal layout), NOT a CSS `z-index` (spatial stacking). The pack rejects compositions where two clips on the same track overlap — added in [PR #504](https://github.com/tosin2013/helmdeck/pull/504) after sourcing the rule directly from the upstream `AGENTS.md`.
+
+Upstream convention for track allocation:
+
+- `data-track-index="0"` — backgrounds, atmospheric overlays
+- `data-track-index="1"`–`"5"` — primary scenes, typographical elements
+- `data-track-index="9"`+ — audio elements
+
+To stack visuals at the same moment in time, put them on DIFFERENT tracks and use CSS `z-index` for spatial layering.
+
+For the full upstream-sourced rule set — seven-step pipeline, layout-first pattern, attribute vocabulary, reference template catalog, audio constraints, documented failure modes, React migration constraints — see [HyperFrames composition guide](./best-practices).
 
 ## Tier-aware system prompt
 
@@ -104,7 +116,7 @@ calls the gateway, then `hyperframes.render` does the session-bound rendering).
 
 | Code | Triggers |
 |---|---|
-| `invalid_input` | Missing `description`/`model`; `audio_url` provided without `duration_seconds > 0` (issue [#498](https://github.com/tosin2013/helmdeck/issues/498)); composition's `class="clip"` elements don't cover `[0, duration_seconds)` within tolerance (issue [#502](https://github.com/tosin2013/helmdeck/pull/502)); unsupported `aspect_ratio`/`resolution`; the model returned an unparseable spec or no visible elements. |
+| `invalid_input` | Missing `description`/`model`; `audio_url` provided without `duration_seconds > 0` (issue [#498](https://github.com/tosin2013/helmdeck/issues/498)); composition's `class="clip"` elements don't cover `[0, duration_seconds)` within tolerance ([PR #502](https://github.com/tosin2013/helmdeck/pull/502)); two clips on the same `data-track-index` temporally overlap ([PR #504](https://github.com/tosin2013/helmdeck/pull/504)); unsupported `aspect_ratio`/`resolution`; the model returned an unparseable spec or no visible elements. |
 | `internal` | Registered without a gateway dispatcher. |
 | `handler_failed` | Gateway returned no choices. |
 

@@ -56,6 +56,11 @@ const (
 	hyperframesDefaultPreset = "high" // CLI accepts: draft | standard | high
 	hyperframesProjectDir    = "/tmp/helmdeck-hf"
 	hyperframesOutputPath    = "/tmp/helmdeck-hf-out.mp4"
+	// hyperframesProjectTarballPath is the in-sidecar path where the
+	// downloaded project_artifact_key tarball is staged before extraction.
+	// Outside hyperframesProjectDir so a malformed tar -xzf doesn't
+	// litter the project dir with the tarball itself.
+	hyperframesProjectTarballPath = "/tmp/helmdeck-hf-project.tar.gz"
 )
 
 // HyperframesRender constructs the pack. Sidecar image override path:
@@ -65,16 +70,23 @@ func HyperframesRender() *packs.Pack {
 	return &packs.Pack{
 		Name:    "hyperframes.render",
 		Version: "v1",
-		Description: "Render an HTML/CSS/JS composition into a deterministic MP4 via Chromium BeginFrame + ffmpeg. Sizing is composable: pick a resolution (1080p or 4k) and an aspect_ratio (16:9 standard, 9:16 vertical for Shorts/TikTok, 1:1 square). Silent animations and pre-mixed audio compositions work without a separate code path; chain podcast.generate → hyperframes.render by embedding the podcast's presigned audio URL in your composition's <audio src>. Short-form only (≤12 min, 512 MiB cap).",
+		Description: "Render an HTML/CSS/JS composition into a deterministic MP4 via Chromium BeginFrame + ffmpeg. Sizing is composable: pick a resolution (1080p or 4k) and an aspect_ratio (16:9 standard, 9:16 vertical for Shorts/TikTok, 1:1 square). Two input modes (mutually exclusive): pass `composition_html` for a single-file composition (silent animations and pre-mixed audio work without a separate code path — chain podcast.generate by embedding the podcast's presigned audio URL in your composition's <audio src>), OR pass `project_artifact_key` referencing a project tarball uploaded by `hyperframes.compose`'s scaffold mode (multi-file scaffold from upstream examples, e.g. swiss-grid / decision-tree / code-snippet-dark-modern). Short-form only (≤12 min, 512 MiB cap).",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
-			Required: []string{"composition_html"},
+			// Exactly one of composition_html / project_artifact_key
+			// must be provided — validated in the handler so we can
+			// emit a friendlier error than a generic "required field
+			// missing." Neither is listed in Required because both are
+			// individually optional; the handler enforces the
+			// "exactly-one" constraint.
+			Required: []string{},
 			Properties: map[string]string{
-				"composition_html": "string",
-				"resolution":       "string",
-				"aspect_ratio":     "string",
-				"fps":              "number",
-				"quality":          "string",
+				"composition_html":     "string",
+				"project_artifact_key": "string",
+				"resolution":           "string",
+				"aspect_ratio":         "string",
+				"fps":                  "number",
+				"quality":              "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -120,10 +132,22 @@ func HyperframesRender() *packs.Pack {
 
 type hyperframesRenderInput struct {
 	CompositionHTML string `json:"composition_html"`
-	Resolution      string `json:"resolution"`
-	AspectRatio     string `json:"aspect_ratio"`
-	FPS             int    `json:"fps"`
-	Quality         string `json:"quality"`
+	// ProjectArtifactKey is the alternative to CompositionHTML: a key
+	// into the artifact store referencing a gzipped tarball of a
+	// hyperframes project directory (index.html + compositions/*.html
+	// + assets/ + hyperframes.json). Produced by hyperframes.compose's
+	// scaffold mode (PR #503's Path B) when the caller picks an
+	// upstream `--example=<name>` instead of authoring HTML from
+	// scratch. Render downloads the tarball, extracts it in-sidecar,
+	// and runs `hyperframes render <project-dir>` against the
+	// extracted root — the multi-file shape upstream's renderer
+	// natively expects. Mutually exclusive with CompositionHTML; the
+	// handler rejects both-empty and both-set.
+	ProjectArtifactKey string `json:"project_artifact_key"`
+	Resolution         string `json:"resolution"`
+	AspectRatio        string `json:"aspect_ratio"`
+	FPS                int    `json:"fps"`
+	Quality            string `json:"quality"`
 }
 
 // resolutionPresetKey is the lookup tuple for mapping
@@ -223,8 +247,19 @@ func hyperframesRenderHandler(ctx context.Context, ec *packs.ExecutionContext) (
 	if err := json.Unmarshal(ec.Input, &in); err != nil {
 		return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
 	}
-	if strings.TrimSpace(in.CompositionHTML) == "" {
-		return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "composition_html is required"}
+	// Exactly-one-of: composition_html (inline) or project_artifact_key
+	// (tarball reference). Both empty → caller forgot to provide a
+	// composition. Both set → ambiguous; we refuse to silently prefer
+	// one over the other.
+	hasComp := strings.TrimSpace(in.CompositionHTML) != ""
+	hasProj := strings.TrimSpace(in.ProjectArtifactKey) != ""
+	switch {
+	case !hasComp && !hasProj:
+		return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: "either composition_html or project_artifact_key is required (composition_html for inline HTML; project_artifact_key for a multi-file scaffold from hyperframes.compose)"}
+	case hasComp && hasProj:
+		return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: "composition_html and project_artifact_key are mutually exclusive — pass exactly one"}
 	}
 	if ec.Exec == nil {
 		return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "hyperframes.render requires a session executor"}
@@ -268,21 +303,15 @@ func hyperframesRenderHandler(ctx context.Context, ec *packs.ExecutionContext) (
 	}
 
 	// The hyperframes CLI expects a *project directory* (containing
-	// index.html), not a bare HTML file. We write the composition
-	// to <projectDir>/index.html and pass the directory as the
-	// positional argument. The CLI's resolveProject() will discover
-	// index.html as the default composition.
+	// index.html), not a bare HTML file. Two stage-paths produce that
+	// directory: composition_html is written to <projectDir>/index.html
+	// (single-file mode, unchanged from v0.13.0); project_artifact_key
+	// is downloaded from the artifact store and extracted in-sidecar
+	// (multi-file mode, added in Path B of issue #503). Both paths
+	// converge on the same `hyperframes render <projectDir>` call.
 	ec.Report(0, "scaffolding hyperframes project")
-	mkdirRes, err := ec.Exec(ctx, session.ExecRequest{
-		Cmd: []string{"sh", "-c", "mkdir -p " + hyperframesProjectDir},
-	})
-	if err != nil || mkdirRes.ExitCode != 0 {
-		return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-			Message: fmt.Sprintf("create project dir: %v (exit %d)", err, mkdirRes.ExitCode)}
-	}
-	if _, err := execWithStdin(ctx, ec, hyperframesProjectDir+"/index.html", []byte(in.CompositionHTML)); err != nil {
-		return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
-			Message: fmt.Sprintf("write composition_html: %v", err), Cause: err}
+	if perr := setupHyperframesProjectDir(ctx, ec, in); perr != nil {
+		return nil, perr
 	}
 
 	// `hyperframes render <project-dir> --resolution <preset> --fps NN
@@ -364,6 +393,107 @@ func hyperframesRenderHandler(ctx context.Context, ec *packs.ExecutionContext) (
 		return nil, &packs.PackError{Code: packs.CodeInternal, Message: mErr.Error(), Cause: mErr}
 	}
 	return raw, nil
+}
+
+// setupHyperframesProjectDir prepares hyperframesProjectDir with either
+// the inline composition_html or the extracted contents of a downloaded
+// project tarball. Returns nil on success or a PackError to bubble up
+// from the handler.
+//
+// Both modes start with a fresh directory (rm + mkdir) so a previous
+// invocation's leftovers can't pollute the current render — the
+// hyperframes CLI's resolveProject() scans the directory tree and would
+// pick up stale files from a prior project_artifact_key extraction.
+//
+// Error code mapping:
+//   - shell errors (mkdir, stdin write, exec transport) → CodeHandlerFailed
+//   - project_artifact_key missing from store → CodeInvalidInput
+//     (caller passed a bad key; pipeline classifier reports as caller_fixable)
+//   - tar -xzf non-zero → CodeInvalidInput (malformed tarball — caller's
+//     hyperframes.compose scaffold mode shipped something invalid)
+//   - index.html missing post-extract → CodeInvalidInput (tarball isn't
+//     a hyperframes-init scaffold or got truncated mid-upload)
+func setupHyperframesProjectDir(ctx context.Context, ec *packs.ExecutionContext, in hyperframesRenderInput) *packs.PackError {
+	// Fresh project dir on every render call. `rm -rf` is safe — the
+	// directory is sidecar-local and only touched by this pack.
+	mkdirRes, err := ec.Exec(ctx, session.ExecRequest{
+		Cmd: []string{"sh", "-c", "rm -rf " + hyperframesProjectDir + " && mkdir -p " + hyperframesProjectDir},
+	})
+	if err != nil || mkdirRes.ExitCode != 0 {
+		return &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("create project dir: %v (exit %d)", err, mkdirRes.ExitCode)}
+	}
+
+	if strings.TrimSpace(in.CompositionHTML) != "" {
+		// Single-file mode (unchanged from v0.13.0): write the
+		// composition to index.html and let the CLI find it.
+		if _, err := execWithStdin(ctx, ec, hyperframesProjectDir+"/index.html", []byte(in.CompositionHTML)); err != nil {
+			return &packs.PackError{Code: packs.CodeHandlerFailed,
+				Message: fmt.Sprintf("write composition_html: %v", err), Cause: err}
+		}
+		return nil
+	}
+
+	// Multi-file mode: download the tarball from the artifact store,
+	// stage it at hyperframesProjectTarballPath, extract into the
+	// project dir, verify index.html landed.
+	if ec.Artifacts == nil {
+		return &packs.PackError{Code: packs.CodeInternal,
+			Message: "hyperframes.render with project_artifact_key requires an artifact store, but none is wired into the ExecutionContext"}
+	}
+	content, _, getErr := ec.Artifacts.Get(ctx, in.ProjectArtifactKey)
+	if getErr != nil {
+		return &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: fmt.Sprintf("project_artifact_key %q not found in artifact store: %v", in.ProjectArtifactKey, getErr),
+			Cause:   getErr}
+	}
+	if len(content) == 0 {
+		return &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: fmt.Sprintf("project_artifact_key %q resolved to an empty artifact", in.ProjectArtifactKey)}
+	}
+
+	// Stage the tarball at a stable path. Outside the project dir so
+	// the project dir contains ONLY the extracted scaffold members —
+	// otherwise the CLI's resolveProject() could pick up the tarball
+	// itself as a project file.
+	if _, err := execWithStdin(ctx, ec, hyperframesProjectTarballPath, content); err != nil {
+		return &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("stage project tarball: %v", err), Cause: err}
+	}
+
+	// `tar -xzf <tar> -C <dir>` writes archive members relative to
+	// <dir>, matching the producer-side `tar -czf $OUTPUT -C $SCAFFOLD .`
+	// in scripts/hyperframes-init.sh.
+	extractRes, err := ec.Exec(ctx, session.ExecRequest{
+		Cmd: []string{"tar", "-xzf", hyperframesProjectTarballPath, "-C", hyperframesProjectDir},
+	})
+	if err != nil {
+		return &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("extract project tarball: %v", err), Cause: err}
+	}
+	if extractRes.ExitCode != 0 {
+		stderr := strings.TrimSpace(string(extractRes.Stderr))
+		return &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: fmt.Sprintf(
+				"extract project tarball failed (exit %d): %s. The artifact under project_artifact_key %q is not a valid gzipped tar archive — produced by hyperframes.compose's scaffold mode?",
+				extractRes.ExitCode, truncStr(stderr, 1024), in.ProjectArtifactKey)}
+	}
+
+	// Sanity: the scaffold must produce index.html at the project root.
+	checkRes, err := ec.Exec(ctx, session.ExecRequest{
+		Cmd: []string{"test", "-f", hyperframesProjectDir + "/index.html"},
+	})
+	if err != nil {
+		return &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("verify project index.html: %v", err), Cause: err}
+	}
+	if checkRes.ExitCode != 0 {
+		return &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: fmt.Sprintf(
+				"project tarball under %q extracted but is missing index.html at the root — not a valid hyperframes scaffold from `hyperframes init`",
+				in.ProjectArtifactKey)}
+	}
+	return nil
 }
 
 // hyperframesSidecarImage returns the image tag the pack pins via

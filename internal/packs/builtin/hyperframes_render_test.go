@@ -31,19 +31,46 @@ type hyperframesExecScript struct {
 	emptyMP4       bool
 	oversizeMP4    bool
 	customMP4Bytes []byte
+	// failExtract makes the `tar -xzf` call return non-zero with
+	// stderr — simulates a malformed tarball.
+	failExtract bool
+	// missingIndexAfterExtract makes the `test -f index.html` post-
+	// extract check return 1 — simulates a tarball that extracted but
+	// is missing the entry HTML.
+	missingIndexAfterExtract bool
 }
 
 func (h *hyperframesExecScript) fn(_ context.Context, req session.ExecRequest) (session.ExecResult, error) {
 	h.calls = append(h.calls, req)
 
-	// `mkdir -p <project-dir>` scaffold step.
+	// `mkdir -p <project-dir>` scaffold step. The current handler uses
+	// `rm -rf X && mkdir -p X` for a fresh directory; the Contains
+	// match still fires because the substring is present in both
+	// forms.
 	if len(req.Cmd) >= 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" &&
 		strings.Contains(req.Cmd[2], "mkdir -p") {
 		return session.ExecResult{}, nil
 	}
-	// stdin write: composition_html → <project-dir>/index.html
+	// stdin write: composition_html → <project-dir>/index.html, OR
+	// project tarball → /tmp/helmdeck-hf-project.tar.gz. Both go
+	// through execWithStdin and look the same shape on the wire
+	// (sh -c 'cat > <path>' + Stdin payload).
 	if len(req.Cmd) >= 3 && req.Cmd[0] == "sh" && req.Cmd[1] == "-c" &&
 		strings.Contains(req.Cmd[2], "cat >") && len(req.Stdin) > 0 {
+		return session.ExecResult{}, nil
+	}
+	// `tar -xzf <tarball> -C <project-dir>` — multi-file mode extract.
+	if len(req.Cmd) >= 1 && req.Cmd[0] == "tar" {
+		if h.failExtract {
+			return session.ExecResult{ExitCode: 1, Stderr: []byte("gzip: invalid compressed data — format violated")}, nil
+		}
+		return session.ExecResult{}, nil
+	}
+	// `test -f <project-dir>/index.html` — sanity check after extract.
+	if len(req.Cmd) >= 2 && req.Cmd[0] == "test" && req.Cmd[1] == "-f" {
+		if h.missingIndexAfterExtract {
+			return session.ExecResult{ExitCode: 1}, nil
+		}
 		return session.ExecResult{}, nil
 	}
 	// `hyperframes render ...` invocation
@@ -468,5 +495,170 @@ func TestHyperframesErrorCode_CallerInputVsPackBug(t *testing.T) {
 		if got := hyperframesErrorCode(s); got != packs.CodeHandlerFailed {
 			t.Errorf("genuine-failure stderr classified %q, want handler_failed:\n  %s", got, s)
 		}
+	}
+}
+
+// --- project_artifact_key (Path B / #503) tests --------------------------
+
+// runHyperframesWithStore is the variant of runHyperframes that seeds an
+// artifact store and exposes it on the ExecutionContext — needed for the
+// project_artifact_key tests where the handler does ec.Artifacts.Get.
+func runHyperframesWithStore(t *testing.T, exec *hyperframesExecScript, store *packs.MemoryArtifactStore, input string) (json.RawMessage, error) {
+	t.Helper()
+	pack := HyperframesRender()
+	ec := &packs.ExecutionContext{
+		Pack:      pack,
+		Input:     json.RawMessage(input),
+		Session:   &session.Session{ID: "sess-hyperframes-pak"},
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Exec:      exec.fn,
+		Artifacts: store,
+	}
+	return pack.Handler(context.Background(), ec)
+}
+
+func TestHyperframesRender_BothInputsMissing_Rejects(t *testing.T) {
+	exec := &hyperframesExecScript{}
+	_, err := runHyperframes(t, exec, `{"resolution":"1080p"}`)
+	pe, ok := err.(*packs.PackError)
+	if !ok || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("expected CodeInvalidInput, got %v", err)
+	}
+	if !strings.Contains(pe.Message, "composition_html") || !strings.Contains(pe.Message, "project_artifact_key") {
+		t.Errorf("error should mention both alternatives, got: %s", pe.Message)
+	}
+}
+
+func TestHyperframesRender_BothInputsSet_Rejects(t *testing.T) {
+	exec := &hyperframesExecScript{}
+	input := `{"composition_html":"<html></html>", "project_artifact_key":"x/y.tar.gz"}`
+	_, err := runHyperframes(t, exec, input)
+	pe, ok := err.(*packs.PackError)
+	if !ok || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("expected CodeInvalidInput, got %v", err)
+	}
+	if !strings.Contains(pe.Message, "mutually exclusive") {
+		t.Errorf("error should say mutually exclusive, got: %s", pe.Message)
+	}
+}
+
+func TestHyperframesRender_ProjectArtifactKey_HappyPath(t *testing.T) {
+	store := packs.NewMemoryArtifactStore()
+	// Seed a fake project tarball under the conventional namespace.
+	// The bytes don't need to be a real gzip — the test executor stubs
+	// the tar -xzf call as success.
+	fakeTarball := []byte("fake-gzipped-project-tarball-bytes")
+	art, err := store.Put(context.Background(), "hyperframes.compose", "scaffold-abc123.tar.gz", fakeTarball, "application/gzip")
+	if err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+	exec := &hyperframesExecScript{}
+	input := `{"project_artifact_key":"` + art.Key + `"}`
+	raw, err := runHyperframesWithStore(t, exec, store, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	// Verify the expected exec sequence: rm/mkdir + write tarball +
+	// tar -xzf + test -f index.html + hyperframes render + cat MP4.
+	sawWriteTarball := false
+	sawExtract := false
+	sawIndexCheck := false
+	sawRender := false
+	for _, c := range exec.calls {
+		switch {
+		case len(c.Cmd) >= 3 && c.Cmd[0] == "sh" && c.Cmd[1] == "-c" &&
+			strings.Contains(c.Cmd[2], hyperframesProjectTarballPath) && len(c.Stdin) > 0:
+			sawWriteTarball = true
+		case len(c.Cmd) >= 1 && c.Cmd[0] == "tar":
+			sawExtract = true
+		case len(c.Cmd) >= 2 && c.Cmd[0] == "test" && c.Cmd[1] == "-f":
+			sawIndexCheck = true
+		case len(c.Cmd) >= 2 && c.Cmd[0] == "hyperframes" && c.Cmd[1] == "render":
+			sawRender = true
+		}
+	}
+	if !sawWriteTarball {
+		t.Error("expected stdin write of project tarball to staging path")
+	}
+	if !sawExtract {
+		t.Error("expected `tar -xzf` extraction call")
+	}
+	if !sawIndexCheck {
+		t.Error("expected `test -f index.html` sanity check")
+	}
+	if !sawRender {
+		t.Error("expected `hyperframes render` invocation")
+	}
+	// Sanity: the response carries the rendered video key.
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if _, ok := out["video_artifact_key"].(string); !ok {
+		t.Errorf("expected video_artifact_key in output, got: %v", out)
+	}
+}
+
+func TestHyperframesRender_ProjectArtifactKey_NotInStore_Rejects(t *testing.T) {
+	store := packs.NewMemoryArtifactStore()
+	exec := &hyperframesExecScript{}
+	_, err := runHyperframesWithStore(t, exec, store, `{"project_artifact_key":"missing/nope.tar.gz"}`)
+	pe, ok := err.(*packs.PackError)
+	if !ok || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("expected CodeInvalidInput, got %v", err)
+	}
+	if !strings.Contains(pe.Message, "not found in artifact store") {
+		t.Errorf("error should explain store miss, got: %s", pe.Message)
+	}
+}
+
+func TestHyperframesRender_ProjectArtifactKey_TarExtractFails_Rejects(t *testing.T) {
+	store := packs.NewMemoryArtifactStore()
+	art, err := store.Put(context.Background(), "hyperframes.compose", "scaffold-bad.tar.gz", []byte("not really gzip"), "application/gzip")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	exec := &hyperframesExecScript{failExtract: true}
+	_, err = runHyperframesWithStore(t, exec, store, `{"project_artifact_key":"`+art.Key+`"}`)
+	pe, ok := err.(*packs.PackError)
+	if !ok || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("expected CodeInvalidInput, got %v", err)
+	}
+	if !strings.Contains(pe.Message, "not a valid gzipped tar archive") {
+		t.Errorf("error should diagnose malformed tarball, got: %s", pe.Message)
+	}
+}
+
+func TestHyperframesRender_ProjectArtifactKey_MissingIndexHTML_Rejects(t *testing.T) {
+	store := packs.NewMemoryArtifactStore()
+	art, err := store.Put(context.Background(), "hyperframes.compose", "scaffold-noindex.tar.gz", []byte("tar bytes"), "application/gzip")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	exec := &hyperframesExecScript{missingIndexAfterExtract: true}
+	_, err = runHyperframesWithStore(t, exec, store, `{"project_artifact_key":"`+art.Key+`"}`)
+	pe, ok := err.(*packs.PackError)
+	if !ok || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("expected CodeInvalidInput, got %v", err)
+	}
+	if !strings.Contains(pe.Message, "missing index.html") {
+		t.Errorf("error should diagnose missing index.html, got: %s", pe.Message)
+	}
+}
+
+func TestHyperframesRender_ProjectArtifactKey_EmptyArtifact_Rejects(t *testing.T) {
+	store := packs.NewMemoryArtifactStore()
+	art, err := store.Put(context.Background(), "hyperframes.compose", "scaffold-empty.tar.gz", []byte{}, "application/gzip")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	exec := &hyperframesExecScript{}
+	_, err = runHyperframesWithStore(t, exec, store, `{"project_artifact_key":"`+art.Key+`"}`)
+	pe, ok := err.(*packs.PackError)
+	if !ok || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("expected CodeInvalidInput, got %v", err)
+	}
+	if !strings.Contains(pe.Message, "empty artifact") {
+		t.Errorf("error should diagnose empty artifact, got: %s", pe.Message)
 	}
 }

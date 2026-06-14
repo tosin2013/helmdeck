@@ -13,6 +13,11 @@ Two body modes work with **zero handler branching**:
 - **Silent animation** — composition has no `<audio>` tag → MP4 is video-only.
 - **Pre-mixed audio** — composition has an inline `<audio src="…">` → MP4 carries the audio track. Use this for chained `podcast.generate` → `hyperframes.render` workflows: the podcast pack returns a presigned audio URL, your composition embeds it as `<audio src>`, the render pipeline picks it up automatically.
 
+Two input modes work (mutually exclusive — pass exactly one):
+
+- **`composition_html`** — a complete self-contained HTML document, scaffolded as `<projectDir>/index.html` (this pack's v0.13.0 mode; unchanged).
+- **`project_artifact_key`** — a key into the artifact store referencing a gzipped tarball of a hyperframes project directory (`index.html` + `compositions/*.html` + `assets/` + `hyperframes.json` + …). Produced by `hyperframes.compose`'s scaffold mode when the caller picks an upstream `--example=<name>` instead of authoring HTML from scratch. Render downloads the tarball, extracts it in-sidecar, and runs `hyperframes render <project-dir>` against the multi-file shape the framework natively expects.
+
 **Sizing is composable**: pick a `resolution` (1080p or 4K) and an `aspect_ratio` (16:9 landscape, 9:16 vertical, 1:1 square) independently — the pack resolves them to one of the upstream CLI's [resolution presets](https://hyperframes.heygen.com/packages/cli) and threads it through.
 
 ## Sidecar prerequisite
@@ -43,7 +48,8 @@ The upstream HyperFrames CLI is **project-oriented** — it expects a directory 
 
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `composition_html` | `string` | yes | — | A complete self-contained HTML document. The pack scaffolds it as a HyperFrames project (`/tmp/helmdeck-hf/index.html`). |
+| `composition_html` | `string` | one of | — | A complete self-contained HTML document. Scaffolded as `/tmp/helmdeck-hf/index.html`. Mutually exclusive with `project_artifact_key`. |
+| `project_artifact_key` | `string` | one of | — | Key into the artifact store referencing a gzipped tarball of a hyperframes project (multi-file scaffold from `hyperframes.compose`'s scaffold mode). Mutually exclusive with `composition_html`. Render extracts the tarball under `/tmp/helmdeck-hf/` and runs the CLI against the project directory. |
 | `resolution` | `string` | no | `"1080p"` | One of `"1080p"`, `"4k"`. (`720p` not supported — upstream CLI has no 720p preset.) |
 | `aspect_ratio` | `string` | no | `"16:9"` | One of `"16:9"`, `"9:16"`, `"1:1"`. (`4:5` not supported — upstream CLI has no 4:5 preset.) |
 | `fps` | `number` | no | `30` | Frames per second. Pack-side cap: 60. |
@@ -60,7 +66,8 @@ The parenthesized name is the CLI preset the pack maps to. The pack's response i
 
 ### Validation
 
-- `composition_html` must be non-empty.
+- Exactly one of `composition_html` or `project_artifact_key` must be non-empty. Both missing → `invalid_input` with the message naming both alternatives; both set → `invalid_input` with "mutually exclusive".
+- For `project_artifact_key`: key must resolve in the artifact store, content must be non-empty, must extract via `tar -xzf` (malformed tarballs reject as `invalid_input` with the tar stderr surfaced), and the extracted root must contain `index.html`.
 - `resolution` × `aspect_ratio` must be one of the six combinations above; unsupported tuples reject as `invalid_input` with a list of what's allowed.
 - `fps` ≤ 60. Higher values reject as `invalid_input`.
 - `quality` must be `"draft"`, `"standard"`, or `"high"`.

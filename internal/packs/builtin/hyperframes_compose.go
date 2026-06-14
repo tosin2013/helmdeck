@@ -28,12 +28,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/tosin2013/helmdeck/internal/gateway"
+	"github.com/tosin2013/helmdeck/internal/llmcontext"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/vision"
 )
+
+// hyperframesBestPracticesURL is the canonical URL agents (or operators)
+// can fetch on demand for richer guidance on what makes a good HyperFrames
+// composition vs. a technically-valid one. Embedded in the tier-A/B
+// system prompts as the "see the linked guide" anchor; expanded on at
+// docs/reference/packs/hyperframes/best-practices.md.
+const hyperframesBestPracticesURL = "https://helmdeck.dev/reference/packs/hyperframes/best-practices"
 
 const (
 	hyperframesComposeDefaultDuration = 8.0
@@ -46,13 +57,15 @@ const (
 	// gsapCDN is the exact GSAP build the upstream CLI's `blank` template loads.
 	gsapCDN = "https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"
 
-	// hyperframesComposeSystemPrompt asks the model for ONLY the creative pieces
-	// as three marker-delimited sections (raw CSS/HTML/JS, NOT JSON) — the pack
-	// assembles the contract scaffolding around them. Marker sections avoid the
-	// quote/newline escaping that made models emit invalid JSON when the body /
-	// timeline contained HTML and JS.
+	// hyperframesComposeSystemPromptTierC is the Tier C (free / weak open
+	// model) system prompt. Constraint-heavy, compact, leads with the
+	// hard rules verbatim because Tier C models reliably honor explicit
+	// rules and unreliably honor "remember to" guidance. Same template
+	// shape as the original prompt — the only real change vs. pre-#502
+	// is the added "TIMELINE COVERAGE" requirement that closes the
+	// blank-screen failure mode the 2026-06-13 session surfaced.
 	// %d=width %d=height %g=duration %s=audio-note %s=style-note %g=duration %d=width %d=height.
-	hyperframesComposeSystemPrompt = `You design short HTML video compositions for the HyperFrames renderer (Chromium + GSAP). You will be given a DESCRIPTION of the video to make.
+	hyperframesComposeSystemPromptTierC = `You design short HTML video compositions for the HyperFrames renderer (Chromium + GSAP). You will be given a DESCRIPTION of the video to make.
 
 The canvas is EXACTLY %d×%d pixels and the video is %g seconds long. Animate with GSAP into a single paused timeline variable named ` + "`tl`" + ` (already declared for you — just add tweens to it).%s%s
 
@@ -67,10 +80,32 @@ Respond with EXACTLY these three sections in THIS ORDER and NOTHING else. Put ea
 
 Hard rules (the render fails if you break them):
 - Every visible, timed element MUST have class="clip" and the attributes data-start, data-duration, data-track-index (integers; data-start+data-duration must stay within 0..%g). Give each element a unique id you reference from the timeline.
+- TIMELINE COVERAGE: the union of every class="clip" element's [data-start, data-start+data-duration) interval MUST cover the ENTIRE [0, %g) range without gaps. The first element starts at data-start="0". If you don't have a foreground element to fill a span, add a permanent background element (e.g. a solid-color full-canvas div with data-start="0" data-duration="%g") so the rendered video is never blank. The body's reset CSS sets background:#000; any gap shows up as a visible black run in the final MP4 (and av.validate flags it).
 - Position elements with absolute CSS inside the %d×%d canvas; use large, legible type (this is video, not a web page).
 - Keep STYLES brief — a handful of rules, plain colors and simple gradients; do NOT write long or elaborate CSS (it can truncate the response).
 - DETERMINISTIC ONLY: no Date.now(), no Math.random(), no network/fetch, no external images or fonts. Use solid colors, simple CSS gradients, shapes, and text.
 - Do NOT emit <html>, <head>, <body>, <style> tags, the root div, the GSAP <script>, or the window.__timelines line — those are added for you. Only the three marked sections above.`
+
+	// hyperframesComposeSystemPromptTierAB is the Tier A/B (frontier /
+	// mid-tier hosted model) system prompt. Leaner: the model is trusted
+	// to honor concise instructions and to fetch the linked best-practices
+	// guide when designing more sophisticated compositions. The hard
+	// contract rules are the same as Tier C (any model that breaks them
+	// makes the render fail caller_fixable regardless of capability).
+	// %d=width %d=height %g=duration %s=audio-note %s=style-note %g=duration %d=width %d=height %s=best-practices-url.
+	hyperframesComposeSystemPromptTierAB = `You design short HTML video compositions for the HyperFrames renderer (Chromium + GSAP). You will be given a DESCRIPTION of the video to make.
+
+The canvas is %d×%d pixels and the video is %g seconds long. Animate with GSAP into a single paused timeline named ` + "`tl`" + ` (declared for you — just add tweens).%s%s
+
+Respond with three marker-delimited sections in order: ===BODY===, ===TIMELINE===, ===STYLES=== (no JSON, no fences, no escaping). Finish BODY and TIMELINE before STYLES.
+
+Hard contract (the render fails if you break it):
+- Every timed element has class="clip" and integer data-start, data-duration, data-track-index attributes; data-start+data-duration must stay within 0..%g.
+- Timeline coverage: the union of every clip's [data-start, data-start+data-duration) MUST cover [0, %g) without gaps. Use a permanent background element at data-start="0" data-duration="%g" if your foreground has gaps — otherwise the rendered MP4 has visible black runs.
+- Absolute positioning inside the %d×%d canvas. No external resources (fonts, images, fetch, Date.now, Math.random).
+- Do NOT emit <html>/<head>/<body>/<style>, the root div, the GSAP <script>, or the window.__timelines line — those are scaffolding the pack adds.
+
+For richer guidance on visual hierarchy, pacing, type-on-screen rules, color choices, and the GSAP transition patterns that play well with HyperFrames, see the best-practices guide at %s.`
 
 	composeSecStyles   = "===STYLES==="
 	composeSecBody     = "===BODY==="
@@ -241,8 +276,7 @@ func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 		if s := strings.TrimSpace(in.Style); s != "" {
 			styleNote = " Visual style: " + s + "."
 		}
-		system := fmt.Sprintf(hyperframesComposeSystemPrompt,
-			preset.Width, preset.Height, duration, audioNote, styleNote, duration, preset.Width, preset.Height)
+		system := composeSystemPromptFor(in.Model, preset.Width, preset.Height, duration, audioNote, styleNote)
 
 		ec.Report(10, fmt.Sprintf("composing a %dx%d video", preset.Width, preset.Height))
 		mt := maxTokens
@@ -269,6 +303,30 @@ func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 		if strings.TrimSpace(spec.Body) == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
 				Message: "the model returned no visible elements (empty body) — give a richer description or a different model"}
+		}
+
+		// Timeline-coverage check. A composition whose class="clip"
+		// elements don't span the full [0, duration) renders as a
+		// MP4 with visible black runs (the body's reset background is
+		// #000). av.validate flags the result but the operator has
+		// already paid for the render + audio. Catching the gap here
+		// at compose-time costs only the LLM retry and keeps the chain
+		// fail-loud rather than fail-late. Issue surfaced 2026-06-13;
+		// reported as a 1 black run ≥2s warn against an 8s test video.
+		//
+		// Threshold: min(2.0s, duration*0.05). For a 60s video that's
+		// 2.0s; for an 8s video it's 0.4s; for a 720s video it's 2.0s.
+		// Below the threshold is "visual transition tolerance"; above
+		// it's a real failure mode worth surfacing.
+		allowedGap := 2.0
+		if v := duration * 0.05; v < allowedGap {
+			allowedGap = v
+		}
+		if hasGap, gapStart, gapEnd := composeCoverageGap(spec.Body, duration, allowedGap); hasGap {
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+				Message: fmt.Sprintf(
+					"composition has a %.1fs–%.1fs blank-screen gap (no class=\"clip\" element covers that range) in a %gs video; the rendered MP4 would show %.1fs of black there. Add a permanent background element (e.g. a solid-color full-canvas div with data-start=\"0\" data-duration=\"%g\") or extend existing element durations to cover the timeline.",
+					gapStart, gapEnd, duration, gapEnd-gapStart, duration)}
 		}
 
 		durationSource := "timeline"
@@ -416,6 +474,111 @@ func assembleComposition(w, h int, duration float64, audioURL string, spec compo
 </html>
 `, spec.Timeline)
 	return b.String()
+}
+
+// composeSystemPromptFor picks the system prompt template appropriate to
+// the caller-supplied model's tier (per the existing llmcontext budget
+// registry). Tier C → compact, constraint-heavy verbatim rules + an
+// inline TIMELINE COVERAGE warning (issue #498's blank-run failure mode
+// closed for that tier the same way #498 closed silent-truncation:
+// loud, explicit, rules-as-success-criteria). Tier A/B → leaner prompt
+// that trusts the model to honor the contract and references the
+// best-practices guide for richer composition design.
+//
+// The contract rules (canvas size, deterministic-only, timeline coverage)
+// are identical across tiers — any model that breaks them makes the
+// render fail caller_fixable. What differs is the depth of guidance.
+func composeSystemPromptFor(model string, w, h int, duration float64, audioNote, styleNote string) string {
+	tier := llmcontext.BudgetFor(model).Tier
+	if tier == llmcontext.TierA || tier == llmcontext.TierB {
+		return fmt.Sprintf(hyperframesComposeSystemPromptTierAB,
+			w, h, duration, audioNote, styleNote,
+			duration, duration, duration,
+			w, h, hyperframesBestPracticesURL)
+	}
+	// TierC + unknown-tier fallback both use the constraint-heavy template.
+	return fmt.Sprintf(hyperframesComposeSystemPromptTierC,
+		w, h, duration, audioNote, styleNote,
+		duration, duration, duration,
+		w, h)
+}
+
+// composeClipAttrRE captures the data-start and data-duration values on
+// every class="clip" element in the body. Matches attribute pairs
+// regardless of order within the element; matches both quoted and
+// unquoted attribute values, and tolerates whitespace around `=`.
+var composeClipAttrRE = regexp.MustCompile(
+	`class\s*=\s*"clip"[^>]*?data-start\s*=\s*"([0-9.]+)"[^>]*?data-duration\s*=\s*"([0-9.]+)"|` +
+		`class\s*=\s*"clip"[^>]*?data-duration\s*=\s*"([0-9.]+)"[^>]*?data-start\s*=\s*"([0-9.]+)"`)
+
+// composeCoverageGap inspects the body for every class="clip" element's
+// [data-start, data-start+data-duration) interval, computes their union,
+// and returns (true, gapStart, gapEnd) if any contiguous gap longer than
+// allowedGap seconds exists within [0, duration). Returns (false, 0, 0)
+// when the timeline is fully covered.
+//
+// The check is conservative — it operates on the raw HTML and doesn't
+// account for GSAP opacity / transform tweens that could make an
+// "active" element invisible. Those edge cases are covered by the
+// best-practices guide; this check closes the blunt failure mode where
+// the model emits a clip with data-start="0" data-duration="2" and the
+// remaining timeline is empty.
+//
+// The empty-body case (no class="clip" elements) returns gap=duration
+// so the handler can surface it via the existing empty-body check first.
+func composeCoverageGap(body string, duration, allowedGap float64) (bool, float64, float64) {
+	matches := composeClipAttrRE.FindAllStringSubmatch(body, -1)
+	if len(matches) == 0 {
+		return false, 0, 0 // empty body handled separately
+	}
+	type interval struct{ start, end float64 }
+	intervals := make([]interval, 0, len(matches))
+	for _, m := range matches {
+		// The regex has two alternations; pick whichever capture group fired.
+		var startStr, durStr string
+		switch {
+		case m[1] != "" && m[2] != "":
+			startStr, durStr = m[1], m[2]
+		case m[3] != "" && m[4] != "":
+			startStr, durStr = m[4], m[3]
+		default:
+			continue
+		}
+		start, err1 := strconv.ParseFloat(startStr, 64)
+		dur, err2 := strconv.ParseFloat(durStr, 64)
+		if err1 != nil || err2 != nil || dur <= 0 {
+			continue
+		}
+		end := start + dur
+		if end > duration {
+			end = duration
+		}
+		if start < 0 {
+			start = 0
+		}
+		if start >= duration {
+			continue
+		}
+		intervals = append(intervals, interval{start, end})
+	}
+	if len(intervals) == 0 {
+		return false, 0, 0
+	}
+	sort.Slice(intervals, func(i, j int) bool { return intervals[i].start < intervals[j].start })
+	// Walk merged intervals tracking the cursor as the "covered up to" point.
+	cursor := 0.0
+	for _, iv := range intervals {
+		if iv.start-cursor > allowedGap {
+			return true, cursor, iv.start
+		}
+		if iv.end > cursor {
+			cursor = iv.end
+		}
+	}
+	if duration-cursor > allowedGap {
+		return true, cursor, duration
+	}
+	return false, 0, 0
 }
 
 // composeEngagementBand picks the duration-band-appropriate engagement

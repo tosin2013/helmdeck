@@ -16,7 +16,8 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
-_(no unreleased changes)_
+### Fixed
+- `podcast.generate`'s script parser now accepts a bare single JSON object (`{"speaker":"...","text":"..."}`) as a valid one-turn script, not just a `[...]` array. Closes a Tier C failure mode found empirically 2026-06-14 running `openai/gpt-oss-120b:free` through the new `builtin.scaffolded-narrated-video` pipeline — the model emitted one object instead of an array (semantically a valid one-turn script, just missing the array wrapping), and the parser returned `no JSON array found in response`. Three new sub-tests cover the bare-object fallback (raw / with prose preamble / fenced in `` ```json `` ). No behavior change for the array path — existing tests pass unchanged.
 
 ## [0.28.0] - 2026-06-14
 

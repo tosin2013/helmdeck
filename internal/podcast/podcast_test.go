@@ -161,6 +161,51 @@ func TestParseScriptJSON(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	})
+
+	t.Run("bare single object → one-turn script (Tier C fallback)", func(t *testing.T) {
+		// Empirically found 2026-06-14: gpt-oss-120b:free sometimes
+		// emits ONE bare object instead of [{...}] when the brief
+		// maps to a single-narrator concept. Semantically a one-turn
+		// script IS valid; the missing array wrapping was a parser
+		// gap, not a content gap.
+		raw := `{"speaker":"Host","text":"Kernel rootkits. They're the boogeyman of cybersecurity..."}`
+		turns, err := parseScriptJSON(raw)
+		if err != nil {
+			t.Fatalf("expected single-object fallback to succeed, got %v", err)
+		}
+		if len(turns) != 1 {
+			t.Fatalf("expected 1 turn, got %d", len(turns))
+		}
+		if turns[0].Speaker != "Host" {
+			t.Errorf("speaker = %q, want Host", turns[0].Speaker)
+		}
+		if !contains(turns[0].Text, "Kernel rootkits") {
+			t.Errorf("text didn't survive parse: %q", turns[0].Text)
+		}
+	})
+
+	t.Run("bare single object with preamble (Tier C fallback)", func(t *testing.T) {
+		// Tier C variation: prose preamble then a bare object.
+		raw := "Here's the script: " + `{"speaker":"Narrator","text":"Today we explore eBPF observability."}`
+		turns, err := parseScriptJSON(raw)
+		if err != nil {
+			t.Fatalf("expected preamble + bare-object fallback to succeed, got %v", err)
+		}
+		if len(turns) != 1 || turns[0].Speaker != "Narrator" {
+			t.Errorf("parsed = %+v", turns)
+		}
+	})
+
+	t.Run("fenced single object (Tier C fallback)", func(t *testing.T) {
+		raw := "```json\n" + `{"speaker":"Host","text":"hi"}` + "\n```"
+		turns, err := parseScriptJSON(raw)
+		if err != nil {
+			t.Fatalf("expected fenced bare-object fallback, got %v", err)
+		}
+		if len(turns) != 1 || turns[0].Text != "hi" {
+			t.Errorf("parsed = %+v", turns)
+		}
+	})
 }
 
 func TestCoverPromptForScript(t *testing.T) {

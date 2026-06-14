@@ -115,8 +115,14 @@ func GenerateScript(
 	return turns, nil
 }
 
-// parseScriptJSON decodes the model's response into []Turn. Tolerates
-// a leading "```json\n" / trailing "\n```" fence.
+// parseScriptJSON decodes the model's response into []Turn. Tolerates:
+//   - a leading "```json\n" / trailing "\n```" fence
+//   - a leading/trailing prose preamble that's followed by a JSON array
+//   - a bare single object (one-turn script wrapped to []Turn{turn})
+//     — Tier C models (gpt-oss-120b:free, gemma) sometimes emit ONE
+//     object instead of an array when the description maps to a short
+//     single-narrator brief. Semantically a one-turn script IS valid;
+//     only the array wrapping is missing.
 func parseScriptJSON(raw string) ([]Turn, error) {
 	clean := strings.TrimSpace(raw)
 	clean = strings.TrimPrefix(clean, "```json")
@@ -128,16 +134,30 @@ func parseScriptJSON(raw string) ([]Turn, error) {
 	if err := json.Unmarshal([]byte(clean), &turns); err == nil {
 		return turns, nil
 	}
-	// Fallback: find the first balanced [ ... ] block.
-	start := strings.Index(clean, "[")
-	end := strings.LastIndex(clean, "]")
-	if start < 0 || end <= start {
-		return nil, errors.New("no JSON array found in response")
+	// Fallback A: find the first balanced [ ... ] block.
+	if start := strings.Index(clean, "["); start >= 0 {
+		if end := strings.LastIndex(clean, "]"); end > start {
+			if err := json.Unmarshal([]byte(clean[start:end+1]), &turns); err == nil {
+				return turns, nil
+			}
+		}
 	}
-	if err := json.Unmarshal([]byte(clean[start:end+1]), &turns); err != nil {
-		return nil, fmt.Errorf("malformed JSON: %w", err)
+	// Fallback B: bare single object → one-turn script. Closes a Tier
+	// C failure mode where the model emits {"speaker":"...","text":"..."}
+	// instead of [{"speaker":"...","text":"..."}]. Found empirically
+	// 2026-06-14 running gpt-oss-120b:free against a short-form
+	// concept-animator prompt — the single-object response is
+	// semantically a valid one-turn script, just missing the array
+	// brackets.
+	if start := strings.Index(clean, "{"); start >= 0 {
+		if end := strings.LastIndex(clean, "}"); end > start {
+			var single Turn
+			if err := json.Unmarshal([]byte(clean[start:end+1]), &single); err == nil {
+				return []Turn{single}, nil
+			}
+		}
 	}
-	return turns, nil
+	return nil, errors.New("no JSON array (or single object) found in response")
 }
 
 func truncateForErr(s string, max int) string {

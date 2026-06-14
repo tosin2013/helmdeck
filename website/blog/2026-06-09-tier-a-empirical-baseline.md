@@ -6,7 +6,7 @@ tags: [agent-architecture, weak-models, field-report, reproduction]
 description: We ran the same prompt on Claude Sonnet 4.6 that we ran on gpt-oss-120b:free. Tier A handles parallel tool use, 8-platform fanout, the InfoQ 6-criterion fit check, and the "one clarifying question" rule. It also skips the mandatory artifact.put step the same way Tier C does. The deposit-step failure is tier-invariant.
 image: /img/social-card.png
 date: 2026-06-09
-draft: true
+draft: false
 ---
 
 ## Hook

@@ -6,7 +6,7 @@ tags: [friction, agent-architecture]
 description: A built-in helmdeck pipeline produced clean blog articles for an external agent — but the output shape was internal-docs ([1] citations, no CTAs), not blog. Notes on what the planner should compose instead.
 image: /img/social-card.png
 date: 2026-06-02
-draft: true
+draft: false
 ---
 
 ## Hook

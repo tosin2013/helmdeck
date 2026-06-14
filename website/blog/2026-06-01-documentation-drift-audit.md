@@ -6,7 +6,7 @@ tags: [field-report, friction]
 description: A full documentation audit after v0.22.0 found 14 stale pack counts, 4 phantom pipelines, 7 undocumented packs, a sitemap on the wrong domain, and ADRs still marked "Proposed" for shipped work. The fix was mechanical; the lesson is about cadence.
 image: /img/social-card.png
 date: 2026-06-01
-draft: true
+draft: false
 ---
 
 ## Hook

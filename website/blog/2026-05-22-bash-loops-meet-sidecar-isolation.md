@@ -6,7 +6,7 @@ tags: [agent-architecture, security]
 description: Most autonomous coding setups today run an agent loop and call out to a shell. The shell is the host's shell, or a Docker container the agent itself manages. The agent ends up owning isolation, credentials, and observability — three jobs that have nothing to do with the loop. Here's what changes when you separate the loop from the substrate.
 image: /img/social-card.png
 date: 2026-05-22
-draft: true
+draft: false
 ---
 
 ## Hook

@@ -6,7 +6,7 @@ tags: [field-report, agent-architecture, docs, epistemic-discipline]
 description: "I wrote a best-practices guide for helmdeck's HyperFrames integration. A maintainer asked one question — 'where's this sourced from?' — and the answer turned out to be 'I made it up.' Here's what we did about it, and the broader lesson for anyone writing agent reference docs."
 image: /img/social-card.png
 date: 2026-06-14
-draft: true
+draft: false
 ---
 
 A few days ago helmdeck shipped a hardening pass on its `hyperframes.compose` pack — the one that asks an LLM to write the HTML/CSS/JS for an animated video composition, then hands the result to a renderer. Part of that pass was a brand new "best practices" guide at `docs/reference/packs/hyperframes/best-practices.md`. The pack's tier-aware system prompt referenced it from the prompt itself: "for richer guidance on visual hierarchy, pacing, type-on-screen rules, color choices, and the GSAP transition patterns that play well with HyperFrames, see the best-practices guide at &lt;URL&gt;."

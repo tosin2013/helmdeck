@@ -3,6 +3,19 @@
   "count": 8,
   "posts": [
     {
+      "slug": "upstream-spec-drift",
+      "title": "When agent-instruction docs drift from upstream spec",
+      "description": "I wrote a best-practices guide for helmdeck's HyperFrames integration. A maintainer asked one question — 'where's this sourced from?' — and the answer turned out to be 'I made it up.' Here's what we did about it, and the broader lesson for anyone writing agent reference docs.",
+      "date": "2026-06-14",
+      "tags": [
+        "field-report",
+        "agent-architecture",
+        "docs",
+        "epistemic-discipline"
+      ],
+      "permalink": "/blog/upstream-spec-drift"
+    },
+    {
       "slug": "huggingface-as-a-first-class-platform",
       "title": "HuggingFace isn't just another LLM router — it's a platform helmdeck barely uses",
       "description": "PR #489 added HF Inference Providers as alternative routing. The bigger opportunity is everything else HF offers — datasets, embeddings, Spaces, tokenizers — that helmdeck currently ignores. Epic #490 frames the strategic direction.",
@@ -54,6 +67,19 @@
       "permalink": "/blog/the-audit-callback-pattern"
     },
     {
+      "slug": "tier-a-empirical-baseline",
+      "title": "Tier A is structurally better. The deposit-step failure is universal.",
+      "description": "We ran the same prompt on Claude Sonnet 4.6 that we ran on gpt-oss-120b:free. Tier A handles parallel tool use, 8-platform fanout, the InfoQ 6-criterion fit check, and the \"one clarifying question\" rule. It also skips the mandatory artifact.put step the same way Tier C does. The deposit-step failure is tier-invariant.",
+      "date": "2026-06-09",
+      "tags": [
+        "agent-architecture",
+        "weak-models",
+        "field-report",
+        "reproduction"
+      ],
+      "permalink": "/blog/tier-a-empirical-baseline"
+    },
+    {
       "slug": "cookbook-recipes-beat-tutorials",
       "title": "Recipe-style docs are dramatically underused. Here's the case for them.",
       "description": "We shipped a cookbook of intent → prompt recipes alongside our reference docs. Within 48 hours it had eclipsed the prompt-templates page as the most-linked-to doc in our reference site. The pattern is simple, the per-recipe cost is ~15 minutes, and most projects don't do it.",
@@ -76,30 +102,6 @@
         "weak-models"
       ],
       "permalink": "/blog/validation-arc-caught-its-own-first-bug"
-    },
-    {
-      "slug": "empirical-tier-context-management",
-      "title": "Free models empty-completed our 35KB tool catalog. So we tier-classified them by failure mode, not vendor spec.",
-      "description": "A live test exposed that some free LLMs return empty completions when a tool catalog exceeds their effective working set. We responded by classifying models by their observed structured-output reliability — not their advertised context windows — and compacting the catalog with explicit dispatch invariants.",
-      "date": "2026-06-01",
-      "tags": [
-        "weak-models",
-        "agent-architecture",
-        "friction"
-      ],
-      "permalink": "/blog/empirical-tier-context-management"
-    },
-    {
-      "slug": "the-render-that-pegged-1-of-8-cores",
-      "title": "The render that pegged 1 of 8 cores",
-      "description": "A pipeline render sat at 100% CPU for 25 minutes while seven cores idled. The fix wasn't a bigger box — it was teaching the runtime which packs deserve them.",
-      "date": "2026-05-30",
-      "tags": [
-        "friction",
-        "agent-architecture",
-        "field-report"
-      ],
-      "permalink": "/blog/the-render-that-pegged-1-of-8-cores"
     }
   ]
 }

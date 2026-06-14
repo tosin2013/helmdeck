@@ -6,7 +6,7 @@ tags: [friction]
 description: We shipped a CSS fix for clipped slides, wrote a headless-Chromium test that asserts no slide overflows, and blogged about it. The test had never run once — it skipped on a missing dependency every single time. When we finally wired it into CI, it caught a 39px clip in the "fixed" code.
 image: /img/social-card.png
 date: 2026-05-29
-draft: true
+draft: false
 ---
 
 Three days ago we [published a fix](/blog/a-pdf-slide-cannot-scroll) for mermaid diagrams getting clipped in PDF slide decks. The post even bragged about the test: *"there's an integration-tagged check that loads the rendered HTML in a headless Chromium and asserts no `<section>` overflows its own box."* That test had never run. Not once. And the fix it was supposed to guard still clipped tall diagrams by 39 pixels.

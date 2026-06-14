@@ -16,7 +16,9 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
-_(no unreleased changes)_
+### Added
+- `scripts/hyperframes-init.sh` and a CONTRIBUTING.md "prefer the upstream CLI over custom Go" principle, executing the first half of the architectural refinement on [#503](https://github.com/tosin2013/helmdeck/issues/503). The script wraps `hyperframes init --example=<x>` inside `helmdeck-sidecar-hyperframes` and emits a stitched composition HTML; it's the session-exec target the upcoming `hyperframes.compose` scaffold-mode change (PR 2 in the issue's plan) will call via `ec.Exec`, matching the `av-validate.sh` / `hyperframes_render.go:276` pattern. Empirically grounded: the 140+ example catalog enumerated via `hyperframes init`'s registry is the upstream-authoritative source of visual creativity — Tier C models (gpt-oss-120b:free, gemma) will only need to do content interpolation, not design invention. No caller changes yet; the script is dormant until PR 2 wires the compose handler to invoke it.
+- `helmdeck-sidecar-hyperframes` pins `HYPERFRAMES_VERSION=0.6.97` (was 0.6.7) — the upstream renamed `--template` to `--example` and added `--non-interactive` "for CI/agents" between those versions, both of which the new script depends on. Image smoke test now also asserts `hyperframes init --help` succeeds and `/usr/local/bin/hyperframes-init.sh` is executable.
 
 ## [0.27.1] - 2026-06-14
 

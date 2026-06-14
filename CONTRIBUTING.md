@@ -53,6 +53,21 @@ session executor for shelling out to in-container tools.
    using `recordingExecutor` (for `Exec`-driven packs) or stub
    `cdp.Client` (for browser packs). See `internal/packs/builtin/`
    for the patterns.
+7. **Prefer the upstream CLI over custom Go.** If the tool you're
+   integrating with has its own CLI (`marp`, `ffprobe`, `hyperframes`,
+   `whisper`, `docling`, `firecrawl`, …), shell to it from the
+   per-tool sidecar via `ec.Exec` and treat its output as
+   authoritative. The pack's Go code is a *thin shim* — input
+   adaptation, OutputSchema validation, typed-error mapping,
+   audit-callback integration. Don't reimplement what upstream does
+   correctly; don't author output the upstream's example/template
+   system already provides. The exceptions — where custom Go *is*
+   justified — are helmdeck-layer concerns (tier-aware LLM dispatch,
+   `verify_manifest` audit callbacks, schema validation, cross-pack
+   orchestration, sidecar isolation, transformation between the
+   CLI's output shape and our OutputSchema). The rule of thumb:
+   if a Go function you're about to write duplicates a CLI flag
+   or subcommand, stop and shell out instead.
 
 ### Pack types we'd love to see
 

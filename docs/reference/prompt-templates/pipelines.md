@@ -315,7 +315,22 @@ description = {{DESCRIPTION}}
 **Variables**
 - `{{DESCRIPTION}}` — the video's topic/script intent (input `description`, required).
 
-**Notes** — `podcast.generate` (narration) → `hyperframes.compose` (visuals synced to the audio) → `hyperframes.render`. Silent (no narration track) without an `elevenlabs-key`.
+**Notes** — `podcast.generate` (narration) → `hyperframes.compose` (visuals synced to the audio) → `hyperframes.render`. Silent (no narration track) without an `elevenlabs-key`. Composition HTML is authored by the LLM; works great on Tier A but can produce visually-flat output on Tier C — use `builtin.scaffolded-narrated-video` for Tier C reliability.
+
+#### `builtin.scaffolded-narrated-video` — describe a video, scaffold from an upstream example, render a narrated MP4
+
+**Template**
+```
+Use helmdeck__pipeline-run to run the builtin.scaffolded-narrated-video pipeline with inputs:
+description = {{DESCRIPTION}}
+example     = {{EXAMPLE}}
+```
+
+**Variables**
+- `{{DESCRIPTION}}` — the video's topic/script intent (input `description`, required).
+- `{{EXAMPLE}}` — upstream HyperFrames example name (input `example`, required). Common picks: `swiss-grid` (general explainer), `decision-tree` (flow diagrams), `code-snippet-dark-modern` (technical content), `kinetic-type` (typography focus), `nyt-graph` (data viz), `tiktok-follow` (social). Full registry: 140+ examples — run the pipeline with an invalid example to surface the list in the error.
+
+**Notes** — `podcast.generate` (narration) → `hyperframes.scaffold` (picks the upstream example) → `hyperframes.interpolate` (LLM rewrites visible text to fit the topic) → `hyperframes.render`. Tier-C-friendly because the LLM only does content interpolation, not HTML authoring — visual polish comes from the upstream example. Silent without an `elevenlabs-key`. For an A-roll image/video, chain `image.generate` + `hyperframes.attach_asset` between `interpolate` and `render` (the pipeline doesn't do this automatically; chain manually if needed).
 
 #### `builtin.html-video` — render a hand-authored HTML/CSS/JS composition to MP4
 

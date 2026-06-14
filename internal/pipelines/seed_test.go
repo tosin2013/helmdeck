@@ -13,8 +13,8 @@ import (
 // seed.go fails CI rather than a deployment.
 func TestBuiltins_Valid(t *testing.T) {
 	b := Builtins()
-	if len(b) != 21 {
-		t.Errorf("expected 21 starter pipelines, got %d", len(b))
+	if len(b) != 22 {
+		t.Errorf("expected 22 starter pipelines, got %d", len(b))
 	}
 	anyPack := func(_, _ string) bool { return true }
 	ids := map[string]bool{}
@@ -31,7 +31,7 @@ func TestBuiltins_Valid(t *testing.T) {
 		}
 	}
 	// The two the user explicitly asked for must exist.
-	for _, want := range []string{"builtin.grounded-deck", "builtin.brief-rewrite-blog", "builtin.repo-presentation", "builtin.prompt-video", "builtin.prompt-narrated-video"} {
+	for _, want := range []string{"builtin.grounded-deck", "builtin.brief-rewrite-blog", "builtin.repo-presentation", "builtin.prompt-video", "builtin.prompt-narrated-video", "builtin.scaffolded-narrated-video"} {
 		if !ids[want] {
 			t.Errorf("missing expected starter %q", want)
 		}
@@ -94,16 +94,17 @@ func TestNarratePipelines_DoNotHardcodeAllowSilentOutput(t *testing.T) {
 // the caller had no surface area to fix the mismatch.
 func TestVideoPipelines_DoNotHardcodeAspectRatio(t *testing.T) {
 	mustNotHardcode := map[string]bool{
-		"builtin.html-video":            true,
-		"builtin.prompt-video":          true,
-		"builtin.prompt-narrated-video": true,
+		"builtin.html-video":                true,
+		"builtin.prompt-video":              true,
+		"builtin.prompt-narrated-video":     true,
+		"builtin.scaffolded-narrated-video": true,
 	}
 	for _, p := range Builtins() {
 		if !mustNotHardcode[p.ID] {
 			continue
 		}
 		for _, s := range p.Steps {
-			if s.Pack != "hyperframes.render" && s.Pack != "hyperframes.compose" {
+			if s.Pack != "hyperframes.render" && s.Pack != "hyperframes.compose" && s.Pack != "hyperframes.scaffold" {
 				continue
 			}
 			body := string(s.Input)

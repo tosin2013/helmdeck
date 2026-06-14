@@ -73,6 +73,15 @@ var builtinPackStubs = map[string]stubSpec{
 	"podcast.generate":   {output: `{"audio_url":"https://example.com/a.mp3","duration_s":60,"artifact_key":"%KEY%"}`, artifact: true, artName: "podcast.mp3", contentType: "audio/mpeg", content: []byte("ID3 stub")},
 	"blog.publish":       {output: `{"artifact_key":"%KEY%","format":"markdown"}`, artifact: true, artName: "post.md", contentType: "text/markdown", content: []byte("# Post")},
 	"hyperframes.render": {output: `{"artifact_key":"%KEY%","format":"mp4"}`, artifact: true, artName: "video.mp4", contentType: "video/mp4", content: []byte("\x00\x00\x00\x18ftypmp42 stub")},
+	// hyperframes.scaffold + hyperframes.interpolate produce project_artifact_key
+	// that downstream steps in builtin.scaffolded-narrated-video consume. The
+	// scaffold step writes a stub tarball (gzip header + minimal payload) so
+	// the engine surfaces it as an artifact like the real pack would; the
+	// interpolate step does the same. The render step then consumes the
+	// interpolate output's project_artifact_key — the existing hyperframes.render
+	// stub already handles the artifact-key roundtrip.
+	"hyperframes.scaffold":    {output: `{"project_artifact_key":"%KEY%","example_used":"swiss-grid","cli_preset_used":"landscape","width":1920,"height":1080,"editable_slots":{"compositions":[]}}`, artifact: true, artName: "scaffold.tar.gz", contentType: "application/gzip", content: []byte("\x1f\x8b\x08\x00stub")},
+	"hyperframes.interpolate": {output: `{"project_artifact_key":"%KEY%","original_project_artifact_key":"prev","files_rewritten":[],"model_used":"openrouter/auto"}`, artifact: true, artName: "interpolated.tar.gz", contentType: "application/gzip", content: []byte("\x1f\x8b\x08\x00stub")},
 	// Coding pipelines (ADR 046). github.get_issue feeds title+body into
 	// swe.solve; swe.solve is the terminal artifact producer (trajectory
 	// JSON) for the four builtin.{issue-to-pr,repo-solve-*} pipelines.
@@ -128,6 +137,7 @@ const builtinRunInputs = `{
   "title": "My Title",
   "composition_html": "<html><body>hi</body></html>",
   "description": "a 30-second explainer about kubernetes operators",
+  "example": "swiss-grid",
   "repo": "example/repo",
   "issue_number": 42,
   "task": "rename the constant Foo to Bar",

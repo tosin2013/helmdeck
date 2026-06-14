@@ -259,7 +259,7 @@ func enumerateScaffoldedSlots(tarballBytes []byte) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gzip open: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 
 	compositions := []any{}

@@ -227,7 +227,9 @@ func TestHyperframesScaffold_VerticalShorts_MapsToPortraitPreset(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 	var out map[string]any
-	json.Unmarshal(raw, &out)
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
 	if out["cli_preset_used"] != "portrait" {
 		t.Errorf("expected cli_preset_used=portrait, got: %v", out["cli_preset_used"])
 	}
@@ -241,7 +243,9 @@ func TestHyperframesScaffold_4kSquare_MapsToSquare4kPreset(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 	var out map[string]any
-	json.Unmarshal(raw, &out)
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
 	if out["cli_preset_used"] != "square-4k" {
 		t.Errorf("expected cli_preset_used=square-4k, got: %v", out["cli_preset_used"])
 	}
@@ -349,8 +353,12 @@ func TestEnumerateScaffoldedSlots_LeadingDotSlash_Normalized(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tw.Close()
-	gz.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tw.Close: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gz.Close: %v", err)
+	}
 	slots, err := enumerateScaffoldedSlots(buf.Bytes())
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
@@ -366,11 +374,19 @@ func TestEnumerateScaffoldedSlots_SkipsDirectoryEntries(t *testing.T) {
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	// Directory entry (no content)
-	tw.WriteHeader(&tar.Header{Name: "compositions/", Mode: 0755, Typeflag: tar.TypeDir})
+	if err := tw.WriteHeader(&tar.Header{Name: "compositions/", Mode: 0755, Typeflag: tar.TypeDir}); err != nil {
+		t.Fatalf("dir header: %v", err)
+	}
 	// Real file entry
-	tw.WriteHeader(&tar.Header{Name: "compositions/intro.html", Mode: 0644, Size: 0, Typeflag: tar.TypeReg})
-	tw.Close()
-	gz.Close()
+	if err := tw.WriteHeader(&tar.Header{Name: "compositions/intro.html", Mode: 0644, Size: 0, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatalf("file header: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tw.Close: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gz.Close: %v", err)
+	}
 	slots, err := enumerateScaffoldedSlots(buf.Bytes())
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
@@ -392,7 +408,9 @@ func TestHyperframesScaffold_ArtifactUploadedWithExampleName(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 	var out map[string]any
-	json.Unmarshal(raw, &out)
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
 	key, _ := out["project_artifact_key"].(string)
 	if !strings.Contains(key, "code-snippet-monokai") {
 		t.Errorf("expected artifact key to include example name, got: %s", key)

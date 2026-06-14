@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -119,10 +120,14 @@ func GenerateScript(
 //   - a leading "```json\n" / trailing "\n```" fence
 //   - a leading/trailing prose preamble that's followed by a JSON array
 //   - a bare single object (one-turn script wrapped to []Turn{turn})
-//     — Tier C models (gpt-oss-120b:free, gemma) sometimes emit ONE
-//     object instead of an array when the description maps to a short
-//     single-narrator brief. Semantically a one-turn script IS valid;
-//     only the array wrapping is missing.
+//   - multiple bare objects without array brackets (Tier C models
+//     sometimes emit JSONL / whitespace-separated / comma-separated
+//     {...}{...}{...} instead of [{...},{...},{...}])
+//
+// The escalation is strict-array → array-in-preamble → single-object
+// → multi-object normalize-and-wrap. Each fallback only fires when the
+// stricter forms have failed, so well-formed array responses still
+// take the fast path.
 func parseScriptJSON(raw string) ([]Turn, error) {
 	clean := strings.TrimSpace(raw)
 	clean = strings.TrimPrefix(clean, "```json")
@@ -157,8 +162,33 @@ func parseScriptJSON(raw string) ([]Turn, error) {
 			}
 		}
 	}
-	return nil, errors.New("no JSON array (or single object) found in response")
+	// Fallback C: multiple bare objects in sequence without array
+	// brackets — JSONL, whitespace-separated, or comma-separated.
+	// Found empirically 2026-06-14 (the second eBPF retest after the
+	// Fallback B fix): gpt-oss-120b:free emitted ~10 sequential
+	// `{"speaker":"Host","text":"..."}` objects instead of one array.
+	// Normalize the boundary `}<whitespace-and-or-comma>{` to `},{`
+	// and wrap in [] so the array parse succeeds.
+	if start := strings.Index(clean, "{"); start >= 0 {
+		if end := strings.LastIndex(clean, "}"); end > start {
+			body := clean[start : end+1]
+			norm := objectSeparatorRE.ReplaceAllString(body, "},{")
+			wrapped := "[" + norm + "]"
+			if err := json.Unmarshal([]byte(wrapped), &turns); err == nil && len(turns) > 0 {
+				return turns, nil
+			}
+		}
+	}
+	return nil, errors.New("no JSON array, single object, or sequence of objects found in response")
 }
+
+// objectSeparatorRE matches the boundary `}<whitespace and optional comma>{`
+// between sibling JSON objects emitted in sequence without array brackets
+// — Tier C models sometimes do this when generating multi-turn scripts.
+// Inside string values the chars between }" and "{ include the closing
+// quote, so the `}\s*,?\s*{` pattern can't false-match across a string
+// boundary.
+var objectSeparatorRE = regexp.MustCompile(`\}\s*,?\s*\{`)
 
 func truncateForErr(s string, max int) string {
 	if len(s) <= max {

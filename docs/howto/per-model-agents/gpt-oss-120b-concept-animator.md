@@ -117,6 +117,15 @@ the operator requests "max length", scale to the 12-minute cap.
   — it's the LLM that generates the creative HTML/CSS/JS composition
   from the description. Pinning to the free model keeps the entire
   chain off the paid tier.
+- Also pass `metadata_model: "openrouter/openai/gpt-oss-120b:free"` on
+  `hyperframes.compose`. The default is `openrouter/auto` (PAID).
+  Setting it pins the engagement-metadata-generation step (per [PR
+  #500](https://github.com/tosin2013/helmdeck/pull/500)) to free tier
+  and unlocks the duration-band-aware engagement payload:
+    <60s   → short_form  (title / hook / hashtags / caption / thumbnail_prompt)
+    60-180s → mid_form   (above + social_blurb)
+    ≥180s  → long_form   (above + description / chapters / tags / hook_30s / category)
+  The compose pack picks the shape from `duration_seconds` automatically.
 - **ALWAYS pass `duration_seconds` to `hyperframes.compose`, set to the
   `duration_s` value returned by `podcast.generate`** (round up to the
   nearest whole second). The pack rejects `audio_url` without an explicit
@@ -151,6 +160,11 @@ The response is INVALID and must NOT be reported as success when:
   returned by `podcast.generate`.
 - `helmdeck__hyperframes-compose` was called WITHOUT a `model` field OR
   with a `model` other than `openrouter/openai/gpt-oss-120b:free`.
+- `helmdeck__hyperframes-compose` was called without
+  `metadata_model: "openrouter/openai/gpt-oss-120b:free"`. The default
+  routes engagement metadata to PAID `openrouter/auto`; explicit
+  override keeps the chain end-to-end free AND unlocks the
+  duration-band-aware engagement payload.
 - `helmdeck__hyperframes-compose` was called WITHOUT a `duration_seconds`
   field, OR with a `duration_seconds` value not matching (within ±1s)
   the `duration_s` returned by `podcast.generate`. Mismatch causes
@@ -189,6 +203,19 @@ When the chain succeeds, report:
 - Rendered MP4 `video_artifact_key`.
 - `av.validate` `all_passed` + summary of any failed/warn checks.
 - `verify_manifest` `all_present` result.
+- **Engagement metadata** from `hyperframes.compose.engagement` (the
+  duration-band-aware payload added in [PR #500](https://github.com/tosin2013/helmdeck/pull/500)).
+  At minimum surface:
+    - `engagement.format` (short_form / mid_form / long_form)
+    - `engagement.title` (proposed video title)
+    - `engagement.hashtags` (the relevance-validated list)
+    - `engagement.thumbnail_prompt` (so the operator can chain
+      `image.generate` for hero artwork if wanted)
+    - For `long_form` only: also surface `engagement.description`,
+      `engagement.chapters`, and `engagement.hook_30s` (the YouTube
+      publishing pack).
+- `engagement_artifact_key` so the operator can fetch the full JSON
+  sidecar later via `artifact.get` if they want all the fields.
 - A short note on aspect ratio chosen if the operator left it unspecified.
 
 Do not include any URL the operator did not see in a tool result.
@@ -214,7 +241,7 @@ attestation and signed module measurement — explain in depth.
 (max length)
 ```
 
-**Expected behavior**: three pack calls + one audit-callback, with each subsequent call consuming the prior call's typed output. The 60s prompt should produce `podcast.generate` with `duration_target_min` ≈ 1. The max-length prompt should produce `podcast.generate` with `duration_target_min: 12` and `hyperframes.compose` with `duration_seconds: 720`. The final `verify_manifest` must report `all_present: true`.
+**Expected behavior**: five pack calls (the chain plus the audit-callback). Each subsequent call consumes the prior call's typed output. The 60s prompt should produce `podcast.generate` with `duration_target_min` ≈ 1 and `hyperframes.compose` returning `engagement.format: "short_form"`. The max-length prompt should produce `podcast.generate` with `duration_target_min: 12`, `hyperframes.compose` with `duration_seconds: 720` and `engagement.format: "long_form"` (with chapters + description). The final `verify_manifest` must report `all_present: true`, and the operator's report must surface the engagement metadata, not just the MP4 key.
 
 If the model:
 
@@ -255,7 +282,9 @@ For the YAML's `community_traces[]` entry:
 | `hallucination_count` | Fake or paraphrased pack-result claims — count them |
 | `simplification_observed` | Did the model take a shortcut? E.g., claiming `video_artifact_key` without rendering. Booleanish |
 | `duration_handling` | "default 60s" / "max 720s" / "drift to other value" — qualitative |
-| `cost_discipline_observed` | Boolean — did the agent pin all three model fields (podcast.generate model + metadata_model + hyperframes.compose model) to the free tier? |
+| `cost_discipline_observed` | Boolean — did the agent pin all FOUR model fields (`podcast.generate` `model` + `metadata_model` + `hyperframes.compose` `model` + `metadata_model`) to the free tier? |
+| `engagement_payload_surfaced` | Boolean — did the agent's final report surface the `engagement` payload from `hyperframes.compose` (title / hashtags / thumbnail_prompt at minimum, plus chapters/description for long_form)? Per PR #500. |
+| `engagement_format_correct` | "short_form" / "mid_form" / "long_form" — confirm the band matched the actual `duration_seconds` |
 
 Aim for `decision: profile-works` when the strict invalidation rules drove the model through all 5 calls, `all_present: true` came back honestly, and `av.validate`'s findings (pass/fail/warn) were surfaced in the final report.
 

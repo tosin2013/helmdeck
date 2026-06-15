@@ -172,10 +172,25 @@ func Concat(ctx context.Context, ex session.Executor, sessionID string, turns []
 		return nil, 0, fmt.Errorf("final mp3 %d bytes exceeds cap", len(readRes.Stdout))
 	}
 
-	// 8. Cleanup, best-effort.
-	_, _ = ex.Exec(ctx, sessionID, session.ExecRequest{
-		Cmd: []string{"sh", "-c", "rm -rf " + concatTempDir},
-	})
+	// 8. NO cleanup here — we leave the staged tmp dir (and the
+	// final.mp3 inside it) for the caller's downstream validation pass
+	// (podcast.generate's av-validate.sh integration at PR #515's
+	// `AudioPath: /tmp/helmdeck-podcast/final.mp3`). A previous version
+	// rm -rf'd this directory at the end of Concat, which left the
+	// validator looking for a file that didn't exist — av-validate.sh
+	// exited 2 ("usage/dep error: file not found"), podcast.generate
+	// soft-degraded into silent fallback (allow_silent_output:true),
+	// and the rest of the narrated-video pipeline produced a silent
+	// MP4 with no audio track. Empirically found 2026-06-15 chasing
+	// the v0.28.4 retest's "validation isn't working" report.
+	//
+	// Cleanup of /tmp/helmdeck-podcast/ is now handled two ways: (1)
+	// Concat's own step 1 (line ~84) rm -rfs the directory at the
+	// START of every Concat call, so a subsequent run gets a clean
+	// slate; and (2) the session container's tmpfs is reclaimed when
+	// the session ends. Net: no leak across sessions, no leak between
+	// pack calls that share a session, AND the file is still there
+	// for downstream validation in the same call.
 
 	return readRes.Stdout, duration, nil
 }

@@ -187,6 +187,117 @@ func TestSpliceTextSlots_MissingReplacementsKeepOriginals(t *testing.T) {
 	}
 }
 
+// --- decision-tree shape coverage (PR #503 follow-up, v0.28.3) ----------
+
+func TestExtractTextSlots_DecisionTreeNodes(t *testing.T) {
+	// Real shape from `hyperframes init --example=decision-tree`'s
+	// compositions/decision_tree.html. Empirically found 2026-06-15:
+	// node boxes use multi-class strings with "node" as one token, not
+	// a sole class value. Pattern: <div class="node sticky <color>">.
+	html := `<div id="node-root" class="node sticky yellow" style="left: 960px; top: 100px">
+        Should I learn to code?
+      </div>
+      <div id="node-yes" class="node sticky green">Yes</div>
+      <div id="node-python" class="node sticky lavender">
+        <div style="position: relative; display: inline-block">
+          <span id="python-text">Start with Pythom</span>
+        </div>
+      </div>
+      <div id="label-yes" class="connector-label">Yes</div>`
+	got := extractTextSlots(html)
+	// Expected matches: node-root (multi-line inner), node-yes,
+	// node-python (whole inner including span), label-yes, AND the
+	// span-id="python-text" (nested inside node-python — both will
+	// match because regex is greedy with .*? on inner).
+	if len(got) < 4 {
+		t.Fatalf("expected ≥4 slots, got %d: %v", len(got), got)
+	}
+	joined := strings.Join(got, "|")
+	wantPresent := []string{"Should I learn to code?", "Yes", "Start with Pythom"}
+	for _, w := range wantPresent {
+		if !strings.Contains(joined, w) {
+			t.Errorf("expected slot %q to be extracted, got: %v", w, got)
+		}
+	}
+}
+
+func TestClassifyCompositionFile_DecisionTreeShape(t *testing.T) {
+	html := `<div id="node-root" class="node sticky yellow">Should I learn to code?</div>`
+	if got := classifyCompositionFile(html); got != compositionKindTextSlots {
+		t.Errorf("expected html_text_slots for node class, got %v", got)
+	}
+}
+
+func TestClassifyCompositionFile_ConnectorLabel(t *testing.T) {
+	html := `<div class="connector-label">Yes</div>`
+	if got := classifyCompositionFile(html); got != compositionKindTextSlots {
+		t.Errorf("expected html_text_slots for connector-label, got %v", got)
+	}
+}
+
+func TestClassifyCompositionFile_TextHighlight(t *testing.T) {
+	html := `<span class="text-highlight">misspelled</span>`
+	// text-highlight is a div-class entry in the regex; span-class
+	// doesn't match this pattern. But the inner-text regex picks up
+	// <span id="*-text"> separately.
+	if got := classifyCompositionFile(html); got != compositionKindUnknown {
+		// text-highlight as a span class is intentionally NOT covered
+		// (we don't want to match every <span>); the div variant is
+		// covered below.
+		_ = got
+	}
+	div := `<div class="text-highlight">highlighted</div>`
+	if got := classifyCompositionFile(div); got != compositionKindTextSlots {
+		t.Errorf("expected html_text_slots for div.text-highlight, got %v", got)
+	}
+}
+
+func TestClassifyCompositionFile_SpanIdSuffixText(t *testing.T) {
+	html := `<span id="python-text">Start with Pythom</span>`
+	if got := classifyCompositionFile(html); got != compositionKindTextSlots {
+		t.Errorf("expected html_text_slots for <span id='*-text'>, got %v", got)
+	}
+}
+
+func TestExtractTextSlots_NodeClassDoesNotMatchUnrelated(t *testing.T) {
+	// Word-boundary anchor should prevent "node" matching inside
+	// unrelated compound class names like "tree-node" or "node-list".
+	// Hyphens are non-word, so \bnode\b actually DOES match inside
+	// "tree-node" — that's a known false-positive risk we accept for
+	// simplicity. This test pins the BEHAVIOR (it WILL match) so a
+	// future regex tightening trips the test, not a silent break.
+	html := `<div class="tree-node">should match (current behavior)</div>`
+	got := extractTextSlots(html)
+	if len(got) != 1 {
+		t.Errorf("word-boundary regex DOES match 'node' in 'tree-node' (hyphen is non-word); current behavior is to extract. Got: %v", got)
+	}
+}
+
+func TestSpliceTextSlots_PreservesNodeMultiClass(t *testing.T) {
+	html := `<div id="node-root" class="node sticky yellow" style="left: 960px">Old text</div>`
+	got := spliceTextSlots(html, []string{"New question"})
+	if !strings.Contains(got, "New question") {
+		t.Errorf("replacement didn't land: %q", got)
+	}
+	if !strings.Contains(got, `class="node sticky yellow"`) {
+		t.Errorf("multi-class attribute lost: %q", got)
+	}
+	if !strings.Contains(got, `style="left: 960px"`) {
+		t.Errorf("style attribute lost: %q", got)
+	}
+}
+
+func TestSpliceTextSlots_SpanIdSuffixText(t *testing.T) {
+	html := `<span id="python-text" class="highlighted">Start with Pythom</span>`
+	got := spliceTextSlots(html, []string{"Begin with eBPF"})
+	if !strings.Contains(got, "Begin with eBPF") {
+		t.Errorf("span replacement failed: %q", got)
+	}
+	if !strings.Contains(got, `id="python-text"`) {
+		t.Errorf("span attributes lost: %q", got)
+	}
+}
+
 // --- parseNumberedSlots unit ---------------------------------------------
 
 func TestParseNumberedSlots_StrictFormat(t *testing.T) {

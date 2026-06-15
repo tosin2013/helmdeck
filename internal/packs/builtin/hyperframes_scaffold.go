@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -47,17 +48,41 @@ const (
 	// multiple invocations don't accumulate temp files; the script's
 	// upstream cleanup handles removal between calls.
 	hyperframesScaffoldOutputPath = "/tmp/helmdeck-hf-scaffold.tar.gz"
+	// hyperframesScaffoldAudioPath is where the audio_url's bytes are
+	// staged in the sidecar before being passed to `hyperframes init
+	// --audio=<path>`. Same convention as the project tarball path.
+	hyperframesScaffoldAudioPath = "/tmp/helmdeck-hf-audio.bin"
 	// hyperframesScaffoldMaxEntries caps the tar enumeration to
 	// protect against pathological archives. Real hyperframes
 	// scaffolds are 10-30 files; 1024 is comfortable headroom without
 	// allowing a runaway archive to lock up the manifest pass.
 	hyperframesScaffoldMaxEntries = 1024
+	// hyperframesScaffoldMaxAudioSize caps the audio_url fetch at
+	// 50 MiB. Matches hyperframes.attach_asset's asset cap so the two
+	// media-attaching packs behave consistently. A typical 12-minute
+	// MP3 at 128 kbps is ~12 MiB, so the cap covers the upper bound of
+	// the pack's documented short-form scope with headroom.
+	hyperframesScaffoldMaxAudioSize = 50 << 20
+	// hyperframesScaffoldAudioFetchTimeout bounds the audio download.
+	// Presigned URLs to the local artifact store usually resolve in
+	// <1s; 60s covers slow networks without hanging the run.
+	hyperframesScaffoldAudioFetchTimeout = 60 * time.Second
 )
 
 type hyperframesScaffoldInput struct {
 	Example     string `json:"example"`
 	Resolution  string `json:"resolution"`
 	AspectRatio string `json:"aspect_ratio"`
+	// AudioURL is an optional presigned URL (typically from
+	// podcast.generate's audio_url output). When set, the pack fetches
+	// the audio bytes, stages them in the sidecar, and passes
+	// `--audio=<path>` to `hyperframes init` — upstream then embeds an
+	// <audio> element in the scaffolded index.html and sets the
+	// composition's data-duration to match the audio length. Without
+	// this input, the scaffold uses the upstream example's intrinsic
+	// (typically short — 10s for swiss-grid) duration and the rendered
+	// video has no audio track.
+	AudioURL string `json:"audio_url"`
 }
 
 // HyperframesScaffold constructs the pack. SessionSpec pins the
@@ -97,6 +122,7 @@ func HyperframesScaffold() *packs.Pack {
 				"example":      "string",
 				"resolution":   "string",
 				"aspect_ratio": "string",
+				"audio_url":    "string",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
@@ -150,15 +176,32 @@ func hyperframesScaffoldHandler(ctx context.Context, ec *packs.ExecutionContext)
 		return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
 	}
 
+	// Build the init script argv. If audio_url is provided, fetch the
+	// bytes into the sidecar at hyperframesScaffoldAudioPath and add
+	// --audio=<path> to the argv. Upstream's `hyperframes init` will
+	// embed the audio and align the scaffold's data-duration to it,
+	// instead of falling back to the example's 10s default.
+	initCmd := []string{
+		"/usr/local/bin/hyperframes-init.sh",
+		"--example=" + in.Example,
+		"--resolution=" + preset.CLIPreset,
+		"--output=" + hyperframesScaffoldOutputPath,
+	}
+	if u := strings.TrimSpace(in.AudioURL); u != "" {
+		ec.Report(5, "fetching audio for scaffold")
+		audioBytes, ferr := fetchAudioForScaffold(ctx, u)
+		if ferr != nil {
+			return nil, ferr
+		}
+		if _, werr := execWithStdin(ctx, ec, hyperframesScaffoldAudioPath, audioBytes); werr != nil {
+			return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+				Message: fmt.Sprintf("stage audio for scaffold: %v", werr), Cause: werr}
+		}
+		initCmd = append(initCmd, "--audio="+hyperframesScaffoldAudioPath)
+	}
+
 	ec.Report(10, "running hyperframes init --example="+in.Example)
-	initRes, err := ec.Exec(ctx, session.ExecRequest{
-		Cmd: []string{
-			"/usr/local/bin/hyperframes-init.sh",
-			"--example=" + in.Example,
-			"--resolution=" + preset.CLIPreset,
-			"--output=" + hyperframesScaffoldOutputPath,
-		},
-	})
+	initRes, err := ec.Exec(ctx, session.ExecRequest{Cmd: initCmd})
 	if err != nil {
 		return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 			Message: fmt.Sprintf("hyperframes-init.sh: %v", err), Cause: err}
@@ -289,4 +332,56 @@ func enumerateScaffoldedSlots(tarballBytes []byte) (map[string]any, error) {
 		"compositions": compositions,
 		"other_files":  others,
 	}, nil
+}
+
+// fetchAudioForScaffold pulls the audio bytes at u into memory so they
+// can be staged in the sidecar for `hyperframes init --audio=<path>`.
+// Bounded by hyperframesScaffoldMaxAudioSize + a 60s timeout to keep
+// runaway URLs from hanging the pack. Returns a typed PackError so
+// the handler can return it directly.
+//
+// Error code mapping:
+//   - bad URL / non-200 status → CodeInvalidInput (caller passed a
+//     dead presigned URL or wrong endpoint)
+//   - body too large / read failure → CodeInvalidInput
+//   - network/transport error → CodeHandlerFailed (caller can't fix)
+func fetchAudioForScaffold(ctx context.Context, audioURL string) ([]byte, *packs.PackError) {
+	fetchCtx, cancel := context.WithTimeout(ctx, hyperframesScaffoldAudioFetchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, audioURL, nil)
+	if err != nil {
+		return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: fmt.Sprintf("invalid audio_url: %v", err), Cause: err}
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
+			Message: fmt.Sprintf("audio_url fetch: %v", err), Cause: err}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: fmt.Sprintf("audio_url returned HTTP %d — verify the presigned URL is current and resolvable from the control-plane network",
+				resp.StatusCode)}
+	}
+	// Bound the read so a runaway endpoint can't OOM the pack process.
+	// One byte over the cap means we error out instead of silently
+	// truncating to a corrupt audio file.
+	limited := io.LimitReader(resp.Body, int64(hyperframesScaffoldMaxAudioSize)+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: fmt.Sprintf("audio_url read: %v", err), Cause: err}
+	}
+	if len(body) > hyperframesScaffoldMaxAudioSize {
+		return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: fmt.Sprintf(
+				"audio_url body exceeds %d MiB cap; shorten/recompress the audio before scaffolding",
+				hyperframesScaffoldMaxAudioSize>>20)}
+	}
+	if len(body) == 0 {
+		return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+			Message: "audio_url returned an empty body"}
+	}
+	return body, nil
 }

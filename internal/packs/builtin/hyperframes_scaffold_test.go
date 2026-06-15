@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
@@ -410,6 +412,127 @@ func TestEnumerateScaffoldedSlots_SkipsDirectoryEntries(t *testing.T) {
 }
 
 // --- artifact upload integration ----------------------------------------
+
+// --- audio_url passthrough (v0.28.4 fix for silent-video bug) -----------
+
+func TestHyperframesScaffold_AudioURL_Empty_OmitsAudioFlag(t *testing.T) {
+	// Default (empty audio_url) — verify --audio is NOT in the init
+	// command argv. Closes a regression risk where unconditionally
+	// adding --audio= would break callers who don't want narration.
+	fakeTar := makeFakeScaffoldTarball(t, map[string]string{"index.html": "<html/>"})
+	exec := &scaffoldExecScript{tarballBytes: fakeTar}
+	_, err := runScaffold(t, exec, nil, `{"example":"swiss-grid","audio_url":""}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	for _, c := range exec.calls {
+		if len(c.Cmd) >= 1 && strings.Contains(c.Cmd[0], "hyperframes-init.sh") {
+			joined := strings.Join(c.Cmd, " ")
+			if strings.Contains(joined, "--audio=") {
+				t.Errorf("--audio should not appear when audio_url is empty, got: %v", c.Cmd)
+			}
+		}
+	}
+}
+
+func TestHyperframesScaffold_AudioURL_HappyPath_PassesAudioFlag(t *testing.T) {
+	// Spin up a tiny HTTP server returning fake MP3 bytes. Verify the
+	// pack fetches the URL, stages the bytes via execWithStdin, and
+	// passes --audio=<staged-path> to the init script.
+	audioBytes := []byte("ID3 fake-mp3-bytes-for-test")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write(audioBytes)
+	}))
+	defer srv.Close()
+
+	fakeTar := makeFakeScaffoldTarball(t, map[string]string{"index.html": "<html/>"})
+	exec := &scaffoldExecScript{tarballBytes: fakeTar}
+	input := `{"example":"swiss-grid","audio_url":"` + srv.URL + `/podcast.mp3"}`
+	_, err := runScaffold(t, exec, nil, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	// Assert: --audio appears in the init call, AND a stdin-write call
+	// landed the audio bytes at the conventional staging path.
+	sawAudioFlag := false
+	sawAudioStage := false
+	for _, c := range exec.calls {
+		if len(c.Cmd) >= 1 && strings.Contains(c.Cmd[0], "hyperframes-init.sh") {
+			joined := strings.Join(c.Cmd, " ")
+			if strings.Contains(joined, "--audio="+hyperframesScaffoldAudioPath) {
+				sawAudioFlag = true
+			}
+		}
+		// execWithStdin issues `sh -c 'cat > <path>'` + Stdin payload.
+		if len(c.Cmd) >= 3 && c.Cmd[0] == "sh" && c.Cmd[1] == "-c" &&
+			strings.Contains(c.Cmd[2], hyperframesScaffoldAudioPath) && len(c.Stdin) > 0 {
+			if string(c.Stdin) == string(audioBytes) {
+				sawAudioStage = true
+			}
+		}
+	}
+	if !sawAudioFlag {
+		t.Error("expected --audio=<staged-path> in init argv")
+	}
+	if !sawAudioStage {
+		t.Error("expected stdin-write call staging the audio bytes to the sidecar")
+	}
+}
+
+func TestHyperframesScaffold_AudioURL_404_RejectsInvalidInput(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	exec := &scaffoldExecScript{}
+	_, err := runScaffold(t, exec, nil, `{"example":"swiss-grid","audio_url":"`+srv.URL+`/missing.mp3"}`)
+	pe, ok := err.(*packs.PackError)
+	if !ok || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("expected CodeInvalidInput, got %v", err)
+	}
+	if !strings.Contains(pe.Message, "HTTP 404") {
+		t.Errorf("expected message to surface the HTTP status, got: %s", pe.Message)
+	}
+}
+
+func TestHyperframesScaffold_AudioURL_Empty200_RejectsInvalidInput(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// 200 OK with empty body — a real misconfigured presigned URL
+		// occasionally produces this.
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	exec := &scaffoldExecScript{}
+	_, err := runScaffold(t, exec, nil, `{"example":"swiss-grid","audio_url":"`+srv.URL+`/empty.mp3"}`)
+	pe, ok := err.(*packs.PackError)
+	if !ok || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("expected CodeInvalidInput, got %v", err)
+	}
+	if !strings.Contains(pe.Message, "empty body") {
+		t.Errorf("expected empty-body message, got: %s", pe.Message)
+	}
+}
+
+func TestHyperframesScaffold_AudioURL_OversizeRejectsInvalidInput(t *testing.T) {
+	// Stream 1 byte over the cap.
+	tooBig := make([]byte, hyperframesScaffoldMaxAudioSize+1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write(tooBig)
+	}))
+	defer srv.Close()
+	exec := &scaffoldExecScript{}
+	_, err := runScaffold(t, exec, nil, `{"example":"swiss-grid","audio_url":"`+srv.URL+`/huge.mp3"}`)
+	pe, ok := err.(*packs.PackError)
+	if !ok || pe.Code != packs.CodeInvalidInput {
+		t.Fatalf("expected CodeInvalidInput, got %v", err)
+	}
+	if !strings.Contains(pe.Message, "cap") {
+		t.Errorf("expected cap message, got: %s", pe.Message)
+	}
+}
 
 func TestHyperframesScaffold_ArtifactUploadedWithExampleName(t *testing.T) {
 	store := packs.NewMemoryArtifactStore()

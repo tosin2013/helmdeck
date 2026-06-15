@@ -357,11 +357,36 @@ const (
 var transcriptRE = regexp.MustCompile(`(?s)const\s+TRANSCRIPT\s*=\s*\[(.*?)\];`)
 
 // textSlotRE captures inner text from tags upstream scaffolds use for
-// visible content. We deliberately keep the set narrow so we don't
-// accidentally rewrite chrome (e.g. <title>, hidden labels) or text
-// inside <style>/<script>. Inner content is allowed to contain HTML
-// entities and inline tags; we splice the whole inner range.
-var textSlotRE = regexp.MustCompile(`(?s)<(h[1-3])(\s[^>]*)?>(.*?)</h[1-3]>|<div(\s[^>]*\bclass\s*=\s*"(?:stat-value|stat-label)"[^>]*)>(.*?)</div>`)
+// visible content. Three element shapes are recognized:
+//
+//  1. Heading tags <h1>, <h2>, <h3> — used by intro / title compositions
+//     (swiss-grid, vignelli, warm-grain, kinetic-type, …).
+//  2. <div class="X"> where X contains one of the upstream-canonical
+//     class tokens as a whitespace-separated word:
+//       stat-value, stat-label   — swiss-grid / nyt-graph stat cards
+//       node                     — decision-tree / flowchart node boxes
+//       connector-label          — decision-tree / flowchart edge labels
+//       text-highlight           — decision-tree / vignelli highlighted spans
+//       caption-text             — caption-* family (when not handled by
+//                                  the TRANSCRIPT array)
+//     The word-boundary anchor (\b) keeps "node" from matching inside
+//     unrelated compound class names like "tree-node" while still
+//     accepting multi-class strings like class="node sticky yellow".
+//  3. <span id="*-text"> — decision-tree uses these for highlighted
+//     inline text (e.g. <span id="python-text">Start with Pythom</span>).
+//
+// The set is curated empirically — each addition closes a known scaffold
+// shape we've actually run a pipeline against. Adding a class here is
+// safe; broadening the regex shape itself (e.g. catching <p> or all
+// <div>s) risks rewriting chrome and is intentionally NOT done.
+var textSlotRE = regexp.MustCompile(
+	`(?s)` +
+		`<(h[1-3])(\s[^>]*)?>(.*?)</h[1-3]>` +
+		`|` +
+		`<div(\s[^>]*\bclass\s*=\s*"[^"]*\b(?:stat-value|stat-label|node|connector-label|text-highlight|caption-text)\b[^"]*"[^>]*)>(.*?)</div>` +
+		`|` +
+		`<span(\s[^>]*\bid\s*=\s*"[^"]*-text"[^>]*)>(.*?)</span>`,
+)
 
 // classifyCompositionFile picks the rewrite strategy by scanning for
 // the canonical content markers. Order matters: a file with BOTH
@@ -388,12 +413,17 @@ func extractTextSlots(content string) []string {
 	matches := textSlotRE.FindAllStringSubmatch(content, -1)
 	out := make([]string, 0, len(matches))
 	for _, m := range matches {
-		// Match shape: full match | h-tag | h-attrs | h-inner | div-attrs | div-inner
+		// Three branches per the alternation in textSlotRE:
+		//   m[1] = h-tag,        m[2] = h-attrs,     m[3] = h-inner
+		//   m[4] = div-attrs,    m[5] = div-inner
+		//   m[6] = span-attrs,   m[7] = span-inner
 		switch {
 		case m[1] != "":
 			out = append(out, strings.TrimSpace(m[3]))
 		case m[4] != "":
 			out = append(out, strings.TrimSpace(m[5]))
+		case m[6] != "":
+			out = append(out, strings.TrimSpace(m[7]))
 		}
 	}
 	return out
@@ -419,9 +449,13 @@ func spliceTextSlots(content string, newSlots []string) string {
 			attrs := sub[2]
 			return "<" + tag + attrs + ">" + replacement + "</" + tag + ">"
 		case sub[4] != "":
-			// <div class="stat-value|stat-label">OLD</div>
+			// <div class="stat-value|stat-label|node|connector-label|...">OLD</div>
 			attrs := sub[4]
 			return "<div" + attrs + ">" + replacement + "</div>"
+		case sub[6] != "":
+			// <span id="*-text">OLD</span>
+			attrs := sub[6]
+			return "<span" + attrs + ">" + replacement + "</span>"
 		}
 		return match
 	})

@@ -9,7 +9,7 @@
 # guarantee CLI/server compatibility.
 
 FROM dxflrs/garage:v2.3.0 AS garage
-FROM alpine:3.23
+FROM alpine:3.24
 
 RUN apk add --no-cache bash gawk
 

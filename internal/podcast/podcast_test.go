@@ -206,6 +206,68 @@ func TestParseScriptJSON(t *testing.T) {
 			t.Errorf("parsed = %+v", turns)
 		}
 	})
+
+	t.Run("multiple objects JSONL (Tier C multi-turn fallback)", func(t *testing.T) {
+		// Empirically found 2026-06-14 (the SECOND eBPF retest after
+		// the bare-single-object fix): gpt-oss-120b:free emitted a
+		// sequence of Host turns as JSONL — newline-separated bare
+		// objects without array brackets.
+		raw := `{"speaker":"Host","text":"Imagine this: your system is behaving strangely."}
+{"speaker":"Host","text":"You suspect a rootkit."}
+{"speaker":"Host","text":"Traditionally, detecting these required a kernel module."}`
+		turns, err := parseScriptJSON(raw)
+		if err != nil {
+			t.Fatalf("expected multi-object fallback to succeed, got %v", err)
+		}
+		if len(turns) != 3 {
+			t.Fatalf("expected 3 turns, got %d", len(turns))
+		}
+		if turns[0].Speaker != "Host" || turns[2].Speaker != "Host" {
+			t.Errorf("first/last speaker wrong: %+v", turns)
+		}
+		if !contains(turns[2].Text, "Traditionally") {
+			t.Errorf("text didn't survive parse for turn 2: %q", turns[2].Text)
+		}
+	})
+
+	t.Run("multiple objects comma-separated (Tier C variation)", func(t *testing.T) {
+		raw := `{"speaker":"Host","text":"a"}, {"speaker":"Guest","text":"b"}, {"speaker":"Host","text":"c"}`
+		turns, err := parseScriptJSON(raw)
+		if err != nil {
+			t.Fatalf("expected comma-separated fallback, got %v", err)
+		}
+		if len(turns) != 3 {
+			t.Errorf("expected 3 turns, got %d", len(turns))
+		}
+		if turns[1].Speaker != "Guest" {
+			t.Errorf("middle speaker = %q, want Guest", turns[1].Speaker)
+		}
+	})
+
+	t.Run("multiple objects fenced (Tier C variation)", func(t *testing.T) {
+		raw := "```json\n" + `{"speaker":"Host","text":"a"}` + "\n" + `{"speaker":"Guest","text":"b"}` + "\n```"
+		turns, err := parseScriptJSON(raw)
+		if err != nil {
+			t.Fatalf("expected fenced multi-object fallback, got %v", err)
+		}
+		if len(turns) != 2 {
+			t.Errorf("expected 2 turns, got %d", len(turns))
+		}
+	})
+
+	t.Run("multiple objects with prose preamble (Tier C variation)", func(t *testing.T) {
+		raw := "Here's the script for the eBPF tracepoint observability video:\n\n" +
+			`{"speaker":"Host","text":"Welcome."}` + "\n" +
+			`{"speaker":"Host","text":"Today we explore eBPF."}` + "\n" +
+			`{"speaker":"Host","text":"Let's begin."}`
+		turns, err := parseScriptJSON(raw)
+		if err != nil {
+			t.Fatalf("expected preamble + multi-object fallback, got %v", err)
+		}
+		if len(turns) != 3 {
+			t.Errorf("expected 3 turns, got %d", len(turns))
+		}
+	})
 }
 
 func TestCoverPromptForScript(t *testing.T) {

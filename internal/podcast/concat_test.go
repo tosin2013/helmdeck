@@ -117,3 +117,73 @@ func TestPadTurnToMin_FfprobeFailure_BestEffort(t *testing.T) {
 		t.Errorf("expected NO pad commands when ffprobe fails, got %d", len(got))
 	}
 }
+
+// TestConcat_DoesNotPostCleanupTempDir pins the v0.28.5 fix. Concat
+// used to `rm -rf /tmp/helmdeck-podcast` immediately after reading
+// the final.mp3 bytes back, which broke the downstream
+// podcast.generate -> av-validate.sh integration: the validator
+// looked for /tmp/helmdeck-podcast/final.mp3 a fraction of a second
+// later and got "file not found" (exit 2). podcast.generate then
+// soft-degraded into silent fallback, the scaffolded-narrated-video
+// pipeline saw empty audio_url, and the chain produced a 15-second
+// silent MP4. Empirically found 2026-06-15 chasing the v0.28.4
+// retest's "validation isn't working" report.
+//
+// The cleanup at line 84 (Concat's step 1) handles the cross-call
+// case: every fresh Concat rm -rfs + mkdirs the tempdir before
+// writing turn files. The session container's tmpfs is also
+// reclaimed when the session ends. Net: no leak across sessions, no
+// leak between Concat calls, AND the file stays available for the
+// in-call validation pass.
+//
+// This test asserts the regression doesn't sneak back in by counting
+// post-readback rm -rf calls. Concat issues exactly ONE rm -rf — the
+// initial cleanup at step 1. Adding any rm -rf after step 7 (the dd
+// readback) breaks podcast.generate's validation; this test will
+// trip the moment that happens.
+func TestConcat_DoesNotPostCleanupTempDir(t *testing.T) {
+	// Stub the readback's dd so Concat returns successfully with a
+	// non-empty final.mp3 payload — that's enough to land at step 8
+	// (the removed cleanup) without the test caring about turn
+	// content. avenc's intermediate ffprobe / ffmpeg / wc calls are
+	// stubbed via substring matching.
+	ex := &fakeExecutor{responses: map[string]session.ExecResult{
+		"dd if=":     {Stdout: []byte("fake-final-mp3-bytes")},
+		"ffprobe":    {Stdout: []byte("12.500\n")},
+		"wc -c < ":   {Stdout: []byte("65536\n")},
+		"anullsrc":   {},
+		"cat > ":     {},
+		"ffmpeg":     {},
+	}}
+	turns := [][]byte{[]byte("turn-1 bytes"), []byte("turn-2 bytes")}
+	_, _, err := Concat(context.Background(), ex, "sess", turns, ConcatOptions{
+		SilenceBetweenTurnsMs: 250,
+	})
+	if err != nil {
+		t.Fatalf("Concat: %v", err)
+	}
+
+	// Find the index of the readback exec call (dd if=…).
+	readbackIdx := -1
+	for i, req := range ex.calls {
+		if len(req.Cmd) >= 3 && strings.Contains(req.Cmd[2], "dd if=") {
+			readbackIdx = i
+			break
+		}
+	}
+	if readbackIdx < 0 {
+		t.Fatal("expected a readback (dd if=) exec call; got none")
+	}
+
+	// Assert: no `rm -rf` calls appear AFTER the readback.
+	// (The initial step-1 rm -rf at the top of Concat is fine.)
+	for i, req := range ex.calls {
+		if i <= readbackIdx {
+			continue
+		}
+		if len(req.Cmd) >= 3 && strings.Contains(req.Cmd[2], "rm -rf") {
+			t.Errorf("Concat ran a post-readback rm -rf at call %d (cmd: %q) — this is the regression that breaks podcast.generate's av-validate.sh integration",
+				i, req.Cmd[2])
+		}
+	}
+}

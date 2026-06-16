@@ -83,6 +83,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/packs"
@@ -125,6 +128,17 @@ Rules:
   - Skip claims that are trivially obvious, subjective ("I think", "arguably"), or already contain a link.
   - Skip headings, code blocks, and list bullets — ground only prose sentences.
   - If no claim meets the bar, return {"claims": []}.`
+
+	// contentGroundConcurrency caps how many claims we Firecrawl-
+	// search + LLM-verify in parallel. 4 is a balance:
+	//   - Below 4, the wall-clock win shrinks (a 12-claim post still
+	//     takes ~3 sequential batches of the verify LLM call).
+	//   - Above 4, free-tier Firecrawl rate limits kick in (~10
+	//     concurrent /v1/search calls) and the LLM gateway starts
+	//     queueing.
+	// Operators can revisit if they're running self-hosted Firecrawl
+	// with a higher limit; the constant is the lever.
+	contentGroundConcurrency = 4
 )
 
 // ContentGround constructs the pack.
@@ -192,6 +206,22 @@ func ContentGround(d vision.Dispatcher) *packs.Pack {
 		// envelope; clients that need synchronous behavior can still
 		// use the legacy pack.start/status/result trio explicitly.
 		Async: true,
+		// Memory cache (ADR 047): content.ground is expensive
+		// (Firecrawl search + per-claim LLM verify + optional
+		// whole-document rewrite — typical 60-120s). A 24-hour TTL
+		// matches the cadence at which source authority changes
+		// (slow, by web-content standards) and is well above
+		// github.go's 5-minute pattern, which targets fast-moving
+		// API content. The engine-level cache key is the hash of
+		// (caller, input bytes) — see memory_seam_test.go:102. This
+		// means the cache serves idempotent re-runs (same input
+		// markdown + same options → cached result) but is a MISS
+		// when the input changes by even one byte (typo fix,
+		// whitespace edit, etc.). For per-claim caching across
+		// edits, a handler-internal cache keyed on (claim_text,
+		// search_query) would be the next layer — out of scope for
+		// this change but tracked in the audit follow-up.
+		Memory: &packs.MemoryConfig{Cache: true, TTL: 24 * time.Hour, Category: "cache"},
 	}
 }
 
@@ -375,13 +405,41 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 
 		// 4. For each claim, search Firecrawl and take the first
 		// result with a non-empty URL. Skip claims whose text
-		// doesn't literally appear in the markdown (hallucinated
-		// substrings are a failure mode for smaller models) and
-		// claims whose query returns no usable source.
+		// doesn't appear in the markdown (hallucinated substrings
+		// are a failure mode for smaller models) and claims whose
+		// query returns no usable source.
+		//
+		// Architecturally split in three phases (was one sequential
+		// loop in v0.27.x and earlier — the audit found 60-120s
+		// pipeline runs because per-claim REST + LLM calls couldn't
+		// run in parallel):
+		//
+		//   Phase 1 (synchronous, fast): locate each claim's byte
+		//     span in the markdown. Hallucinated claims fall out
+		//     here without spending a Firecrawl call. Uses fuzzy
+		//     matching (exact substring first; whitespace-tolerant
+		//     scan on miss) so a slight whitespace/punctuation
+		//     normalization from the LLM extractor doesn't drop a
+		//     real claim.
+		//
+		//   Phase 2 (concurrent): for each findable claim, call
+		//     Firecrawl + verify in parallel. Bounded errgroup
+		//     keeps Firecrawl-side concurrency reasonable while
+		//     collapsing wall-clock from N×(search+verify) down to
+		//     ceil(N/workers)×(search+verify). Errors are collected
+		//     per-claim, not propagated (one bad claim doesn't
+		//     short-circuit the others).
+		//
+		//   Phase 3 (sequential): apply each result to `patched` in
+		//     original claim order. Patching must be sequential
+		//     because each substitution can move byte offsets of
+		//     subsequent claims; re-finding the claim per-iteration
+		//     handles the case where an earlier patch's `[source]`
+		//     suffix has shifted the document.
 		groundings := make([]grounding, 0, len(claims))
 		skipped := make([]string, 0)
 		patched := original
-		considered := 0
+		considered := len(claims)
 		// firecrawlCalls counts claims that survived the substring
 		// check and reached callFirecrawlSearch. firecrawlErrors
 		// counts how many of those returned a transport error.
@@ -394,52 +452,105 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 		firecrawlCalls := 0
 		firecrawlErrors := 0
 
+		// Phase 1 — fuzzy-locate findable claims, drop the rest.
+		type pendingClaim struct {
+			idx   int // index into claims (preserves order for Phase 3)
+			text  string
+			query string
+		}
+		pending := make([]pendingClaim, 0, len(claims))
 		for i, c := range claims {
-			ec.Report(20+float64(i)*60/float64(len(claims)),
-				fmt.Sprintf("grounding claim %d/%d", i+1, len(claims)))
-			considered++
-			if !strings.Contains(patched, c.Text) {
+			if _, _, ok := findClaimSpan(patched, c.Text); !ok {
 				skipped = append(skipped, c.Text)
 				continue
 			}
-			// Search with inline scrape so we get page content
-			// alongside URLs — needed for source verification.
+			pending = append(pending, pendingClaim{idx: i, text: c.Text, query: c.Query})
+		}
+
+		// Phase 2 — concurrent Firecrawl + verify.
+		type claimResult struct {
+			idx       int
+			text      string
+			pick      *firecrawlSearchItem
+			snippet   string
+			searchErr error
+		}
+		results := make([]claimResult, len(pending))
+		if len(pending) > 0 {
+			ec.Report(20, fmt.Sprintf("grounding %d claims concurrently (limit=%d)",
+				len(pending), contentGroundConcurrency))
+			grp, gctx := errgroup.WithContext(ctx)
+			grp.SetLimit(contentGroundConcurrency)
+			for i, p := range pending {
+				i, p := i, p // capture
+				grp.Go(func() error {
+					r := claimResult{idx: p.idx, text: p.text}
+					fc, searchErr := callFirecrawlSearch(gctx, base, firecrawlSearchRequest{
+						Query: p.query,
+						Limit: 3,
+						ScrapeOptions: &firecrawlSearchScrapeOpt{
+							Formats: []string{"markdown"},
+						},
+					})
+					if searchErr != nil {
+						r.searchErr = searchErr
+						results[i] = r
+						return nil // never short-circuit; siblings finish
+					}
+					r.pick, r.snippet = verifyBestSource(gctx, d, in.Model, p.text, fc.Data)
+					results[i] = r
+					return nil
+				})
+			}
+			_ = grp.Wait() // never errors — all goroutines return nil
+		}
+
+		// Phase 3 — apply results to `patched` in original claim order.
+		// `pending` was built by iterating `claims` in order, so
+		// `results` is already in pending-order; that's the same as
+		// original-claim-order modulo the already-skipped entries.
+		ec.Report(85, "patching grounded claims")
+		for _, r := range results {
 			firecrawlCalls++
-			fc, searchErr := callFirecrawlSearch(ctx, base, firecrawlSearchRequest{
-				Query: c.Query,
-				Limit: 3,
-				ScrapeOptions: &firecrawlSearchScrapeOpt{
-					Formats: []string{"markdown"},
-				},
-			})
-			if searchErr != nil {
+			if r.searchErr != nil {
 				firecrawlErrors++
 				if ec.Logger != nil {
-					ec.Logger.Warn("firecrawl search failed", "claim", c.Text, "err", searchErr)
+					ec.Logger.Warn("firecrawl search failed", "claim", r.text, "err", r.searchErr)
 				}
-				skipped = append(skipped, c.Text)
+				skipped = append(skipped, r.text)
 				continue
 			}
-			// Verify: ask the LLM which source (if any) actually
-			// supports the claim. This catches irrelevant results
-			// where the search title looks good but the content
-			// doesn't back the claim.
-			pick, snippet := verifyBestSource(ctx, d, in.Model, c.Text, fc.Data)
-			if pick == nil {
-				skipped = append(skipped, c.Text)
+			if r.pick == nil {
+				skipped = append(skipped, r.text)
 				continue
 			}
-			insertion := fmt.Sprintf("%s [source](%s)", c.Text, pick.URL)
-			patched = strings.Replace(patched, c.Text, insertion, 1)
-			title := pick.Title
+			// Re-locate: an earlier patch in this loop may have
+			// shifted byte offsets. The fuzzy matcher also tolerates
+			// the case where the LLM emitted a slightly-normalized
+			// claim text vs the actual markdown bytes.
+			start, end, ok := findClaimSpan(patched, r.text)
+			if !ok {
+				// Lost during patching (overlapping claims, etc.).
+				// Skip rather than corrupt the file.
+				skipped = append(skipped, r.text)
+				continue
+			}
+			// Preserve the ORIGINAL bytes from the document; the
+			// LLM may have given us a normalized variant. We splice
+			// `[source](url)` after the doc's literal text, not the
+			// LLM's normalized text.
+			docText := patched[start:end]
+			insertion := fmt.Sprintf("%s [source](%s)", docText, r.pick.URL)
+			patched = patched[:start] + insertion + patched[end:]
+			title := r.pick.Title
 			if title == "" {
-				title = pick.Metadata.Title
+				title = r.pick.Metadata.Title
 			}
 			groundings = append(groundings, grounding{
-				Claim:   c.Text,
-				URL:     pick.URL,
+				Claim:   r.text,
+				URL:     r.pick.URL,
 				Title:   title,
-				Snippet: snippet,
+				Snippet: r.snippet,
 			})
 		}
 
@@ -605,6 +716,82 @@ func firstUsableSource(items []firecrawlSearchItem) *firecrawlSearchItem {
 	return nil
 }
 
+// findClaimSpan locates `claim` inside `doc` with whitespace-tolerant
+// matching and returns the byte span [start, end) on hit, plus a
+// boolean indicating whether a hit was found.
+//
+// Two-stage match:
+//
+//  1. Exact substring (`strings.Index`). Preserves identical behavior
+//     for the 95% case where the LLM emits text byte-identical to the
+//     source. No fuzziness; no risk of changing established patterns.
+//  2. Whitespace-tolerant scan. Walks `doc` looking for a position
+//     where `claim` matches with any run of `\s+` in either side
+//     treated as equivalent to any run of `\s+` in the other. Closes
+//     the "the LLM normalized double-space to single-space" failure
+//     mode the audit identified — a class of valid claims that the
+//     strict matcher silently dropped as "hallucinations."
+//
+// Intentionally NOT done in v1 of this helper: smart-quote / em-dash /
+// ellipsis folding, lowercase matching, Levenshtein distance.
+// Whitespace is by far the most common normalization the extractor
+// LLM applies; adding more lenient matching widens the false-positive
+// surface (matching against the wrong span in the document) without
+// closing meaningfully more dropped-claim cases. Revisit if empirical
+// evidence shows other normalization classes recur.
+func findClaimSpan(doc, claim string) (int, int, bool) {
+	if i := strings.Index(doc, claim); i >= 0 {
+		return i, i + len(claim), true
+	}
+	if len(claim) == 0 || len(doc) == 0 {
+		return 0, 0, false
+	}
+	docB := []byte(doc)
+	claimB := []byte(claim)
+	for start := 0; start <= len(docB); start++ {
+		if matchEnd, ok := matchWhitespaceTolerant(docB, start, claimB); ok {
+			return start, matchEnd, true
+		}
+	}
+	return 0, 0, false
+}
+
+// matchWhitespaceTolerant returns the doc byte-offset just past the
+// end of a successful match starting at `docStart`, or (0, false) on
+// miss. Treats any whitespace byte in either side as compatible with
+// any whitespace byte in the other.
+func matchWhitespaceTolerant(doc []byte, docStart int, claim []byte) (int, bool) {
+	i, j := docStart, 0
+	for j < len(claim) {
+		if i >= len(doc) {
+			return 0, false
+		}
+		if isASCIIWhitespace(claim[j]) {
+			if !isASCIIWhitespace(doc[i]) {
+				return 0, false
+			}
+			// Skip ALL contiguous whitespace on both sides.
+			for j < len(claim) && isASCIIWhitespace(claim[j]) {
+				j++
+			}
+			for i < len(doc) && isASCIIWhitespace(doc[i]) {
+				i++
+			}
+			continue
+		}
+		if doc[i] != claim[j] {
+			return 0, false
+		}
+		i++
+		j++
+	}
+	return i, true
+}
+
+func isASCIIWhitespace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
+}
+
 // verifyBestSource asks the LLM to pick the best source that
 // actually supports a claim, returning the chosen source and a
 // short supporting snippet. This prevents inserting citations
@@ -674,11 +861,15 @@ Rules:
 		Snippet string `json:"snippet"`
 	}
 	result.Pick = -1
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		if obj := extractFirstJSONObject(raw); obj != "" {
-			_ = json.Unmarshal([]byte(obj), &result)
-		}
-	}
+	// ADR 051 migration: this verifier was the last content.ground
+	// caller still using the legacy extractFirstJSONObject fallback;
+	// the extractor (parseClaimPlan) moved to DecodeStructuredResponse
+	// earlier. Behavior preserved: if the parse fails entirely (no
+	// JSON object in the response, all markdown-fence/preamble
+	// fallbacks exhausted), result.Pick stays -1 and the bounds check
+	// below returns (nil, "") — which the handler treats as "no
+	// source" and skips the claim rather than citing a guess.
+	_ = DecodeStructuredResponse(raw, "content.ground verifier", &result)
 
 	if result.Pick < 0 || result.Pick >= len(items) || items[result.Pick].URL == "" {
 		return nil, ""

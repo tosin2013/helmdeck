@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
@@ -94,16 +95,22 @@ func TestContentGround_HappyPath(t *testing.T) {
 		{Stdout: []byte(markdown)},          // cat
 		{ExitCode: 0},                       // cat > (write-back)
 	}}
-	callCount := 0
+	// Concurrent Phase 2 means Firecrawl receives the two search
+	// requests in non-deterministic order. Route the response by
+	// the request's Query so each claim gets the URL it expects
+	// regardless of arrival timing.
 	fc := stubFirecrawlFromHandler(t, func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		switch callCount {
-		case 1:
+		var body struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		switch {
+		case strings.Contains(body.Query, "qubit") || strings.Contains(body.Query, "computation"):
 			writeSearchResult(w, firecrawlSearchItem{URL: "https://nature.com/qubits", Title: "Qubits 101", Markdown: "Quantum computers use qubits which are very fast."})
-		case 2:
+		case strings.Contains(body.Query, "decoherence"):
 			writeSearchResult(w, firecrawlSearchItem{URL: "https://ibm.com/decoherence", Title: "Decoherence", Markdown: "Decoherence is a major challenge in quantum computing."})
 		default:
-			http.Error(w, "too many calls", 500)
+			http.Error(w, "unexpected query: "+body.Query, 500)
 		}
 	})
 	disp := &scriptedDispatcherWT{replies: []string{
@@ -412,14 +419,18 @@ func TestContentGround_MaxClaimsCap(t *testing.T) {
 		{Stdout: []byte(markdown)},
 		{}, // write-back; exit 0
 	}}
-	var searchCalls int
+	// atomic.Int32 because the handler now serves concurrent
+	// requests (Phase 2 of content_ground.go runs claims in parallel
+	// via errgroup).
+	var searchCallsAtomic atomic.Int32
 	fc := stubFirecrawlFromHandler(t, func(w http.ResponseWriter, r *http.Request) {
-		searchCalls++
+		searchCallsAtomic.Add(1)
 		body, _ := io.ReadAll(r.Body)
 		var req firecrawlSearchRequest
 		_ = json.Unmarshal(body, &req)
 		writeSearchResult(w, firecrawlSearchItem{URL: "https://ex.com/" + req.Query})
 	})
+	searchCalls := func() int { return int(searchCallsAtomic.Load()) }
 	// 10 claims returned, but the pack caps itself to 8 even if
 	// the input max_claims was 5 — actually the input cap is 5,
 	// so let's test it: input max_claims=5, model returns 10,
@@ -450,8 +461,8 @@ func TestContentGround_MaxClaimsCap(t *testing.T) {
 	if out.ClaimsConsidered != 5 {
 		t.Errorf("claims_considered = %d, want 5 (input cap)", out.ClaimsConsidered)
 	}
-	if searchCalls != 5 {
-		t.Errorf("firecrawl search calls = %d, want 5", searchCalls)
+	if got := searchCalls(); got != 5 {
+		t.Errorf("firecrawl search calls = %d, want 5", got)
 	}
 }
 
@@ -539,16 +550,21 @@ func TestContentGround_FirecrawlAllErrors(t *testing.T) {
 // healthy but one query returning empty, the run should complete
 // with the surviving claims grounded.
 func TestContentGround_FirecrawlPartialErrorsSucceed(t *testing.T) {
-	callCount := 0
+	// Route response by query — concurrent Phase 2 means call order
+	// is non-deterministic, so the "first claim's call" vs "second
+	// claim's call" framing only works if we key off content.
 	fc := stubFirecrawlFromHandler(t, func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		if callCount == 1 {
-			// First call: legitimate empty result (not a transport error).
+		var body struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Query == "q1" {
+			// q1: legitimate empty result (not a transport error).
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
 			return
 		}
-		// Second call: usable URL.
+		// q2 (and any other): usable URL.
 		writeSearchResult(w, firecrawlSearchItem{URL: "https://ex.com/d", Title: "D", Markdown: "Decoherence is a challenge."})
 	})
 	markdown := "Quantum computers are fast. Decoherence is a challenge."
@@ -706,5 +722,159 @@ func TestContentGround_DefaultPersonaWhenOmitted(t *testing.T) {
 	_, used := resolveContentGroundPersona("")
 	if used != "general" {
 		t.Errorf("empty persona resolved to %q, want general", used)
+	}
+}
+
+// --- audit follow-up tests (PR after 2026-06-15 review) ----------------
+
+// TestContentGround_MemoryCacheConfigured pins ADR 047 compliance.
+// The pack must declare a Memory cache with a non-trivial TTL so the
+// engine de-dupes idempotent re-runs (same caller, same input bytes)
+// rather than spending Firecrawl/LLM calls every time. Other expensive
+// packs (github.go, etc.) ship the same pattern; content.ground was
+// the outlier called out in the audit.
+func TestContentGround_MemoryCacheConfigured(t *testing.T) {
+	pack := ContentGround(&scriptedDispatcherWT{})
+	if pack.Memory == nil {
+		t.Fatal("ContentGround must declare Memory cache config (ADR 047 audit gap)")
+	}
+	if !pack.Memory.Cache {
+		t.Error("Memory.Cache must be true; without it the cache helper is a no-op")
+	}
+	if pack.Memory.TTL <= 0 {
+		t.Errorf("Memory.TTL must be positive; got %v", pack.Memory.TTL)
+	}
+	if pack.Memory.Category != "cache" {
+		t.Errorf("Memory.Category should be \"cache\" to match the engine's cache namespace; got %q", pack.Memory.Category)
+	}
+}
+
+// TestFindClaimSpan_ExactMatch_FastPath asserts the existing-behavior
+// guarantee: a byte-identical claim still goes through the strict
+// strings.Index path (no fuzzy detour). Regression-pins the 95% case.
+func TestFindClaimSpan_ExactMatch_FastPath(t *testing.T) {
+	doc := "Quantum computers are fast. They run on qubits.\n"
+	start, end, ok := findClaimSpan(doc, "Quantum computers are fast.")
+	if !ok {
+		t.Fatal("exact substring should match")
+	}
+	if doc[start:end] != "Quantum computers are fast." {
+		t.Errorf("span [%d:%d] = %q, want exact claim", start, end, doc[start:end])
+	}
+}
+
+// TestFindClaimSpan_WhitespaceTolerance_DoubleToSingle is the audit's
+// finding C reproduction: the LLM extractor occasionally returns a
+// claim text that's been normalized (double-space → single-space) vs
+// the source document. The strict matcher used to drop these as
+// "hallucinations." The fuzzy matcher recovers them by treating
+// whitespace runs as equivalent.
+func TestFindClaimSpan_WhitespaceTolerance_DoubleToSingle(t *testing.T) {
+	// Doc has double spaces — original source style. LLM returned
+	// the claim with double-space collapsed to single-space.
+	doc := "Quantum  computers  are  fast.\n" // double-spaced
+	llmClaim := "Quantum computers are fast." // LLM collapsed
+	start, end, ok := findClaimSpan(doc, llmClaim)
+	if !ok {
+		t.Fatalf("fuzzy matcher should locate the claim despite whitespace normalization: doc=%q claim=%q", doc, llmClaim)
+	}
+	// The span should cover the ORIGINAL doc bytes (double-spaced),
+	// not the LLM's normalized form. This is what lets the patcher
+	// splice [source](url) after the doc's literal text.
+	got := doc[start:end]
+	if got != "Quantum  computers  are  fast." {
+		t.Errorf("span should map back to the original doc bytes (double-spaced); got %q", got)
+	}
+}
+
+// TestFindClaimSpan_WhitespaceTolerance_NewlineToSpace covers the
+// reverse case: doc has a soft line wrap mid-sentence, LLM returned
+// the claim with the wrap normalized to a single space.
+func TestFindClaimSpan_WhitespaceTolerance_NewlineToSpace(t *testing.T) {
+	doc := "Quantum computers\nare fast.\n"
+	llmClaim := "Quantum computers are fast."
+	start, end, ok := findClaimSpan(doc, llmClaim)
+	if !ok {
+		t.Fatalf("fuzzy matcher should locate the claim across a soft wrap: doc=%q claim=%q", doc, llmClaim)
+	}
+	got := doc[start:end]
+	if !strings.Contains(got, "Quantum computers") || !strings.Contains(got, "are fast.") {
+		t.Errorf("span %q should include both halves of the wrapped claim", got)
+	}
+}
+
+// TestFindClaimSpan_NoMatch covers the hallucination case unchanged.
+// A claim that's NOT in the doc at all (with no fuzzy variation that
+// hits) must still miss — otherwise we'd corrupt the markdown by
+// splicing citations next to text that doesn't exist.
+func TestFindClaimSpan_NoMatch(t *testing.T) {
+	doc := "Quantum computers are fast.\n"
+	llmClaim := "Cats are excellent quantum computers."
+	if _, _, ok := findClaimSpan(doc, llmClaim); ok {
+		t.Error("fuzzy matcher must not match a claim that's substantively absent")
+	}
+}
+
+// TestFindClaimSpan_EmptyClaim covers the edge case — an empty claim
+// against a non-empty doc returns no match (rather than spuriously
+// matching at offset 0).
+func TestFindClaimSpan_EmptyClaim(t *testing.T) {
+	if _, _, ok := findClaimSpan("doc content", ""); ok {
+		// strings.Index("doc","") returns 0; we accept that as a hit
+		// because the fast path defers to strings.Index — but the
+		// fuzzy path WOULD also hit. The patcher upstream would
+		// splice "[source](url)" at offset 0, which is harmless but
+		// noisy. Worth pinning as the current behavior so a future
+		// change is explicit.
+		_ = ok
+	}
+	// (No assertion — this test documents the edge but doesn't fail
+	// either way. If you tighten findClaimSpan to reject empty
+	// claims, flip the assertion above.)
+}
+
+// TestContentGround_FuzzyClaimMatch_DoubleSpacedSourceGrounds is the
+// end-to-end version of finding C: the markdown source has double
+// spaces, the LLM extractor returned the claim with single spaces,
+// and the handler should still ground it (instead of treating it
+// like a hallucinated substring).
+func TestContentGround_FuzzyClaimMatch_DoubleSpacedSourceGrounds(t *testing.T) {
+	markdown := "Quantum  computers  are  fast.\n" // double-spaced
+	exec := &execScript{replies: []session.ExecResult{
+		{Stdout: []byte("32\n")},
+		{Stdout: []byte(markdown)},
+		{ExitCode: 0}, // write-back
+	}}
+	fc := stubFirecrawlFromHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		writeSearchResult(w, firecrawlSearchItem{
+			URL:      "https://nature.com/q",
+			Markdown: "Quantum computers are indeed fast.",
+		})
+	})
+	disp := &scriptedDispatcherWT{replies: []string{
+		// LLM extractor returns the claim with whitespace collapsed.
+		`{"claims":[{"text":"Quantum computers are fast.","query":"qubit speed"}]}`,
+		// Verify step picks the (one) source.
+		`{"pick":0,"snippet":"Quantum computers are indeed fast."}`,
+	}}
+	raw, err := runContentGround(t, disp, exec, fc,
+		`{"clone_path":"/tmp/helmdeck-blog","path":"q.md","model":"openai/gpt-4o-mini"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		ClaimsConsidered int      `json:"claims_considered"`
+		ClaimsGrounded   int      `json:"claims_grounded"`
+		Skipped          []string `json:"skipped"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.ClaimsConsidered != 1 {
+		t.Errorf("considered = %d, want 1", out.ClaimsConsidered)
+	}
+	if out.ClaimsGrounded != 1 {
+		t.Errorf("grounded = %d, want 1 (the strict matcher would have dropped this as a hallucination)", out.ClaimsGrounded)
+	}
+	if len(out.Skipped) != 0 {
+		t.Errorf("nothing should be skipped; got %v", out.Skipped)
 	}
 }

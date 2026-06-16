@@ -76,6 +76,18 @@ const (
 	defaultResearchLimit     = 5
 	maxResearchLimit         = 10
 	defaultResearchMaxTokens = 1024
+
+	// JIT length-sizing constants (issue #532 / convention #525).
+	// research.deep is **cost-cap-shaped**: the "length" being
+	// controlled isn't output words or duration but the number of
+	// source URLs scraped per call (each costs a Firecrawl /v1/search
+	// page hit + a per-source markdown scrape + a slice of the
+	// synthesis LLM's context window). Intent maps directly to the
+	// existing `limit` field's value.
+	researchDeepIntentSummary    = "summary"
+	researchDeepIntentThorough   = "thorough"
+	researchDeepIntentExhaustive = "exhaustive"
+	researchDeepIntentDefault    = researchDeepIntentThorough
 	// researchTimeout caps the round trip. Firecrawl's /v1/search
 	// with per-source scraping is inherently slow — on public
 	// traffic the first page typically settles under 30s but
@@ -104,6 +116,54 @@ Rules:
   - Aim for 3-6 sentences. Do not use headings, bullets, or markdown formatting — plain prose only.`
 )
 
+// researchDeepIntentTable per issue #532. Numbers map directly to
+// the `limit` input — at default Firecrawl pricing and a 4k-context
+// synthesis model, a limit of 10 is the realistic ceiling without
+// blowing the prompt budget. summary is cheap (1 SERP page + 3
+// scrapes); exhaustive is the cap.
+var researchDeepIntentTable = map[string]int{
+	researchDeepIntentSummary:    3,
+	researchDeepIntentThorough:   5,
+	researchDeepIntentExhaustive: 10,
+}
+
+// researchDeepSize captures the resolved limit + label for one call.
+// Mirrors the size struct in other JIT-adopted packs.
+type researchDeepSize struct {
+	limit   int
+	applied string // intent:thorough / explicit / default
+}
+
+// resolveResearchDeepSize encodes the precedence:
+//  1. Limit > 0 (explicit) → honor verbatim (back-compat — existing
+//     callers passing `limit` see ZERO behavior change)
+//  2. LengthIntent set → table
+//  3. Default → defaultResearchLimit (5, matches the legacy default)
+//
+// Note: the legacy default 5 equals the thorough row's limit, so
+// callers that pass NO inputs land on the same numerical limit as
+// they always did. Labeling distinguishes "they explicitly declared
+// thorough" from "they didn't declare anything and got the default."
+func resolveResearchDeepSize(in *researchDeepInput) researchDeepSize {
+	if in.Limit > 0 {
+		clamped := in.Limit
+		if clamped > maxResearchLimit {
+			clamped = maxResearchLimit
+		}
+		return researchDeepSize{limit: clamped, applied: "explicit"}
+	}
+	key := strings.ToLower(strings.TrimSpace(in.LengthIntent))
+	if key != "" {
+		lim, ok := researchDeepIntentTable[key]
+		if !ok {
+			lim = researchDeepIntentTable[researchDeepIntentDefault]
+			key = researchDeepIntentDefault
+		}
+		return researchDeepSize{limit: lim, applied: "intent:" + key}
+	}
+	return researchDeepSize{limit: defaultResearchLimit, applied: "default"}
+}
+
 // ResearchDeep constructs the pack. Dispatcher is the gateway
 // surface the pack uses for synthesis; cmd/control-plane wires in
 // the same dispatcher the vision packs use, so registration lives
@@ -116,26 +176,47 @@ func ResearchDeep(d vision.Dispatcher) *packs.Pack {
 		Metadata: packs.PackMetadata{
 			Accepts:        []string{"query"},
 			Produces:       []string{"synthesis_markdown"},
-			IntentKeywords: []string{"research topic", "deep research", "synthesize from web", "look up information"},
-			TypicalUse:     "Source pack for query-driven content. Chain into slides.outline (research-deck) or blog.rewrite_for_audience (research-rewrite-blog).",
-			Limitations:    []string{"requires HELMDECK_FIRECRAWL_ENABLED", "synthesizes from top-N search results — depth limited by search rank", "use keywords not full questions ('webassembly performance' not 'how fast is wasm')"},
+			IntentKeywords: []string{"research topic", "deep research", "synthesize from web", "look up information", "quick research", "thorough research", "exhaustive research"},
+			TypicalUse:     "Source pack for query-driven content. Chain into slides.outline (research-deck) or blog.rewrite_for_audience (research-rewrite-blog). Use length_intent (summary / thorough / exhaustive) to scale Firecrawl + LLM cost — summary=3 sources, thorough=5, exhaustive=10.",
+			Limitations:    []string{"requires HELMDECK_FIRECRAWL_ENABLED", "synthesizes from top-N search results — depth limited by search rank", "use keywords not full questions ('webassembly performance' not 'how fast is wasm')", "truncated:true signals the synthesis LLM hit max_tokens — re-run with smaller length_intent or larger max_tokens"},
 		},
 		InputSchema: packs.BasicSchema{
-			Required: []string{"query", "model"},
+			// model is required at runtime for the generate path; the
+			// inspect short-circuit skips the model call (and the
+			// model-required check), so schema-level Required keeps
+			// just `query` to let inspect-mode payloads through the
+			// engine validator.
+			Required: []string{"query"},
 			Properties: map[string]string{
-				"query":      "string",
-				"limit":      "number",
-				"model":      "string",
-				"max_tokens": "number",
+				"query":         "string",
+				"limit":         "number",
+				"model":         "string",
+				"max_tokens":    "number",
+				"length_intent": "string",
+				"inspect":       "boolean",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
-			Required: []string{"query", "sources", "synthesis", "model"},
+			// Required narrowed from {query, sources, synthesis, model}
+			// to just {query} so inspect-mode responses (no Firecrawl,
+			// no synthesis) satisfy the validator.
+			Required: []string{"query"},
 			Properties: map[string]string{
 				"query":     "string",
 				"sources":   "array",
 				"synthesis": "string",
 				"model":     "string",
+				// JIT length-sizing telemetry (issue #532). Reported
+				// on every generate response so callers can see
+				// what scale the pack ran at.
+				"limit_applied":         "number",
+				"sources_used":          "number",
+				"length_intent_applied": "string",
+				"truncated":             "boolean",
+				// Inspect mode only.
+				"inspect":          "boolean",
+				"suggested_limit":  "number",
+				"reason":           "string",
 			},
 		},
 		Handler: researchDeepHandler(d),
@@ -152,6 +233,15 @@ type researchDeepInput struct {
 	Limit     int    `json:"limit"`
 	Model     string `json:"model"`
 	MaxTokens int    `json:"max_tokens"`
+
+	// JIT length-sizing inputs (issue #532 / convention #525).
+	// LengthIntent declares "summary" / "thorough" / "exhaustive";
+	// the pack maps that to a `limit` value (3 / 5 / 10) when
+	// explicit Limit isn't set. Explicit Limit wins (back-compat).
+	LengthIntent string `json:"length_intent,omitempty"`
+	// Inspect: return the resolved limit + intent without firing
+	// Firecrawl or the synthesis LLM. Cheap planning helper.
+	Inspect bool `json:"inspect,omitempty"`
 }
 
 // researchSource is one item in the output sources array. We
@@ -278,6 +368,32 @@ func callFirecrawlSearch(ctx context.Context, base string, body firecrawlSearchR
 
 func researchDeepHandler(d vision.Dispatcher) packs.HandlerFunc {
 	return func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+		var in researchDeepInput
+		if err := json.Unmarshal(ec.Input, &in); err != nil {
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
+		}
+		if strings.TrimSpace(in.Query) == "" {
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "query is required"}
+		}
+
+		// JIT inspect short-circuit (issue #532). Runs before the
+		// dispatcher / Firecrawl-enabled / model-required checks so
+		// agents can plan a research call in environments where
+		// none of those are wired. No HTTP calls, no LLM calls.
+		if in.Inspect {
+			size := resolveResearchDeepSize(&in)
+			reason := fmt.Sprintf(
+				"applying %s for limit=%d (max scraped sources). No Firecrawl or LLM call made.",
+				size.applied, size.limit)
+			return json.Marshal(map[string]any{
+				"query":                 in.Query,
+				"inspect":               true,
+				"suggested_limit":       size.limit,
+				"length_intent_applied": size.applied,
+				"reason":                reason,
+			})
+		}
+
 		if d == nil {
 			return nil, &packs.PackError{
 				Code:    packs.CodeInternal,
@@ -300,27 +416,14 @@ func researchDeepHandler(d vision.Dispatcher) packs.HandlerFunc {
 			base = defaultFirecrawlURL
 		}
 
-		var in researchDeepInput
-		if err := json.Unmarshal(ec.Input, &in); err != nil {
-			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
-		}
-		if strings.TrimSpace(in.Query) == "" {
-			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "query is required"}
-		}
 		if strings.TrimSpace(in.Model) == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "model is required (provider/model)"}
 		}
-		limit := in.Limit
-		if limit <= 0 {
-			limit = defaultResearchLimit
-		}
-		if limit > maxResearchLimit {
-			// Cap aggressively — Firecrawl bills per scrape and
-			// the LLM synthesis prompt balloons linearly in the
-			// number of sources. 10 is already pushing weak model
-			// context windows.
-			limit = maxResearchLimit
-		}
+		// JIT length-sizing precedence (issue #532): explicit `limit`
+		// > `length_intent` > legacy default 5. Existing callers
+		// passing `limit` see ZERO behavior change (back-compat).
+		size := resolveResearchDeepSize(&in)
+		limit := size.limit
 		maxTokens := in.MaxTokens
 		if maxTokens <= 0 {
 			maxTokens = defaultResearchMaxTokens
@@ -412,6 +515,7 @@ func researchDeepHandler(d vision.Dispatcher) packs.HandlerFunc {
 				Cause:   errors.New("empty choices"),
 			}
 		}
+		finishReason := chat.Choices[0].FinishReason
 		synthesis := strings.TrimSpace(chat.Choices[0].Message.Content.Text())
 		if synthesis == "" {
 			return nil, &packs.PackError{
@@ -425,6 +529,16 @@ func researchDeepHandler(d vision.Dispatcher) packs.HandlerFunc {
 			"sources":   sources,
 			"synthesis": synthesis,
 			"model":     in.Model,
+			// JIT length-sizing telemetry (issue #532). limit_applied
+			// reflects what was actually passed to Firecrawl (after
+			// precedence + cap). sources_used is the count after
+			// empty-markdown filtering — operators see how lossy the
+			// scrape was. truncated fires when the synthesis LLM hit
+			// finish_reason=length.
+			"limit_applied":         limit,
+			"sources_used":          len(sources),
+			"length_intent_applied": size.applied,
+			"truncated":             strings.EqualFold(finishReason, "length"),
 		}
 		return json.Marshal(out)
 	}

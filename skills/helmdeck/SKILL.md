@@ -332,6 +332,27 @@ The split: agent generates the creative content (slides, blog text, code); packs
 
 ---
 
+## Length-variable packs — declare intent, don't precompute numbers (v0.29.0)
+
+Six packs that produce length-variable output accept a uniform **`length_intent`** input — `"summary"`, `"thorough"`, or `"exhaustive"` — instead of (or alongside) explicit numeric length controls:
+
+- `blog.rewrite_for_audience` — word count
+- `podcast.generate` — duration in minutes
+- `hyperframes.compose` — duration in seconds
+- `slides.narrate` — words-per-slide (observational; reports actual vs declared)
+- `research.deep` — source URL fan-out
+- `content.ground` — claims to verify
+
+The pack measures its input, picks a target appropriate for that intent + input size, generates, and reports `length_intent_applied` (where the target came from) plus `truncated:true` when any LLM call hit `finish_reason=length`. Calling agents should declare intent rather than precomputing exact numbers — the pack has the input in hand and is the right component to size the output.
+
+**Use `inspect: true`** for cheap planning: the pack returns the suggested size + measurements without firing the model. Works even in gateway-less and (where applicable) Firecrawl-less environments. Useful when an agent wants to negotiate length before committing tokens.
+
+**Explicit numeric inputs still win** when set (`max_tokens`, `duration_target_min`, `duration_seconds`, `max_claims`, `limit`, `words_per_slide_min/max`) — back-compat preserved across all six.
+
+> **Operator override**: agents that need a specific length should still pass the numeric input. `length_intent` is for "be summary / thorough / exhaustive about this" — when the agent wants the pack to size for them.
+
+---
+
 ## Pipelines vs. packs — when to save a workflow (v0.15.0)
 
 You now have two ways to run a multi-step workflow. The rule is **explore with packs, exploit with pipelines.**

@@ -71,11 +71,25 @@ The contract rules (canvas size, deterministic-only, timeline coverage) are iden
 | `model` | `string` | yes | — | Gateway model id (`provider/model`; see `helmdeck://models`). |
 | `aspect_ratio` | `string` | no | `16:9` | `16:9`, `9:16`, or `1:1` — drives the exact canvas size (reuses `hyperframes.render`'s preset matrix). |
 | `resolution` | `string` | no | `1080p` | `1080p` or `4k` — sets the canvas pixel dimensions. |
-| `duration_seconds` | `number` | conditional | `8` (silent only) | Video length (cap 720s). **Required when `audio_url` is provided** — set to the audio's length (e.g. `podcast.generate`'s `duration_s` output, rounded up). The 8s default applies ONLY to silent compositions. |
-| `audio_url` | `string` | no | — | A presigned audio URL (e.g. `podcast.generate`'s `audio_url`). When set, the pack embeds an `<audio>` element so the rendered MP4 carries narration. Empty → a silent video. **When set, `duration_seconds` is required** (issue [#498](https://github.com/tosin2013/helmdeck/issues/498)). |
+| `duration_seconds` | `number` | conditional | `8` (silent only) | Video length (cap 720s). **Required when `audio_url` is provided** — set to the audio's length (e.g. `podcast.generate`'s `duration_s` output, rounded up). Wins over `length_intent` when both are set. The 8s default applies ONLY to silent compositions with no `length_intent` set. |
+| `audio_url` | `string` | no | — | A presigned audio URL (e.g. `podcast.generate`'s `audio_url`). When set, the pack embeds an `<audio>` element so the rendered MP4 carries narration. Empty → a silent video. **When set, `duration_seconds` is required** (issue [#498](https://github.com/tosin2013/helmdeck/issues/498)). The pack reports `length_intent_applied: "explicit:audio-locked"` so callers can see the audio dictated the duration. |
 | `style` | `string` | no | — | Freeform visual style hint (e.g. "dark, minimal, bold type"). |
 | `max_tokens` | `number` | no | derived | Completion-token budget (clamped to [2048, 8192]). |
 | `metadata_model` | `string` | no | `openrouter/auto` | Gateway model id for the engagement-metadata generation step. Pass `""` to opt out (no second LLM call, no `engagement` output). Pass any model id (e.g. `openrouter/openai/gpt-oss-120b:free`) to pin the chain to free tier. String-ptr-shaped: omitted → use default. |
+| `length_intent` | `string` | no | — | JIT length sizing (issue [#529](https://github.com/tosin2013/helmdeck/issues/529)) — one of `summary` / `thorough` / `exhaustive`. Pack picks a `duration_seconds` from the heuristic table below. Honored only when `duration_seconds` is unset. Back-compat with no-input callers preserved (legacy 8-sec default). |
+| `inspect` | `boolean` | no | `false` | When `true`, pack returns the planned duration + description word count and does NOT call the gateway. Works without a dispatcher; useful for agents planning before committing tokens. |
+
+### Length intent heuristic
+
+Unlike `blog.rewrite_for_audience` and `podcast.generate` where source word count drives the chosen target, `hyperframes.compose` has no inherent length-scaling signal — the description is a planning instruction, not source material. Intent picks a fixed duration from the table:
+
+| Intent | Target duration | Floor | Ceiling |
+|---|---|---|---|
+| `summary` | 60s | 30s | 120s |
+| `thorough` (default for intent path) | 180s | 120s | 360s |
+| `exhaustive` | 600s | 360s | 720s (matches `hyperframes.render`'s cap) |
+
+**Precedence**: `inspect:true` → `audio_url` + `duration_seconds` (`"explicit:audio-locked"`) → `duration_seconds > 0` (`"explicit"`) → `length_intent` set → **legacy default 8 sec** (`"default:legacy-8sec"`, preserves back-compat). Description word count is reported for transparency but does NOT scale the chosen duration.
 
 ## Outputs
 
@@ -90,6 +104,25 @@ The contract rules (canvas size, deterministic-only, timeline coverage) are iden
 | `duration_source` | `string` | `"audio"` when synced to an embedded track, else `"timeline"`. |
 | `engagement` | `object` | Duration-band-aware engagement payload (see [Engagement metadata](#engagement-metadata) below). Absent when `metadata_model: ""` or when generation failed (composition is still produced — engagement is best-effort). |
 | `engagement_artifact_key` | `string` | Stable artifact key to the JSON sidecar with the same payload. Useful for chaining downstream packs. Absent when engagement is absent or artifact storage failed. |
+| `description_words` | `number` | Whitespace-delimited word count of the input description. Reported for transparency; doesn't drive the chosen duration. |
+| `target_duration_sec_chosen` | `number` | The duration the pack picked. Same value as `duration_seconds` on the generate path; reported separately so callers can see the resolved-intent value distinctly from the renderer-baked one. |
+| `length_intent_applied` | `string` | Where the chosen duration came from — `intent:summary` / `intent:thorough` / `intent:exhaustive` / `explicit` / `explicit:audio-locked` / `default:legacy-8sec`. |
+| `truncated` | `boolean` | `true` when the composition-HTML LLM hit `finish_reason=length`. The assembled `composition_html` may be incomplete — re-run with a richer description or smaller `length_intent` / larger `max_tokens`. |
+
+### Inspect-mode response
+
+When `inspect:true`, the pack returns a planning response — no model call, no engagement metadata, no composition assembly:
+
+| Field | Type | Notes |
+|---|---|---|
+| `composition_html` | `string` | Always empty in inspect mode. |
+| `inspect` | `boolean` | Always `true`. |
+| `description_words` | `number` | Word count of the input description. |
+| `suggested_duration_sec` | `number` | What the precedence + intent table would pick. |
+| `length_intent_applied` | `string` | The chosen path (`intent:*` / `explicit` / `explicit:audio-locked` / `default:legacy-8sec`). |
+| `reason` | `string` | Human-readable explanation. |
+
+Inspect doesn't enforce the audio-requires-duration rule (no render happens), so an agent can inspect with `audio_url` set even if it hasn't measured the audio duration yet.
 
 ## Engagement metadata
 

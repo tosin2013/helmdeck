@@ -28,9 +28,23 @@ HELMDECK_FIRECRAWL_ENABLED=true
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
 | `query` | `string` | yes | — | **Use keywords, not full questions** (`"WebAssembly performance benchmarks 2026"`, not `"how fast is WebAssembly?"`). Search engines reward terse keyword strings; the synthesis step turns them back into prose. |
-| `limit` | `number` | no | `5` | Max sources to scrape. Capped at 10. Each additional source adds ~10–20s of wall-clock. |
-| `model` | `string` | yes | — | Provider/model for the synthesis step. `openrouter/openai/gpt-4o-mini` is a good cheap default; weak/local models work but produce shakier syntheses. |
+| `limit` | `number` | no | `5` | Max sources to scrape. Capped at 10. Each additional source adds ~10–20s of wall-clock. **Wins over `length_intent`** when both are set; preserves back-compat for existing callers. |
+| `model` | `string` | yes (generate only) | — | Provider/model for the synthesis step. `openrouter/openai/gpt-4o-mini` is a good cheap default; weak/local models work but produce shakier syntheses. **Not required when `inspect:true`** — inspect doesn't call the model. |
 | `max_tokens` | `number` | no | `1024` | Cap on synthesis output. Doesn't affect search/scrape. |
+| `length_intent` | `string` | no | — | JIT length sizing (issue [#532](https://github.com/tosin2013/helmdeck/issues/532)) — one of `summary` / `thorough` / `exhaustive`. Maps directly to `limit`. Cost-cap shaped: more sources = more Firecrawl scrapes + more synthesis tokens. Honored only when `limit` is unset. |
+| `inspect` | `boolean` | no | `false` | When `true`, pack returns the resolved limit + intent without firing Firecrawl or the synthesis LLM. Cheap planning helper — also skips the `HELMDECK_FIRECRAWL_ENABLED` gate so agents can plan in environments where Firecrawl isn't wired. |
+
+### Length intent → limit
+
+`research.deep` is **cost-cap shaped**: the "length" being controlled isn't output words or duration but the number of source URLs scraped per call. Each source costs a Firecrawl SERP page hit + a per-source markdown scrape + a slice of the synthesis LLM's context window.
+
+| Intent | `limit` value |
+|---|---|
+| `summary` | 3 |
+| `thorough` | 5 (matches the legacy default) |
+| `exhaustive` | 10 (matches the hard cap) |
+
+**Precedence**: `inspect:true` short-circuit → explicit `limit` (`"explicit"`, clamped to `[1, 10]`) → `length_intent` (`"intent:*"`) → legacy default 5 (`"default"`). Existing callers passing `limit` see **ZERO behavior change**.
 
 ## Outputs
 
@@ -40,6 +54,22 @@ HELMDECK_FIRECRAWL_ENABLED=true
 | `sources` | `array` | `[{url, title, description, markdown}]` — verbatim Firecrawl payload per source, post-scrape. |
 | `synthesis` | `string` | 3–6 sentences. Every claim should cite a source by URL or title. If the model thinks the sources don't answer the query, it says so explicitly rather than confabulating. |
 | `model` | `string` | Echo. |
+| `limit_applied` | `number` | The limit value actually passed to Firecrawl (after precedence + cap). |
+| `sources_used` | `number` | Count after empty-markdown filtering. `< limit_applied` when some search results came back with empty scrapes. |
+| `length_intent_applied` | `string` | Where the limit came from — `intent:summary` / `intent:thorough` / `intent:exhaustive` / `explicit` / `default`. |
+| `truncated` | `boolean` | `true` when the synthesis LLM hit `finish_reason=length`. Re-run with smaller `length_intent` or larger `max_tokens`. |
+
+### Inspect-mode response
+
+When `inspect:true`, the pack returns a planning response — no Firecrawl, no LLM, no Firecrawl-enabled gate:
+
+| Field | Type | Notes |
+|---|---|---|
+| `query` | `string` | Echo. |
+| `inspect` | `boolean` | Always `true`. |
+| `suggested_limit` | `number` | What the resolver would pick. |
+| `length_intent_applied` | `string` | Where the limit came from. |
+| `reason` | `string` | Human-readable explanation. |
 
 ## Vault credentials needed
 

@@ -263,3 +263,229 @@ func TestResearchDeep_SynthesisEmpty(t *testing.T) {
 		t.Errorf("message = %q, want contains 'empty'", pe.Message)
 	}
 }
+
+// --- JIT length-sizing (issue #532 / convention #525) ---------------------
+
+// TestResearchDeep_Inspect_NoFirecrawlNoDispatcher — inspect mode runs
+// without Firecrawl enabled, without a dispatcher, and without a model.
+// Pure cost-planning helper.
+func TestResearchDeep_Inspect_NoFirecrawlNoDispatcher(t *testing.T) {
+	// Explicitly DON'T enable Firecrawl. Inspect must skip the gate.
+	pack := ResearchDeep(nil)
+	ec := &packs.ExecutionContext{
+		Pack:  pack,
+		Input: json.RawMessage(`{"query":"webrtc congestion control","inspect":true,"length_intent":"exhaustive"}`),
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("inspect with nil dispatcher + Firecrawl disabled: %v", err)
+	}
+	var out struct {
+		Inspect             bool   `json:"inspect"`
+		Query               string `json:"query"`
+		SuggestedLimit      int    `json:"suggested_limit"`
+		LengthIntentApplied string `json:"length_intent_applied"`
+		Reason              string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Inspect {
+		t.Errorf("inspect not echoed")
+	}
+	if out.Query != "webrtc congestion control" {
+		t.Errorf("query echo = %q", out.Query)
+	}
+	if out.SuggestedLimit != 10 {
+		t.Errorf("suggested_limit = %d, want 10 (exhaustive)", out.SuggestedLimit)
+	}
+	if out.LengthIntentApplied != "intent:exhaustive" {
+		t.Errorf("applied = %q, want intent:exhaustive", out.LengthIntentApplied)
+	}
+	if !strings.Contains(out.Reason, "10") || !strings.Contains(out.Reason, "exhaustive") {
+		t.Errorf("reason should mention limit + intent: %q", out.Reason)
+	}
+}
+
+// TestResearchDeep_LengthIntent_ScalesByIntent — each intent maps to
+// the right `limit` value (verified by inspecting the Firecrawl request).
+func TestResearchDeep_LengthIntent_ScalesByIntent(t *testing.T) {
+	cases := []struct {
+		intent    string
+		wantLimit int
+	}{
+		{"summary", 3},
+		{"thorough", 5},
+		{"exhaustive", 10},
+	}
+	for _, tc := range cases {
+		t.Run(tc.intent, func(t *testing.T) {
+			capturedLimit := -1
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				var req firecrawlSearchRequest
+				_ = json.Unmarshal(raw, &req)
+				capturedLimit = req.Limit
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"success":true,"data":[{"url":"https://a","markdown":"x"}]}`))
+			}))
+			defer srv.Close()
+			enableFirecrawlSearch(t, srv.URL)
+			disp := &scriptedDispatcherWT{replies: []string{"answer"}}
+			raw, err := runResearchDeep(t, disp, `{
+				"query":"x","model":"openai/gpt-4o","length_intent":"`+tc.intent+`"
+			}`)
+			if err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+			if capturedLimit != tc.wantLimit {
+				t.Errorf("intent=%s: firecrawl limit = %d, want %d", tc.intent, capturedLimit, tc.wantLimit)
+			}
+			var out struct {
+				LimitApplied        int    `json:"limit_applied"`
+				LengthIntentApplied string `json:"length_intent_applied"`
+			}
+			_ = json.Unmarshal(raw, &out)
+			if out.LimitApplied != tc.wantLimit {
+				t.Errorf("output limit_applied = %d, want %d", out.LimitApplied, tc.wantLimit)
+			}
+			if want := "intent:" + tc.intent; out.LengthIntentApplied != want {
+				t.Errorf("applied = %q, want %q", out.LengthIntentApplied, want)
+			}
+		})
+	}
+}
+
+// TestResearchDeep_BackCompat_ExplicitLimitWins — when `limit` is set,
+// it wins over `length_intent`. Existing callers see ZERO change.
+func TestResearchDeep_BackCompat_ExplicitLimitWins(t *testing.T) {
+	capturedLimit := -1
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var req firecrawlSearchRequest
+		_ = json.Unmarshal(raw, &req)
+		capturedLimit = req.Limit
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"url":"https://a","markdown":"x"}]}`))
+	}))
+	defer srv.Close()
+	enableFirecrawlSearch(t, srv.URL)
+	disp := &scriptedDispatcherWT{replies: []string{"answer"}}
+	raw, err := runResearchDeep(t, disp, `{
+		"query":"x","model":"openai/gpt-4o","limit":7,"length_intent":"summary"
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if capturedLimit != 7 {
+		t.Errorf("explicit limit ignored: got %d, want 7", capturedLimit)
+	}
+	var out struct {
+		LengthIntentApplied string `json:"length_intent_applied"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.LengthIntentApplied != "explicit" {
+		t.Errorf("applied = %q, want explicit", out.LengthIntentApplied)
+	}
+}
+
+// TestResearchDeep_BackCompat_DefaultWhenNoIntentNoLimit — no inputs →
+// legacy default 5 with applied:default.
+func TestResearchDeep_BackCompat_DefaultWhenNoIntentNoLimit(t *testing.T) {
+	srv := stubFirecrawlSearch(t, 200, `{"success":true,"data":[{"url":"https://a","markdown":"x"}]}`)
+	enableFirecrawlSearch(t, srv.URL)
+	disp := &scriptedDispatcherWT{replies: []string{"answer"}}
+	raw, err := runResearchDeep(t, disp, `{"query":"x","model":"openai/gpt-4o"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		LimitApplied        int    `json:"limit_applied"`
+		LengthIntentApplied string `json:"length_intent_applied"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.LimitApplied != defaultResearchLimit {
+		t.Errorf("limit_applied = %d, want %d (legacy default)", out.LimitApplied, defaultResearchLimit)
+	}
+	if out.LengthIntentApplied != "default" {
+		t.Errorf("applied = %q, want default", out.LengthIntentApplied)
+	}
+}
+
+// TestResearchDeep_Truncated_FinishReasonLength — synthesis LLM hitting
+// finish_reason=length surfaces as truncated:true so the agent can
+// retry with a smaller intent or larger max_tokens.
+func TestResearchDeep_Truncated_FinishReasonLength(t *testing.T) {
+	srv := stubFirecrawlSearch(t, 200, `{"success":true,"data":[{"url":"https://a","markdown":"x"}]}`)
+	enableFirecrawlSearch(t, srv.URL)
+	disp := &scriptedDispatcherWT{
+		replies:       []string{"answer continues but"},
+		finishReasons: []string{"length"},
+	}
+	raw, err := runResearchDeep(t, disp, `{"query":"x","model":"openai/gpt-4o"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		Truncated bool `json:"truncated"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if !out.Truncated {
+		t.Error("finish_reason=length should set truncated:true")
+	}
+}
+
+// TestResearchDeep_OutputMetricsAlwaysPresent — JIT fields land on
+// every generate response so callers can rely on them.
+func TestResearchDeep_OutputMetricsAlwaysPresent(t *testing.T) {
+	srv := stubFirecrawlSearch(t, 200, `{"success":true,"data":[{"url":"https://a","markdown":"x"}]}`)
+	enableFirecrawlSearch(t, srv.URL)
+	disp := &scriptedDispatcherWT{replies: []string{"answer."}}
+	raw, err := runResearchDeep(t, disp, `{"query":"x","model":"openai/gpt-4o"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	for _, k := range []string{"limit_applied", "sources_used", "length_intent_applied", "truncated"} {
+		if _, ok := out[k]; !ok {
+			t.Errorf("missing JIT metric %q in output: %v", k, out)
+		}
+	}
+}
+
+// TestResearchDeep_ResolveSize_Precedence — unit-level resolver
+// precedence pinned in code so the rule doesn't drift from docs.
+func TestResearchDeep_ResolveSize_Precedence(t *testing.T) {
+	// (1) explicit wins.
+	in := researchDeepInput{Limit: 7, LengthIntent: "summary"}
+	if size := resolveResearchDeepSize(&in); size.limit != 7 || size.applied != "explicit" {
+		t.Errorf("explicit: limit=%d applied=%q", size.limit, size.applied)
+	}
+	// (2) explicit clamped to ceiling.
+	in = researchDeepInput{Limit: 50}
+	if size := resolveResearchDeepSize(&in); size.limit != maxResearchLimit {
+		t.Errorf("explicit clamp: limit=%d, want %d", size.limit, maxResearchLimit)
+	}
+	// (3) intent.
+	in = researchDeepInput{LengthIntent: "summary"}
+	if size := resolveResearchDeepSize(&in); size.limit != 3 || size.applied != "intent:summary" {
+		t.Errorf("intent: limit=%d applied=%q", size.limit, size.applied)
+	}
+	// (4) default.
+	in = researchDeepInput{}
+	size := resolveResearchDeepSize(&in)
+	if size.limit != defaultResearchLimit || size.applied != "default" {
+		t.Errorf("default: limit=%d applied=%q", size.limit, size.applied)
+	}
+}
+
+// TestResearchDeep_UnknownIntentFallsBack — misspelled intent falls
+// back to thorough rather than erroring.
+func TestResearchDeep_UnknownIntentFallsBack(t *testing.T) {
+	in := researchDeepInput{LengthIntent: "deeper-than-deep-dive"}
+	size := resolveResearchDeepSize(&in)
+	if size.applied != "intent:thorough" {
+		t.Errorf("applied = %q, want intent:thorough", size.applied)
+	}
+}

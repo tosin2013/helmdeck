@@ -57,6 +57,18 @@ const (
 	// gsapCDN is the exact GSAP build the upstream CLI's `blank` template loads.
 	gsapCDN = "https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"
 
+	// JIT length-sizing constants (issue #529 / convention #525). Unlike
+	// blog and podcast where source word count drives the target, the
+	// hyperframes pack has no inherent "source → output length"
+	// relationship (the description is a planning instruction, not
+	// source material). Intent therefore picks a fixed duration from
+	// the table; description word count is reported for transparency
+	// but doesn't scale the choice.
+	hyperframesComposeIntentSummary    = "summary"
+	hyperframesComposeIntentThorough   = "thorough"
+	hyperframesComposeIntentExhaustive = "exhaustive"
+	hyperframesComposeIntentDefault    = hyperframesComposeIntentThorough
+
 	// hyperframesComposeSystemPromptTierC is the Tier C (free / weak open
 	// model) system prompt. Constraint-heavy, compact, leads with the
 	// hard rules verbatim because Tier C models reliably honor explicit
@@ -134,6 +146,74 @@ Canvas: %d×%d. For the full upstream-sourced ruleset (seven-step pipeline, refe
 	composeSecTimeline = "===TIMELINE==="
 )
 
+// hyperframesComposeIntentRow holds per-intent duration parameters in
+// seconds. Mirrors podcastIntentRow's shape, but here the "chosen"
+// value is the row's own target (not a multiplier × source word count)
+// because there's no length-scaling source signal to apply.
+type hyperframesComposeIntentRow struct {
+	target  float64
+	floor   float64
+	ceiling float64
+}
+
+// hyperframesComposeIntentTable per issue #529. Numbers are defaults
+// to revisit as empirical data lands. Ceilings respect the upstream
+// hyperframes.render 12-minute cap.
+var hyperframesComposeIntentTable = map[string]hyperframesComposeIntentRow{
+	hyperframesComposeIntentSummary:    {target: 60, floor: 30, ceiling: 120},
+	hyperframesComposeIntentThorough:   {target: 180, floor: 120, ceiling: 360},
+	hyperframesComposeIntentExhaustive: {target: 600, floor: 360, ceiling: 720},
+}
+
+// hyperframesComposeSize captures the chosen duration + the path that
+// produced it. Mirrors podcastSize / blogRewriteSize so the convention
+// stays recognizable across packs.
+type hyperframesComposeSize struct {
+	chosen  float64
+	applied string // intent:thorough / explicit / explicit:audio-locked / default:legacy-8sec
+}
+
+// sizeForHyperframesComposeIntent picks a duration from the intent
+// table. Floor/ceiling are reported but don't currently clamp the
+// chosen value — that's reserved for future scaling rules (e.g.
+// description-richness-based adjustments).
+func sizeForHyperframesComposeIntent(intent string) hyperframesComposeSize {
+	key := strings.ToLower(strings.TrimSpace(intent))
+	if key == "" {
+		key = hyperframesComposeIntentDefault
+	}
+	row, ok := hyperframesComposeIntentTable[key]
+	if !ok {
+		row = hyperframesComposeIntentTable[hyperframesComposeIntentDefault]
+		key = hyperframesComposeIntentDefault
+	}
+	return hyperframesComposeSize{chosen: row.target, applied: "intent:" + key}
+}
+
+// resolveHyperframesComposeSize encodes the precedence:
+//  1. audio_url present → explicit DurationSeconds required (existing
+//     hard-fail upstream of this call); reported as "explicit:audio-locked"
+//  2. DurationSeconds > 0 → explicit numeric ("explicit")
+//  3. LengthIntent set → intent table
+//  4. Default → legacy 8-second default ("default:legacy-8sec")
+//
+// The legacy default branch preserves back-compat — existing silent
+// micro-animation callers passing neither numeric nor intent see ZERO
+// behavior change.
+func resolveHyperframesComposeSize(in *hyperframesComposeInput) hyperframesComposeSize {
+	hasAudio := strings.TrimSpace(in.AudioURL) != ""
+	if hasAudio && in.DurationSeconds > 0 {
+		return hyperframesComposeSize{chosen: in.DurationSeconds, applied: "explicit:audio-locked"}
+	}
+	if in.DurationSeconds > 0 {
+		return hyperframesComposeSize{chosen: in.DurationSeconds, applied: "explicit"}
+	}
+	if strings.TrimSpace(in.LengthIntent) != "" {
+		return sizeForHyperframesComposeIntent(in.LengthIntent)
+	}
+	return hyperframesComposeSize{chosen: hyperframesComposeDefaultDuration, applied: "default:legacy-8sec"}
+}
+
 type hyperframesComposeInput struct {
 	Description     string  `json:"description"`
 	Model           string  `json:"model"`
@@ -153,6 +233,18 @@ type hyperframesComposeInput struct {
 	//                  model for end-to-end free-tier discipline)
 	// Mirrors podcast.generate's MetadataModelRaw pattern.
 	MetadataModelRaw *string `json:"metadata_model"`
+
+	// JIT length-sizing inputs (issue #529 / convention #525).
+	// LengthIntent declares "summary" / "thorough" / "exhaustive";
+	// pack picks a duration from the intent table when no explicit
+	// duration_seconds is set. audio_url with explicit duration takes
+	// precedence regardless. See resolveHyperframesComposeSize for the
+	// full precedence order.
+	LengthIntent string `json:"length_intent,omitempty"`
+	// Inspect: return the planned duration + description word count
+	// without calling the dispatcher. Useful when an agent wants to
+	// see what the pack would pick before committing tokens.
+	Inspect bool `json:"inspect,omitempty"`
 }
 
 // composeSpec is the creative payload the model returns; the pack assembles the
@@ -174,12 +266,18 @@ func HyperframesCompose(d vision.Dispatcher) *packs.Pack {
 		Metadata: packs.PackMetadata{
 			Accepts:        []string{"description", "audio_url"},
 			Produces:       []string{"composition_html"},
-			IntentKeywords: []string{"compose video", "design animated visual", "describe a video", "make explainer animation"},
-			TypicalUse:     "Generator pack for video compositions. Chain hyperframes.render after for an MP4. Pair with podcast.generate's audio_url for a narrated video (the prompt-narrated-video pipeline).",
-			Limitations:    []string{"does not render — outputs HTML/CSS/JS only; chain hyperframes.render", "visual design is LLM-driven; no fine-grained timeline control via inputs", "audio sync depends on duration_seconds being correct"},
+			IntentKeywords: []string{"compose video", "design animated visual", "describe a video", "make explainer animation", "short video", "thorough explainer video", "exhaustive explainer video"},
+			TypicalUse:     "Generator pack for video compositions. Chain hyperframes.render after for an MP4. Pair with podcast.generate's audio_url for a narrated video (the prompt-narrated-video pipeline). Use length_intent (summary / thorough / exhaustive) to pick a duration without specifying seconds; explicit duration_seconds always wins.",
+			Limitations:    []string{"does not render — outputs HTML/CSS/JS only; chain hyperframes.render", "visual design is LLM-driven; no fine-grained timeline control via inputs", "audio sync depends on duration_seconds being correct", "truncated:true signals the composition-HTML LLM hit max_tokens — re-run with a richer description or smaller length_intent"},
 		},
 		InputSchema: packs.BasicSchema{
-			Required: []string{"description", "model"},
+			// model is required at runtime by the handler for the
+			// generate path, but NOT in the schema — inspect mode
+			// short-circuits without calling the model and would
+			// otherwise be rejected by the BasicSchema validator
+			// before the handler ran. Runtime check below picks up
+			// non-inspect calls that omit model.
+			Required: []string{"description"},
 			Properties: map[string]string{
 				"description":      "string",
 				"model":            "string",
@@ -192,10 +290,19 @@ func HyperframesCompose(d vision.Dispatcher) *packs.Pack {
 				// metadata_model: string-ptr-shaped opt-in for engagement
 				// metadata (default "openrouter/auto"; "" disables).
 				"metadata_model": "string",
+				// JIT length-sizing (issue #529).
+				"length_intent": "string",
+				"inspect":       "boolean",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
-			Required: []string{"composition_html", "model", "width", "height"},
+			// Narrowed from {composition_html, model, width, height}
+			// to just composition_html so inspect mode (which doesn't
+			// emit width/height/model — no composition is built) can
+			// satisfy the validator. The four-field requirement was
+			// validator-friendly but excluded the inspect path; the
+			// narrow form keeps generate behavior intact.
+			Required: []string{"composition_html"},
 			Properties: map[string]string{
 				"composition_html": "string",
 				"model":            "string",
@@ -211,6 +318,15 @@ func HyperframesCompose(d vision.Dispatcher) *packs.Pack {
 				// when chaining downstream packs.
 				"engagement":              "object",
 				"engagement_artifact_key": "string",
+				// JIT length-sizing telemetry (issue #529).
+				"description_words":           "number",
+				"target_duration_sec_chosen":  "number",
+				"length_intent_applied":       "string",
+				"truncated":                   "boolean",
+				// Inspect mode only.
+				"inspect":                "boolean",
+				"suggested_duration_sec": "number",
+				"reason":                 "string",
 			},
 		},
 		Handler: hyperframesComposeHandler(d),
@@ -220,16 +336,38 @@ func HyperframesCompose(d vision.Dispatcher) *packs.Pack {
 
 func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 	return func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
-		if d == nil {
-			return nil, &packs.PackError{Code: packs.CodeInternal,
-				Message: "hyperframes.compose registered without a gateway dispatcher"}
-		}
 		var in hyperframesComposeInput
 		if err := json.Unmarshal(ec.Input, &in); err != nil {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
 		}
 		if strings.TrimSpace(in.Description) == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "description is required"}
+		}
+		// JIT inspect short-circuit (issue #529). Runs before the
+		// dispatcher / model-required checks so gateway-less and
+		// dispatcher-less environments can plan a composition. The
+		// audio_url + duration_seconds hard rule is also skipped:
+		// inspect doesn't render, so there's nothing to truncate.
+		if in.Inspect {
+			size := resolveHyperframesComposeSize(&in)
+			descriptionWords := countWords(in.Description)
+			reason := fmt.Sprintf("description is %d words; applying %s for a duration of %.0f seconds",
+				descriptionWords, size.applied, size.chosen)
+			return json.Marshal(map[string]any{
+				// composition_html populated empty to satisfy
+				// OutputSchema's Required list.
+				"composition_html":       "",
+				"model":                  in.Model,
+				"inspect":                true,
+				"description_words":      descriptionWords,
+				"suggested_duration_sec": size.chosen,
+				"length_intent_applied":  size.applied,
+				"reason":                 reason,
+			})
+		}
+		if d == nil {
+			return nil, &packs.PackError{Code: packs.CodeInternal,
+				Message: "hyperframes.compose registered without a gateway dispatcher"}
 		}
 		if strings.TrimSpace(in.Model) == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "model is required (provider/model id; see helmdeck://models)"}
@@ -270,10 +408,13 @@ func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 					"truncate longer narration tracks.",
 			}
 		}
-		duration := in.DurationSeconds
-		if duration <= 0 {
-			duration = hyperframesComposeDefaultDuration
-		}
+		// JIT length-sizing (issue #529). Precedence: audio + explicit
+		// duration → explicit numeric → length_intent → legacy 8s
+		// default. The legacy fallback preserves back-compat — silent
+		// micro-animation callers passing neither numeric nor intent
+		// see ZERO behavior change.
+		size := resolveHyperframesComposeSize(&in)
+		duration := size.chosen
 		if duration > hyperframesComposeMaxDuration {
 			duration = hyperframesComposeMaxDuration
 		}
@@ -317,6 +458,7 @@ func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: "gateway returned no choices"}
 		}
 
+		finishReason := chat.Choices[0].FinishReason
 		raw := unwrapCodeFence(strings.TrimSpace(chat.Choices[0].Message.Content.Text()))
 		spec, perr := parseComposeSpec(raw)
 		if perr != nil {
@@ -382,6 +524,14 @@ func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 			"duration_seconds": duration,
 			"has_audio":        hasAudio,
 			"duration_source":  durationSource,
+			// JIT length-sizing telemetry (issue #529). Always
+			// reported on the generate path so callers can compare
+			// chosen target against actual rendered length and
+			// detect truncation of the composition-HTML LLM call.
+			"description_words":          countWords(in.Description),
+			"target_duration_sec_chosen": size.chosen,
+			"length_intent_applied":      size.applied,
+			"truncated":                  strings.EqualFold(finishReason, "length"),
 		}
 
 		// Engagement metadata — duration-band-aware, opt-out via empty

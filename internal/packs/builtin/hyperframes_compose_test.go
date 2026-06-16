@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -760,5 +761,270 @@ func TestCompose_BadAspectRatio(t *testing.T) {
 	pe := &packs.PackError{}
 	if !errors.As(err, &pe) || pe.Code != packs.CodeInvalidInput {
 		t.Fatalf("want invalid_input on unsupported aspect_ratio, got %v", err)
+	}
+}
+
+// --- JIT length-sizing (issue #529 / convention #525) ---------------------
+
+// TestCompose_Inspect_NoDispatcher — inspect mode runs without a
+// dispatcher, model, or session. Pure planning helper.
+func TestCompose_Inspect_NoDispatcher(t *testing.T) {
+	pack := HyperframesCompose(nil)
+	ec := &packs.ExecutionContext{
+		Pack:  pack,
+		Input: json.RawMessage(`{"description":"a short explainer about how channels work in Go","inspect":true,"length_intent":"thorough"}`),
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("inspect with nil dispatcher: %v", err)
+	}
+	var out struct {
+		Inspect              bool    `json:"inspect"`
+		CompositionHTML      string  `json:"composition_html"`
+		DescriptionWords     int     `json:"description_words"`
+		SuggestedDurationSec float64 `json:"suggested_duration_sec"`
+		LengthIntentApplied  string  `json:"length_intent_applied"`
+		Reason               string  `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Inspect {
+		t.Errorf("inspect not echoed")
+	}
+	if out.CompositionHTML != "" {
+		t.Errorf("inspect should return empty composition_html, got %q", out.CompositionHTML)
+	}
+	if out.DescriptionWords < 8 || out.DescriptionWords > 12 {
+		t.Errorf("description_words = %d, expected ~10", out.DescriptionWords)
+	}
+	if out.SuggestedDurationSec != 180 {
+		t.Errorf("suggested_duration_sec = %v, want 180 (thorough target)", out.SuggestedDurationSec)
+	}
+	if out.LengthIntentApplied != "intent:thorough" {
+		t.Errorf("length_intent_applied = %q, want intent:thorough", out.LengthIntentApplied)
+	}
+	if !strings.Contains(out.Reason, "thorough") {
+		t.Errorf("reason should mention applied intent: %q", out.Reason)
+	}
+}
+
+// TestCompose_LengthIntent_BackCompat_NoIntentNoNumeric — when neither
+// length_intent nor duration_seconds is set, the pack falls back to the
+// legacy 8-second default. Critical back-compat test.
+func TestCompose_LengthIntent_BackCompat_NoIntentNoNumeric(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec}}
+	raw, err := runCompose(t, disp, `{"description":"a tiny animation","model":"openrouter/auto"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		DurationSeconds         float64 `json:"duration_seconds"`
+		TargetDurationSecChosen float64 `json:"target_duration_sec_chosen"`
+		LengthIntentApplied     string  `json:"length_intent_applied"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.DurationSeconds != hyperframesComposeDefaultDuration {
+		t.Errorf("back-compat: duration_seconds = %v, want %v",
+			out.DurationSeconds, hyperframesComposeDefaultDuration)
+	}
+	if out.LengthIntentApplied != "default:legacy-8sec" {
+		t.Errorf("length_intent_applied = %q, want default:legacy-8sec", out.LengthIntentApplied)
+	}
+	if out.TargetDurationSecChosen != hyperframesComposeDefaultDuration {
+		t.Errorf("target_duration_sec_chosen = %v, want %v",
+			out.TargetDurationSecChosen, hyperframesComposeDefaultDuration)
+	}
+}
+
+// TestCompose_LengthIntent_ScalesByIntent — each intent picks its row's
+// target. Catches table regression.
+func TestCompose_LengthIntent_ScalesByIntent(t *testing.T) {
+	cases := []struct {
+		intent string
+		want   float64
+	}{
+		{"summary", 60},
+		{"thorough", 180},
+		{"exhaustive", 600},
+	}
+	for _, tc := range cases {
+		t.Run(tc.intent, func(t *testing.T) {
+			disp := &scriptedDispatcherWT{replies: []string{goodSpec}}
+			raw, err := runCompose(t, disp, fmt.Sprintf(
+				`{"description":"a test","model":"openrouter/auto","length_intent":%q}`, tc.intent))
+			if err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+			var out struct {
+				DurationSeconds         float64 `json:"duration_seconds"`
+				TargetDurationSecChosen float64 `json:"target_duration_sec_chosen"`
+				LengthIntentApplied     string  `json:"length_intent_applied"`
+			}
+			_ = json.Unmarshal(raw, &out)
+			if out.TargetDurationSecChosen != tc.want {
+				t.Errorf("intent=%s: chosen = %v, want %v", tc.intent, out.TargetDurationSecChosen, tc.want)
+			}
+			if out.DurationSeconds != tc.want {
+				t.Errorf("intent=%s: duration_seconds = %v, want %v", tc.intent, out.DurationSeconds, tc.want)
+			}
+			if want := "intent:" + tc.intent; out.LengthIntentApplied != want {
+				t.Errorf("applied = %q, want %q", out.LengthIntentApplied, want)
+			}
+		})
+	}
+}
+
+// TestCompose_LengthIntent_NumericOverridesIntent — explicit
+// duration_seconds wins over length_intent.
+func TestCompose_LengthIntent_NumericOverridesIntent(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec}}
+	raw, err := runCompose(t, disp, `{
+		"description":"a test","model":"openrouter/auto",
+		"duration_seconds": 45,
+		"length_intent":"exhaustive"
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		DurationSeconds     float64 `json:"duration_seconds"`
+		LengthIntentApplied string  `json:"length_intent_applied"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.DurationSeconds != 45 {
+		t.Errorf("explicit duration ignored: got %v", out.DurationSeconds)
+	}
+	if out.LengthIntentApplied != "explicit" {
+		t.Errorf("applied = %q, want explicit", out.LengthIntentApplied)
+	}
+}
+
+// TestCompose_LengthIntent_AudioLockedTakesPrecedence — audio_url with
+// duration_seconds reports applied as "explicit:audio-locked" so callers
+// can see that the audio dictated the duration.
+func TestCompose_LengthIntent_AudioLockedTakesPrecedence(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec}}
+	raw, err := runCompose(t, disp, `{
+		"description":"narrated explainer",
+		"model":"openrouter/auto",
+		"audio_url":"https://example.com/narration.mp3",
+		"duration_seconds": 120,
+		"length_intent":"summary"
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		DurationSeconds     float64 `json:"duration_seconds"`
+		LengthIntentApplied string  `json:"length_intent_applied"`
+		HasAudio            bool    `json:"has_audio"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if !out.HasAudio {
+		t.Error("has_audio should be true")
+	}
+	if out.DurationSeconds != 120 {
+		t.Errorf("duration_seconds = %v, want 120", out.DurationSeconds)
+	}
+	if out.LengthIntentApplied != "explicit:audio-locked" {
+		t.Errorf("applied = %q, want explicit:audio-locked", out.LengthIntentApplied)
+	}
+}
+
+// TestCompose_Truncated_FinishReasonLength — finish_reason=length on the
+// composition LLM call surfaces as truncated:true. Strong signal so
+// callers can re-run with a richer description or smaller intent.
+func TestCompose_Truncated_FinishReasonLength(t *testing.T) {
+	disp := &scriptedDispatcherWT{
+		replies:       []string{goodSpec},
+		finishReasons: []string{"length"},
+	}
+	raw, err := runCompose(t, disp, `{"description":"x","model":"openrouter/auto"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		Truncated bool `json:"truncated"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if !out.Truncated {
+		t.Error("finish_reason=length should set truncated:true")
+	}
+}
+
+// TestCompose_NotTruncated_FinishReasonStop — well-terminated output
+// with finish_reason=stop is NOT flagged truncated.
+func TestCompose_NotTruncated_FinishReasonStop(t *testing.T) {
+	disp := &scriptedDispatcherWT{
+		replies:       []string{goodSpec},
+		finishReasons: []string{"stop"},
+	}
+	raw, err := runCompose(t, disp, `{"description":"x","model":"openrouter/auto"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		Truncated bool `json:"truncated"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.Truncated {
+		t.Error("finish_reason=stop should NOT set truncated")
+	}
+}
+
+// TestCompose_OutputMetricsAlwaysPresent — JIT fields land on every
+// generate response so callers can rely on them.
+func TestCompose_OutputMetricsAlwaysPresent(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{goodSpec}}
+	raw, err := runCompose(t, disp, `{"description":"x","model":"openrouter/auto"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	for _, k := range []string{
+		"description_words", "target_duration_sec_chosen",
+		"length_intent_applied", "truncated",
+	} {
+		if _, ok := out[k]; !ok {
+			t.Errorf("missing JIT metric %q in output: %v", k, out)
+		}
+	}
+}
+
+// TestCompose_SizeResolver_Precedence — unit-level resolver precedence
+// pinned in code so the rules don't drift from the docs.
+func TestCompose_SizeResolver_Precedence(t *testing.T) {
+	// audio + explicit → audio-locked
+	in := hyperframesComposeInput{AudioURL: "u", DurationSeconds: 30, LengthIntent: "summary"}
+	if size := resolveHyperframesComposeSize(&in); size.applied != "explicit:audio-locked" {
+		t.Errorf("audio+explicit: applied=%q, want explicit:audio-locked", size.applied)
+	}
+	// explicit (no audio) → explicit
+	in = hyperframesComposeInput{DurationSeconds: 45, LengthIntent: "summary"}
+	if size := resolveHyperframesComposeSize(&in); size.applied != "explicit" {
+		t.Errorf("explicit: applied=%q, want explicit", size.applied)
+	}
+	// intent
+	in = hyperframesComposeInput{LengthIntent: "summary"}
+	if size := resolveHyperframesComposeSize(&in); size.applied != "intent:summary" {
+		t.Errorf("intent: applied=%q, want intent:summary", size.applied)
+	}
+	// default
+	in = hyperframesComposeInput{}
+	size := resolveHyperframesComposeSize(&in)
+	if size.applied != "default:legacy-8sec" || size.chosen != hyperframesComposeDefaultDuration {
+		t.Errorf("default: applied=%q chosen=%v, want default:legacy-8sec/%v",
+			size.applied, size.chosen, hyperframesComposeDefaultDuration)
+	}
+}
+
+// TestCompose_UnknownIntentFallsBack — misspelled intent falls back to
+// thorough so agents that fat-finger don't lose the whole call.
+func TestCompose_UnknownIntentFallsBack(t *testing.T) {
+	size := sizeForHyperframesComposeIntent("bigger-than-exhaustive")
+	if size.applied != "intent:thorough" {
+		t.Errorf("applied=%q, want intent:thorough (fallback)", size.applied)
 	}
 }

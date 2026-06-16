@@ -1752,3 +1752,199 @@ func TestSlidesNarrate_ConcatReencodesAudio(t *testing.T) {
 		t.Errorf("concat must NOT use legacy `-c copy` (stream-copies both streams and re-introduces dropouts); got %q", concatScript)
 	}
 }
+
+// --- JIT length-sizing (issue #530 / convention #525) ---------------------
+
+// makeDeckWithWordsPerSlide produces a Marp deck with n narrated slides,
+// each with `wordsPerSlide` words in notes. Used by the JIT sizing
+// tests to feed the density helper measurable inputs without depending
+// on the full Marp pipeline.
+func makeDeckWithWordsPerSlide(t *testing.T, n, wordsPerSlide int) string {
+	t.Helper()
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteString("\n---\n\n")
+		}
+		fmt.Fprintf(&b, "# Slide %d\n\nVisible text.\n\n<!-- ", i+1)
+		for w := 0; w < wordsPerSlide; w++ {
+			if w > 0 {
+				b.WriteString(" ")
+			}
+			b.WriteString("word")
+		}
+		b.WriteString(" -->\n")
+	}
+	return b.String()
+}
+
+// TestSlidesNarrate_Inspect_NoSession — inspect mode skips the session
+// executor + vault checks. Pure parse + measure.
+func TestSlidesNarrate_Inspect_NoSession(t *testing.T) {
+	pack := SlidesNarrate(nil, nil, nil)
+	deck := makeDeckWithWordsPerSlide(t, 5, 100) // 5 slides at 100 words each → thorough
+	ec := &packs.ExecutionContext{
+		Pack: pack,
+		Input: json.RawMessage(fmt.Sprintf(
+			`{"markdown":%q,"inspect":true,"length_intent":"thorough"}`, deck)),
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("inspect with nil session: %v", err)
+	}
+	var out struct {
+		Inspect             bool    `json:"inspect"`
+		SlideCount          int     `json:"slide_count"`
+		NarratedSlideCount  int     `json:"narrated_slide_count"`
+		SourceWordsAvg      float64 `json:"source_words_per_slide_avg"`
+		SourceWordsMin      int     `json:"source_words_per_slide_min"`
+		SourceWordsMax      int     `json:"source_words_per_slide_max"`
+		WithinRange         int     `json:"slides_within_intent_range"`
+		OutsideRange        int     `json:"slides_outside_intent_range"`
+		LengthIntentApplied string  `json:"length_intent_applied"`
+		SuggestedIntent     string  `json:"suggested_intent"`
+		Reason              string  `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Inspect {
+		t.Errorf("inspect not echoed")
+	}
+	if out.SlideCount != 5 || out.NarratedSlideCount != 5 {
+		t.Errorf("slide counts: total=%d narrated=%d, want 5/5", out.SlideCount, out.NarratedSlideCount)
+	}
+	if out.SourceWordsAvg != 100 {
+		t.Errorf("avg = %v, want 100", out.SourceWordsAvg)
+	}
+	if out.SourceWordsMin != 100 || out.SourceWordsMax != 100 {
+		t.Errorf("min/max = %d/%d, want 100/100", out.SourceWordsMin, out.SourceWordsMax)
+	}
+	if out.WithinRange != 5 || out.OutsideRange != 0 {
+		t.Errorf("within/outside = %d/%d, want 5/0 (thorough is 80-120)",
+			out.WithinRange, out.OutsideRange)
+	}
+	if out.LengthIntentApplied != "intent:thorough" {
+		t.Errorf("applied = %q", out.LengthIntentApplied)
+	}
+	if out.SuggestedIntent != "thorough" {
+		t.Errorf("suggested = %q, want thorough", out.SuggestedIntent)
+	}
+	if !strings.Contains(out.Reason, "thorough") {
+		t.Errorf("reason should mention intent: %q", out.Reason)
+	}
+}
+
+// TestSlidesNarrate_Inspect_OutOfRange — when the deck's density falls
+// outside the declared intent's range, the stats reflect that and the
+// suggestion points to the right intent.
+func TestSlidesNarrate_Inspect_OutOfRange(t *testing.T) {
+	pack := SlidesNarrate(nil, nil, nil)
+	// 50 words/slide while the caller declared exhaustive (150-220).
+	deck := makeDeckWithWordsPerSlide(t, 4, 50)
+	ec := &packs.ExecutionContext{
+		Pack: pack,
+		Input: json.RawMessage(fmt.Sprintf(
+			`{"markdown":%q,"inspect":true,"length_intent":"exhaustive"}`, deck)),
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	var out struct {
+		WithinRange         int    `json:"slides_within_intent_range"`
+		OutsideRange        int    `json:"slides_outside_intent_range"`
+		LengthIntentApplied string `json:"length_intent_applied"`
+		SuggestedIntent     string `json:"suggested_intent"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.WithinRange != 0 || out.OutsideRange != 4 {
+		t.Errorf("within/outside = %d/%d, want 0/4 (deck is summary-density, intent was exhaustive)",
+			out.WithinRange, out.OutsideRange)
+	}
+	if out.SuggestedIntent != "summary" {
+		t.Errorf("suggested = %q, want summary (deck density is 50 words/slide)", out.SuggestedIntent)
+	}
+	if out.LengthIntentApplied != "intent:exhaustive" {
+		t.Errorf("applied = %q, want intent:exhaustive (what caller declared)", out.LengthIntentApplied)
+	}
+}
+
+// TestSlidesNarrate_ResolveSize_Precedence — explicit numeric > intent >
+// default. Pinned in code so the rule doesn't drift from docs.
+func TestSlidesNarrate_ResolveSize_Precedence(t *testing.T) {
+	// (1) explicit numeric wins.
+	in := slidesNarrateInput{WordsPerSlideMin: 50, WordsPerSlideMax: 75, LengthIntent: "summary"}
+	size := resolveSlidesNarrateSize(&in)
+	if size.applied != "explicit" || size.floor != 50 || size.ceiling != 75 {
+		t.Errorf("explicit: applied=%q floor=%d ceiling=%d", size.applied, size.floor, size.ceiling)
+	}
+	// (2) intent.
+	in = slidesNarrateInput{LengthIntent: "summary"}
+	size = resolveSlidesNarrateSize(&in)
+	if size.applied != "intent:summary" || size.floor != 40 || size.ceiling != 60 {
+		t.Errorf("intent: applied=%q floor=%d ceiling=%d", size.applied, size.floor, size.ceiling)
+	}
+	// (3) no intent → default:reporting-only, with thorough's range used
+	// for stats.
+	in = slidesNarrateInput{}
+	size = resolveSlidesNarrateSize(&in)
+	if size.applied != "default:reporting-only" {
+		t.Errorf("default: applied=%q, want default:reporting-only", size.applied)
+	}
+	if size.floor != 80 || size.ceiling != 120 {
+		t.Errorf("default: floor/ceiling = %d/%d, want 80/120 (thorough's range)", size.floor, size.ceiling)
+	}
+}
+
+// TestSlidesNarrate_UnknownIntentFallsBack — misspelled intent falls
+// back to thorough rather than erroring.
+func TestSlidesNarrate_UnknownIntentFallsBack(t *testing.T) {
+	in := slidesNarrateInput{LengthIntent: "deeper-than-deep-dive"}
+	size := resolveSlidesNarrateSize(&in)
+	if size.applied != "intent:thorough" {
+		t.Errorf("applied = %q, want intent:thorough", size.applied)
+	}
+}
+
+// TestSlidesNarrate_SuggestIntent_NoNarratedSlides — empty deck (no
+// notes) → empty suggestion rather than a noisy default.
+func TestSlidesNarrate_SuggestIntent_NoNarratedSlides(t *testing.T) {
+	if got := suggestSlidesNarrateIntent(0); got != "" {
+		t.Errorf("suggestSlidesNarrateIntent(0) = %q, want empty", got)
+	}
+}
+
+// TestSlidesNarrate_PartialNumericFallsThroughToIntent — only one of
+// words_per_slide_min/max set is partial; resolver falls through to
+// length_intent (not an error).
+func TestSlidesNarrate_PartialNumericFallsThroughToIntent(t *testing.T) {
+	in := slidesNarrateInput{WordsPerSlideMin: 50, LengthIntent: "summary"}
+	size := resolveSlidesNarrateSize(&in)
+	if size.applied != "intent:summary" {
+		t.Errorf("partial numeric should fall through; got applied=%q", size.applied)
+	}
+}
+
+// TestSlidesNarrate_DensityStats_FilterSilentSlides — slides with empty
+// notes don't count toward the average; silent intro/outro slides
+// shouldn't drag the density signal down.
+func TestSlidesNarrate_DensityStats_FilterSilentSlides(t *testing.T) {
+	slides := []slideContent{
+		{Notes: "one two three four five"}, // 5 words
+		{Notes: ""},                         // silent — excluded
+		{Notes: "one two three four five six seven eight nine ten"}, // 10 words
+		{Notes: "   "}, // whitespace-only — excluded
+	}
+	size := slidesNarrateSize{floor: 1, ceiling: 100, applied: "explicit"}
+	stats := computeSlidesNarrateDensity(slides, size)
+	if stats.NarratedCount != 2 {
+		t.Errorf("narrated count = %d, want 2 (silent slides excluded)", stats.NarratedCount)
+	}
+	if stats.AvgWordsPerSlide != 7.5 {
+		t.Errorf("avg = %v, want 7.5", stats.AvgWordsPerSlide)
+	}
+	if stats.MinWordsPerSlide != 5 || stats.MaxWordsPerSlide != 10 {
+		t.Errorf("min/max = %d/%d, want 5/10", stats.MinWordsPerSlide, stats.MaxWordsPerSlide)
+	}
+}

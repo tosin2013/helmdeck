@@ -96,6 +96,25 @@ const (
 	// the threshold is safe in both directions.
 	minRenderedSlidePngBytes = 1024
 
+	// JIT length-sizing constants (issue #530 / convention #525).
+	// slides.narrate's relationship to the convention is unusual:
+	// the pack does NOT generate the narration script (notes come
+	// from the input markdown — typically prepared by slides.outline),
+	// and per-slide duration is dictated by the natural length of the
+	// TTS audio. So length_intent is **observational + reporting**
+	// rather than active sizing: the agent declares the density they
+	// expected, the pack measures what they actually got, and reports
+	// the gap. This is genuinely useful — agents can verify deck
+	// quality without re-running slides.outline.
+	//
+	// Density bands (words-per-narrated-slide; matches the issue #530
+	// table). At ~150 wpm, summary lands at ~20-40s per slide,
+	// thorough at ~30-50s, exhaustive at ~60-90s.
+	slidesNarrateIntentSummary    = "summary"
+	slidesNarrateIntentThorough   = "thorough"
+	slidesNarrateIntentExhaustive = "exhaustive"
+	slidesNarrateIntentDefault    = slidesNarrateIntentThorough
+
 	// pngMagicHex is the 8-byte PNG file signature in lowercase hex.
 	// validateMarpPngs uses `head -c 8 | od -An -tx1` to read these
 	// bytes off marp's output; a mismatch (or a shorter read) means
@@ -175,6 +194,154 @@ Hook (hook_30s):
 - This is a recommended VO script the creator can adopt; do not include in the description.`
 )
 
+// slidesNarrateIntentRow holds the per-intent words-per-slide range.
+// Mirrors the row shape used in other JIT-adopted packs (blog, podcast,
+// hyperframes.compose) but the numbers are RANGES rather than a single
+// target — slides.narrate REPORTS deck density, doesn't pick a duration.
+type slidesNarrateIntentRow struct {
+	floor   int // words-per-slide lower bound
+	ceiling int // words-per-slide upper bound
+}
+
+// slidesNarrateIntentTable per issue #530. Numbers tuned to ~150 wpm
+// narration: summary slides land at ~20-40s, thorough at ~30-50s,
+// exhaustive at ~60-90s. Revisitable as empirical data lands.
+var slidesNarrateIntentTable = map[string]slidesNarrateIntentRow{
+	slidesNarrateIntentSummary:    {floor: 40, ceiling: 60},
+	slidesNarrateIntentThorough:   {floor: 80, ceiling: 120},
+	slidesNarrateIntentExhaustive: {floor: 150, ceiling: 220},
+}
+
+// slidesNarrateSize is the resolved density range + label for one
+// call. Mirrors the size structs in other JIT-adopted packs.
+type slidesNarrateSize struct {
+	floor, ceiling int
+	applied        string // intent:thorough / explicit / default:reporting-only
+}
+
+// resolveSlidesNarrateSize encodes the precedence:
+//  1. WordsPerSlideMin + WordsPerSlideMax both set → explicit numeric
+//  2. LengthIntent set → intent table
+//  3. Default → reporting-only (use thorough's range for the
+//     within/outside-range stats so the counts remain meaningful, but
+//     label applied as "default:reporting-only" so callers can see no
+//     intent was actively declared)
+func resolveSlidesNarrateSize(in *slidesNarrateInput) slidesNarrateSize {
+	if in.WordsPerSlideMin > 0 && in.WordsPerSlideMax > 0 && in.WordsPerSlideMax >= in.WordsPerSlideMin {
+		return slidesNarrateSize{
+			floor:   in.WordsPerSlideMin,
+			ceiling: in.WordsPerSlideMax,
+			applied: "explicit",
+		}
+	}
+	key := strings.ToLower(strings.TrimSpace(in.LengthIntent))
+	if key != "" {
+		row, ok := slidesNarrateIntentTable[key]
+		if !ok {
+			row = slidesNarrateIntentTable[slidesNarrateIntentDefault]
+			key = slidesNarrateIntentDefault
+		}
+		return slidesNarrateSize{floor: row.floor, ceiling: row.ceiling, applied: "intent:" + key}
+	}
+	// No intent declared — use thorough's range as the stats baseline
+	// so within/outside counts are still informative.
+	row := slidesNarrateIntentTable[slidesNarrateIntentDefault]
+	return slidesNarrateSize{floor: row.floor, ceiling: row.ceiling, applied: "default:reporting-only"}
+}
+
+// slidesNarrateDensityStats captures the deck's per-slide narration
+// word counts and how many slides fall inside/outside the intent's
+// range. Used by both inspect mode (parse-only) and the generate path
+// (reported on every response so callers can see the deck's actual
+// density vs the intent they declared).
+type slidesNarrateDensityStats struct {
+	NarratedCount    int     `json:"narrated_slide_count"`
+	AvgWordsPerSlide float64 `json:"source_words_per_slide_avg"`
+	MinWordsPerSlide int     `json:"source_words_per_slide_min"`
+	MaxWordsPerSlide int     `json:"source_words_per_slide_max"`
+	WithinRange      int     `json:"slides_within_intent_range"`
+	OutsideRange     int     `json:"slides_outside_intent_range"`
+}
+
+// computeSlidesNarrateDensity walks the parsed slides counting per-slide
+// note word counts, then summarizes them relative to the intent's
+// floor/ceiling. Slides with empty notes are excluded from the average
+// (silent slides shouldn't drag down the density signal).
+func computeSlidesNarrateDensity(slides []slideContent, size slidesNarrateSize) slidesNarrateDensityStats {
+	stats := slidesNarrateDensityStats{}
+	if len(slides) == 0 {
+		return stats
+	}
+	min, max := -1, 0
+	total := 0
+	for _, s := range slides {
+		if strings.TrimSpace(s.Notes) == "" {
+			continue
+		}
+		w := countWords(s.Notes)
+		stats.NarratedCount++
+		total += w
+		if min < 0 || w < min {
+			min = w
+		}
+		if w > max {
+			max = w
+		}
+		if w >= size.floor && w <= size.ceiling {
+			stats.WithinRange++
+		} else {
+			stats.OutsideRange++
+		}
+	}
+	if stats.NarratedCount > 0 {
+		stats.AvgWordsPerSlide = float64(total) / float64(stats.NarratedCount)
+		stats.MinWordsPerSlide = min
+		stats.MaxWordsPerSlide = max
+	}
+	return stats
+}
+
+// orFallback returns s when s is non-empty, else fallback. Tiny helper
+// used by inspect-mode's reason string to keep the conditional inline.
+func orFallback(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
+// suggestSlidesNarrateIntent picks the intent row whose range contains
+// the deck's measured average. Used by inspect mode's reason field —
+// callers see "your deck looks thorough" or "your deck is closer to
+// summary than to thorough" so they can iterate.
+func suggestSlidesNarrateIntent(avg float64) string {
+	if avg <= 0 {
+		return "" // no narrated slides — no recommendation
+	}
+	for _, name := range []string{slidesNarrateIntentSummary, slidesNarrateIntentThorough, slidesNarrateIntentExhaustive} {
+		row := slidesNarrateIntentTable[name]
+		if avg >= float64(row.floor) && avg <= float64(row.ceiling) {
+			return name
+		}
+	}
+	// Outside all bands — return the closest by midpoint.
+	closest := slidesNarrateIntentDefault
+	closestDist := 1e9
+	for _, name := range []string{slidesNarrateIntentSummary, slidesNarrateIntentThorough, slidesNarrateIntentExhaustive} {
+		row := slidesNarrateIntentTable[name]
+		mid := float64(row.floor+row.ceiling) / 2
+		d := avg - mid
+		if d < 0 {
+			d = -d
+		}
+		if d < closestDist {
+			closestDist = d
+			closest = name
+		}
+	}
+	return closest
+}
+
 // SlidesNarrate constructs the pack. The dispatcher is used for
 // YouTube metadata generation (optional). The vault resolves the
 // ElevenLabs API key. Both degrade gracefully.
@@ -182,7 +349,7 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 	return &packs.Pack{
 		Name:         "slides.narrate",
 		Version:      "v1",
-		Description:  "Convert a Marp slide deck to a narrated MP4 video with ElevenLabs TTS and YouTube engagement metadata (title, description, chapters, hashtags, hook). Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to render slides over silence when no key is configured (CI smoke / demo placeholder). Optional hero_image_prompt generates a hero artwork via fal.ai and inlines it into slide 1. Captions sidecar (captions.srt) is emitted by default — YouTube/Vimeo auto-import as CC tracks (the path backing the cited ~12-13% view boost). Burn-in (visible always-on subtitles) is opt-in via captions_burn_in:true for Twitter/X / LinkedIn / raw-download distribution; adds 5-50% encode cost and 20-50 MB per encoder thread, which on memory-tight hosts with large decks can trigger (and fail) the OOM-retry path. Honest scope: slide-deck-with-voiceover sits in the lower retention bracket vs talking-head; metadata moves the artifact toward median within format, but cannot bridge the structural gap. Best for asynchronous explainer/educational content.",
+		Description:  "Convert a Marp slide deck to a narrated MP4 video with ElevenLabs TTS and YouTube engagement metadata (title, description, chapters, hashtags, hook). Requires HELMDECK_ELEVENLABS_API_KEY in .env.local (auto-hydrated to vault as 'elevenlabs-key'); pass allow_silent_output:true to render slides over silence when no key is configured (CI smoke / demo placeholder). Optional hero_image_prompt generates a hero artwork via fal.ai and inlines it into slide 1. Captions sidecar (captions.srt) is emitted by default — YouTube/Vimeo auto-import as CC tracks (the path backing the cited ~12-13% view boost). Burn-in (visible always-on subtitles) is opt-in via captions_burn_in:true for Twitter/X / LinkedIn / raw-download distribution; adds 5-50% encode cost and 20-50 MB per encoder thread, which on memory-tight hosts with large decks can trigger (and fail) the OOM-retry path. JIT length sizing (length_intent: summary / thorough / exhaustive) is observational — pack reports the deck's actual words-per-slide density vs the declared range; the convention's active sizing is handled upstream by slides.outline. Honest scope: slide-deck-with-voiceover sits in the lower retention bracket vs talking-head; metadata moves the artifact toward median within format, but cannot bridge the structural gap. Best for asynchronous explainer/educational content.",
 		NeedsSession: true,
 		InputSchema: packs.BasicSchema{
 			Required: []string{"markdown"},
@@ -223,10 +390,22 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				// of the validation arc. Pass false to skip on
 				// benchmarks where cost matters.
 				"validate": "boolean",
+				// JIT length-sizing (issue #530). Observational —
+				// pack measures density vs declared intent, doesn't
+				// alter the markdown.
+				"length_intent":       "string",
+				"inspect":             "boolean",
+				"words_per_slide_min": "number",
+				"words_per_slide_max": "number",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
-			Required: []string{"video_artifact_key", "video_size", "slide_count", "total_duration_s", "has_narration"},
+			// Required narrowed from the previous five-field list so
+			// inspect mode (parse-only, no rendering) can satisfy the
+			// validator. The Required-field semantics remain the same
+			// for the generate path; the inspect short-circuit just
+			// doesn't pretend to have a rendered video.
+			Required: []string{"slide_count"},
 			Properties: map[string]string{
 				"video_artifact_key":    "string",
 				"video_size":            "number",
@@ -274,6 +453,25 @@ func SlidesNarrate(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuar
 				"tts_chars":                "object",
 				"estimated_cost_usd":       "number",
 				"estimated_cost_breakdown": "object",
+				// JIT length-sizing telemetry (issue #530). Always
+				// reported on the generate path so callers can
+				// compare the deck's actual density against the
+				// intent they declared. truncated fires when the
+				// engagement-metadata LLM hit finish_reason=length
+				// (other LLM calls in this pack are TTS via HTTP,
+				// not gateway dispatch — no token truncation).
+				"source_words_per_slide_avg":  "number",
+				"source_words_per_slide_min":  "number",
+				"source_words_per_slide_max":  "number",
+				"narrated_slide_count":        "number",
+				"slides_within_intent_range":  "number",
+				"slides_outside_intent_range": "number",
+				"length_intent_applied":       "string",
+				"truncated":                   "boolean",
+				// Inspect mode only.
+				"inspect":          "boolean",
+				"suggested_intent": "string",
+				"reason":           "string",
 			},
 		},
 		Handler: slidesNarrateHandler(d, vs, eg),
@@ -378,6 +576,24 @@ type slidesNarrateInput struct {
 	// the structured report is also persisted as a
 	// `validation.json` sidecar artifact.
 	Validate *bool `json:"validate,omitempty"`
+
+	// JIT length-sizing inputs (issue #530 / convention #525).
+	// slides.narrate adopts the convention as OBSERVATIONAL — the
+	// pack measures the deck's words-per-narrated-slide density and
+	// reports it relative to the declared intent's range. It does
+	// NOT alter the markdown or skip slides; the agent uses the
+	// reported gap to iterate on whoever generated the deck
+	// (typically slides.outline).
+	LengthIntent string `json:"length_intent,omitempty"`
+	// Inspect: parse the markdown, compute density stats, return
+	// suggestion. No session, no vault, no rendering. The cheapest
+	// quality-check path for a deck before committing to a render.
+	Inspect bool `json:"inspect,omitempty"`
+	// Explicit numeric overrides for the intent range. Both must be
+	// set (and max >= min) to be honored; partial falls through to
+	// length_intent / default.
+	WordsPerSlideMin int `json:"words_per_slide_min,omitempty"`
+	WordsPerSlideMax int `json:"words_per_slide_max,omitempty"`
 }
 
 func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.EgressGuard) packs.HandlerFunc {
@@ -389,6 +605,39 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 		if strings.TrimSpace(in.Markdown) == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "markdown is required"}
 		}
+
+		// JIT inspect short-circuit (issue #530). Pure markdown parse
+		// → density stats. No session, no vault, no Marp render, no
+		// TTS. The cheapest quality-check path for a deck before
+		// committing to the full render. Runs before the session
+		// executor check so gateway-less and session-less
+		// environments can inspect.
+		if in.Inspect {
+			size := resolveSlidesNarrateSize(&in)
+			slides := parseSlidesAndNotes(in.Markdown)
+			stats := computeSlidesNarrateDensity(slides, size)
+			suggested := suggestSlidesNarrateIntent(stats.AvgWordsPerSlide)
+			reason := fmt.Sprintf(
+				"deck has %d slides (%d narrated); avg %.1f words/slide. Declared range: %s [%d-%d]. %d slides within range, %d outside. Suggested intent based on density: %s.",
+				len(slides), stats.NarratedCount, stats.AvgWordsPerSlide,
+				size.applied, size.floor, size.ceiling,
+				stats.WithinRange, stats.OutsideRange,
+				orFallback(suggested, "n/a (no narrated slides)"))
+			return json.Marshal(map[string]any{
+				"slide_count":                 len(slides),
+				"inspect":                     true,
+				"narrated_slide_count":        stats.NarratedCount,
+				"source_words_per_slide_avg":  stats.AvgWordsPerSlide,
+				"source_words_per_slide_min":  stats.MinWordsPerSlide,
+				"source_words_per_slide_max":  stats.MaxWordsPerSlide,
+				"slides_within_intent_range":  stats.WithinRange,
+				"slides_outside_intent_range": stats.OutsideRange,
+				"length_intent_applied":       size.applied,
+				"suggested_intent":            suggested,
+				"reason":                      reason,
+			})
+		}
+
 		if ec.Exec == nil {
 			return nil, &packs.PackError{Code: packs.CodeSessionUnavailable, Message: "slides.narrate requires a session executor"}
 		}
@@ -474,7 +723,17 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 		if len(slides) == 0 {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "no slides found in markdown"}
 		}
-		ec.Report(5, fmt.Sprintf("parsed %d slides", len(slides)))
+		// JIT density measurement (issue #530). Computed once
+		// up-front and threaded into the final output, regardless of
+		// whether the caller declared an intent. The resolved size
+		// supplies the floor/ceiling used for the within/outside
+		// counts; when no intent is declared, applied:"default:
+		// reporting-only" labels the path so callers see the bands
+		// were chosen by the pack, not by them.
+		narrateSize := resolveSlidesNarrateSize(&in)
+		narrateDensity := computeSlidesNarrateDensity(slides, narrateSize)
+		ec.Report(5, fmt.Sprintf("parsed %d slides (%d narrated, avg %.1f words/slide)",
+			len(slides), narrateDensity.NarratedCount, narrateDensity.AvgWordsPerSlide))
 
 		// 1b. Cost accounting (#145). Per-slide char counts feed both
 		// the dry_run short-circuit AND the regular response — same
@@ -491,6 +750,16 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 				"tts_chars":                slideTTSChars,
 				"estimated_cost_usd":       slideEstimateUSD,
 				"estimated_cost_breakdown": slideEstimateBreakdown,
+				// JIT density telemetry (issue #530) — same as the
+				// real-run output, so dry-run callers can see deck
+				// quality without rendering.
+				"narrated_slide_count":        narrateDensity.NarratedCount,
+				"source_words_per_slide_avg":  narrateDensity.AvgWordsPerSlide,
+				"source_words_per_slide_min":  narrateDensity.MinWordsPerSlide,
+				"source_words_per_slide_max":  narrateDensity.MaxWordsPerSlide,
+				"slides_within_intent_range":  narrateDensity.WithinRange,
+				"slides_outside_intent_range": narrateDensity.OutsideRange,
+				"length_intent_applied":       narrateSize.applied,
 			}
 			raw, mErr := json.Marshal(out)
 			if mErr != nil {
@@ -956,9 +1225,11 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 
 		var engagementKey string
 		var engagement map[string]any
+		var engagementFinishReason string
 		if d != nil && strings.TrimSpace(in.MetadataModel) != "" {
 			ec.Report(98, "generating engagement metadata")
-			md, err := generateEngagement(ctx, d, in.MetadataModel, slides, durations, in)
+			md, fr, err := generateEngagement(ctx, d, in.MetadataModel, slides, durations, in)
+			engagementFinishReason = fr
 			if err != nil {
 				ec.Logger.Warn("engagement metadata generation failed", "err", err)
 			} else {
@@ -1009,6 +1280,19 @@ func slidesNarrateHandler(d vision.Dispatcher, vs *vault.Store, eg *security.Egr
 			"tts_chars":                slideTTSChars,
 			"estimated_cost_usd":       slideEstimateUSD,
 			"estimated_cost_breakdown": slideEstimateBreakdown,
+			// JIT density telemetry (issue #530). Always reported so
+			// callers can compare actual deck density against the
+			// intent they declared. truncated reflects the
+			// engagement-metadata LLM's finish_reason (the only
+			// gateway-dispatch call in this pack).
+			"narrated_slide_count":        narrateDensity.NarratedCount,
+			"source_words_per_slide_avg":  narrateDensity.AvgWordsPerSlide,
+			"source_words_per_slide_min":  narrateDensity.MinWordsPerSlide,
+			"source_words_per_slide_max":  narrateDensity.MaxWordsPerSlide,
+			"slides_within_intent_range":  narrateDensity.WithinRange,
+			"slides_outside_intent_range": narrateDensity.OutsideRange,
+			"length_intent_applied":       narrateSize.applied,
+			"truncated":                   strings.EqualFold(engagementFinishReason, "length"),
 		}
 		if engagement != nil {
 			out["engagement"] = engagement
@@ -1175,7 +1459,7 @@ const formatCeilingNoteSlidesNarrate = "Slide-deck-with-voiceover sits in the lo
 // time. We do NOT pad with stub chapters; the unit tests intentionally
 // do not assert chapter floors against an LLM mock, only against
 // known-good fixtures.
-func generateEngagement(ctx context.Context, d vision.Dispatcher, model string, slides []slideContent, durations []float64, in slidesNarrateInput) (map[string]any, error) {
+func generateEngagement(ctx context.Context, d vision.Dispatcher, model string, slides []slideContent, durations []float64, in slidesNarrateInput) (map[string]any, string, error) {
 	maxTokens := 1500
 	var userMsg strings.Builder
 	userMsg.WriteString("SLIDE DECK:\n\n")
@@ -1218,11 +1502,12 @@ func generateEngagement(ctx context.Context, d vision.Dispatcher, model string, 
 	}
 	resp, err := d.Dispatch(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("model returned no choices")
+		return nil, "", fmt.Errorf("model returned no choices")
 	}
+	finishReason := resp.Choices[0].FinishReason
 	raw := strings.TrimSpace(resp.Choices[0].Message.Content.Text())
 
 	// Tolerant JSON parse (same pattern as webtest/content_ground).
@@ -1230,10 +1515,10 @@ func generateEngagement(ctx context.Context, d vision.Dispatcher, model string, 
 	if err := json.Unmarshal([]byte(raw), &md); err != nil {
 		if obj := extractFirstJSONObject(raw); obj != "" {
 			if err2 := json.Unmarshal([]byte(obj), &md); err2 != nil {
-				return nil, fmt.Errorf("parse engagement JSON: %w", err2)
+				return nil, finishReason, fmt.Errorf("parse engagement JSON: %w", err2)
 			}
 		} else {
-			return nil, fmt.Errorf("no parseable JSON in engagement response")
+			return nil, finishReason, fmt.Errorf("no parseable JSON in engagement response")
 		}
 	}
 
@@ -1249,7 +1534,7 @@ func generateEngagement(ctx context.Context, d vision.Dispatcher, model string, 
 	// emitted — operator input is authoritative.
 	md["category"] = category
 	md["language"] = language
-	return md, nil
+	return md, finishReason, nil
 }
 
 // formatTimestamp converts seconds to M:SS format for YouTube timestamps.

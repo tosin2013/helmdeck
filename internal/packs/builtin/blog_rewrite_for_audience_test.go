@@ -289,3 +289,360 @@ func TestBlogRewrite_DefaultPersonaWhenOmitted(t *testing.T) {
 		t.Errorf("default persona = %q, want general", out.PersonaUsed)
 	}
 }
+
+// makeSourceWithWordCount returns a markdown blob roughly `target` words
+// long. Used by the length-sizing tests so they're insulated from the
+// pack's exact counting strategy as long as it's whitespace-delimited.
+func makeSourceWithWordCount(target int) string {
+	parts := make([]string, target)
+	for i := range parts {
+		parts[i] = "word"
+	}
+	return strings.Join(parts, " ")
+}
+
+// TestBlogRewrite_InspectMode_NoModelCall — inspect:true must short-circuit
+// before the dispatcher is touched. Returns measurements + suggestion.
+// Cheap path the agent uses to negotiate before committing to a generate.
+func TestBlogRewrite_InspectMode_NoModelCall(t *testing.T) {
+	disp := &scriptedDispatcherWT{} // no replies queued; failure if dispatched
+	src := makeSourceWithWordCount(5000)
+	input := fmt.Sprintf(`{"source_content":%q,"audience":"devs","inspect":true,"length_intent":"thorough"}`, src)
+	raw, err := runBlogRewrite(t, disp, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if disp.calls != 0 {
+		t.Errorf("inspect:true must NOT call the dispatcher; calls=%d", disp.calls)
+	}
+	var out struct {
+		Inspect             bool   `json:"inspect"`
+		Markdown            string `json:"markdown"`
+		Model               string `json:"model"`
+		SourceWords         int    `json:"source_words"`
+		SuggestedTarget     int    `json:"suggested_target"`
+		SuggestedTargetMin  int    `json:"suggested_target_min"`
+		SuggestedTargetMax  int    `json:"suggested_target_max"`
+		LengthIntentApplied string `json:"length_intent_applied"`
+		Reason              string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Inspect {
+		t.Errorf("inspect flag not echoed: %+v", out)
+	}
+	if out.Markdown != "" {
+		t.Errorf("inspect should return empty markdown, got %q", out.Markdown)
+	}
+	if out.Model == "" {
+		t.Error("inspect should populate model (resolved default) so engine schema validator passes")
+	}
+	if out.SourceWords != 5000 {
+		t.Errorf("source_words = %d, want 5000", out.SourceWords)
+	}
+	// 5000 * 0.30 = 1500 for thorough; within ceiling of 2500.
+	if out.SuggestedTarget != 1500 {
+		t.Errorf("suggested_target = %d, want 1500 (5000 * 0.30 for thorough)", out.SuggestedTarget)
+	}
+	if out.LengthIntentApplied != "intent:thorough" {
+		t.Errorf("length_intent_applied = %q, want intent:thorough", out.LengthIntentApplied)
+	}
+	if out.SuggestedTargetMin >= out.SuggestedTarget || out.SuggestedTargetMax <= out.SuggestedTarget {
+		t.Errorf("min/max should bracket chosen: min=%d chosen=%d max=%d",
+			out.SuggestedTargetMin, out.SuggestedTarget, out.SuggestedTargetMax)
+	}
+	if !strings.Contains(out.Reason, "5000") || !strings.Contains(out.Reason, "thorough") {
+		t.Errorf("reason should mention source size + applied intent: %q", out.Reason)
+	}
+}
+
+// TestBlogRewrite_LengthIntent_ScalesWithSource — each intent picks a
+// target proportional to source size. Catches regression in the table or
+// the resolver path. Spot-checks one chosen target per intent.
+func TestBlogRewrite_LengthIntent_ScalesWithSource(t *testing.T) {
+	cases := []struct {
+		intent       string
+		sourceWords  int
+		wantChosen   int
+		wantInRange  bool // true means assert wantChosen exactly
+		minOK, maxOK int  // when wantInRange is false, just check bounds
+	}{
+		{"summary", 5000, 500, true, 0, 0},     // 5000 * 0.10
+		{"thorough", 5000, 1500, true, 0, 0},   // 5000 * 0.30
+		{"exhaustive", 7000, 3850, true, 0, 0}, // 7000 * 0.55
+	}
+	for _, tc := range cases {
+		t.Run(tc.intent, func(t *testing.T) {
+			disp := &scriptedDispatcherWT{replies: []string{"# Post\n\nbody."}}
+			src := makeSourceWithWordCount(tc.sourceWords)
+			input := fmt.Sprintf(`{"source_content":%q,"audience":"devs","model":"openrouter/auto","length_intent":%q}`,
+				src, tc.intent)
+			raw, err := runBlogRewrite(t, disp, input)
+			if err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+			var out struct {
+				TargetWordsChosen   int    `json:"target_words_chosen"`
+				LengthIntentApplied string `json:"length_intent_applied"`
+				SourceWords         int    `json:"source_words"`
+			}
+			_ = json.Unmarshal(raw, &out)
+			if out.SourceWords != tc.sourceWords {
+				t.Errorf("source_words = %d, want %d", out.SourceWords, tc.sourceWords)
+			}
+			if out.TargetWordsChosen != tc.wantChosen {
+				t.Errorf("intent=%s: target_words_chosen = %d, want %d",
+					tc.intent, out.TargetWordsChosen, tc.wantChosen)
+			}
+			if want := "intent:" + tc.intent; out.LengthIntentApplied != want {
+				t.Errorf("length_intent_applied = %q, want %q", out.LengthIntentApplied, want)
+			}
+		})
+	}
+}
+
+// TestBlogRewrite_LengthIntent_ClampsFloor — a tiny source with intent
+// exhaustive still produces a usable target by clamping to the row floor.
+// Without the floor, 100 * 0.55 = 55 words — too short for any technical
+// post and below the model's reasonable minimum.
+func TestBlogRewrite_LengthIntent_ClampsFloor(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{"# Post\n\nbody."}}
+	src := makeSourceWithWordCount(100)
+	input := fmt.Sprintf(`{"source_content":%q,"audience":"devs","model":"openrouter/auto","length_intent":"exhaustive"}`, src)
+	raw, err := runBlogRewrite(t, disp, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		TargetWordsChosen int `json:"target_words_chosen"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.TargetWordsChosen != 1500 {
+		t.Errorf("clamped target = %d, want 1500 (exhaustive floor)", out.TargetWordsChosen)
+	}
+}
+
+// TestBlogRewrite_LengthIntent_ClampsCeiling — a huge source with intent
+// summary stays under the row ceiling. Without the ceiling, 20000 * 0.10
+// = 2000 words — long enough to push the model's max_tokens past what a
+// summary should ever cost.
+func TestBlogRewrite_LengthIntent_ClampsCeiling(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{"# Post\n\nbody."}}
+	src := makeSourceWithWordCount(20000)
+	input := fmt.Sprintf(`{"source_content":%q,"audience":"devs","model":"openrouter/auto","length_intent":"summary"}`, src)
+	raw, err := runBlogRewrite(t, disp, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		TargetWordsChosen int `json:"target_words_chosen"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.TargetWordsChosen != 1200 {
+		t.Errorf("clamped target = %d, want 1200 (summary ceiling)", out.TargetWordsChosen)
+	}
+}
+
+// TestBlogRewrite_ExplicitNumericOverridesIntent — when target_words_min
+// AND target_words_max are both set, they win over length_intent. Lets
+// power callers bypass the intent table.
+func TestBlogRewrite_ExplicitNumericOverridesIntent(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{"# Post\n\nbody."}}
+	src := makeSourceWithWordCount(5000)
+	input := fmt.Sprintf(`{
+		"source_content":%q,"audience":"devs","model":"openrouter/auto",
+		"length_intent":"summary",
+		"target_words_min":2000,"target_words_max":2400
+	}`, src)
+	raw, err := runBlogRewrite(t, disp, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		TargetWordsMin      int    `json:"target_words_min"`
+		TargetWordsMax      int    `json:"target_words_max"`
+		TargetWordsChosen   int    `json:"target_words_chosen"`
+		LengthIntentApplied string `json:"length_intent_applied"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.TargetWordsMin != 2000 || out.TargetWordsMax != 2400 {
+		t.Errorf("explicit numeric not honored: min=%d max=%d", out.TargetWordsMin, out.TargetWordsMax)
+	}
+	if out.TargetWordsChosen != 2200 {
+		t.Errorf("chosen should be midpoint of explicit range: got %d, want 2200", out.TargetWordsChosen)
+	}
+	if out.LengthIntentApplied != "explicit" {
+		t.Errorf("length_intent_applied = %q, want explicit (numeric overrode intent)", out.LengthIntentApplied)
+	}
+}
+
+// TestBlogRewrite_PartialNumericFallsThroughToIntent — only one of
+// target_words_min/max set is partial; pack must fall through to intent
+// rather than guessing the missing bound.
+func TestBlogRewrite_PartialNumericFallsThroughToIntent(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{"# Post\n\nbody."}}
+	src := makeSourceWithWordCount(5000)
+	input := fmt.Sprintf(`{
+		"source_content":%q,"audience":"devs","model":"openrouter/auto",
+		"length_intent":"thorough",
+		"target_words_min":2000
+	}`, src)
+	raw, err := runBlogRewrite(t, disp, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		LengthIntentApplied string `json:"length_intent_applied"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.LengthIntentApplied != "intent:thorough" {
+		t.Errorf("partial numeric should fall through; got applied=%q", out.LengthIntentApplied)
+	}
+}
+
+// TestBlogRewrite_PromptCarriesTargetRange — the chosen target lands in
+// the system prompt as an explicit override of the persona's word
+// range. Without this the persona's "800-1200" silently out-votes a
+// chosen "exhaustive" target of 3300-4400 and the JIT sizing has no
+// visible effect.
+func TestBlogRewrite_PromptCarriesTargetRange(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{"# Post\n\nbody."}}
+	src := makeSourceWithWordCount(7000)
+	input := fmt.Sprintf(`{"source_content":%q,"audience":"devs","model":"openrouter/auto","length_intent":"exhaustive"}`, src)
+	_, err := runBlogRewrite(t, disp, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	sys := disp.captured[0].Messages[0].Content.Text()
+	for _, must := range []string{
+		"Target length for this post:",
+		"overrides any word-count range",
+	} {
+		if !strings.Contains(sys, must) {
+			t.Errorf("system prompt missing JIT-target directive %q:\n%s", must, sys)
+		}
+	}
+}
+
+// TestBlogRewrite_Truncated_FinishReasonLength — strong signal. When the
+// gateway reports finish_reason=length, truncated:true must propagate.
+func TestBlogRewrite_Truncated_FinishReasonLength(t *testing.T) {
+	disp := &scriptedDispatcherWT{
+		replies:       []string{"# Post\n\nThis ends mid-sentence and"},
+		finishReasons: []string{"length"},
+	}
+	raw, err := runBlogRewrite(t, disp,
+		`{"source_content":"x","audience":"devs","model":"openrouter/auto","length_intent":"summary"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		Truncated bool `json:"truncated"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if !out.Truncated {
+		t.Error("finish_reason=length should set truncated:true")
+	}
+}
+
+// TestBlogRewrite_NotTruncated_FinishReasonStop — well-terminated output
+// with finish_reason=stop should NOT be flagged truncated.
+func TestBlogRewrite_NotTruncated_FinishReasonStop(t *testing.T) {
+	disp := &scriptedDispatcherWT{
+		replies:       []string{"# Post\n\nBody ends with a period."},
+		finishReasons: []string{"stop"},
+	}
+	raw, err := runBlogRewrite(t, disp,
+		`{"source_content":"x","audience":"devs","model":"openrouter/auto"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		Truncated bool `json:"truncated"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.Truncated {
+		t.Error("finish_reason=stop + terminal punctuation should NOT set truncated")
+	}
+}
+
+// TestBlogRewrite_Truncated_MidSentenceHeuristic — fallback for providers
+// (e.g. Ollama) that don't always populate finish_reason. Output near
+// the upper target bound AND ending mid-sentence is treated as
+// truncated. Imperfect but better than silent.
+func TestBlogRewrite_Truncated_MidSentenceHeuristic(t *testing.T) {
+	// Summary on a 2800-word source: chosen = 280 → clamped up to
+	// floor=300; max bracket = 300 * 1.15 = 345; heuristic threshold
+	// = 95% of 345 ≈ 328. Reply needs ≥ 328 whitespace-delimited
+	// words AND end without sentence-terminating punctuation.
+	src := makeSourceWithWordCount(2800)
+	reply := strings.Repeat("word ", 350) + "and then suddenly"
+	disp := &scriptedDispatcherWT{
+		replies:       []string{reply},
+		finishReasons: []string{""}, // provider didn't expose finish_reason
+	}
+	input := fmt.Sprintf(`{"source_content":%q,"audience":"devs","model":"openrouter/auto","length_intent":"summary"}`, src)
+	raw, err := runBlogRewrite(t, disp, input)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		Truncated   bool `json:"truncated"`
+		OutputWords int  `json:"output_words"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if !out.Truncated {
+		t.Errorf("mid-sentence + ≥95%% of upper bound should set truncated; output_words=%d", out.OutputWords)
+	}
+}
+
+// TestBlogRewrite_OutputMetricsAlwaysPresent — existing back-compat path
+// (no length inputs) must still populate source_words/target/output and
+// truncated, so callers can rely on the new fields uniformly.
+func TestBlogRewrite_OutputMetricsAlwaysPresent(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{"# Post\n\nBody ends here."}}
+	raw, err := runBlogRewrite(t, disp,
+		`{"source_content":"one two three four five","audience":"devs","model":"openrouter/auto"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	for _, k := range []string{"source_words", "target_words_chosen", "output_words", "compression_ratio", "length_intent_applied", "truncated"} {
+		if _, ok := out[k]; !ok {
+			t.Errorf("missing metric %q in output: %v", k, out)
+		}
+	}
+	// Default intent applies (thorough).
+	if applied, _ := out["length_intent_applied"].(string); applied != "intent:thorough" {
+		t.Errorf("default applied = %q, want intent:thorough", applied)
+	}
+}
+
+// TestBlogRewrite_InspectWithoutDispatcher — inspect:true is the cheap
+// pack-internal path; gateway-less deployments must be able to use it
+// without a dispatcher installed. Validates the design decision (pack
+// is the authority on sizing, no model needed).
+func TestBlogRewrite_InspectWithoutDispatcher(t *testing.T) {
+	pack := BlogRewriteForAudience(nil)
+	ec := &packs.ExecutionContext{
+		Pack: pack,
+		Input: json.RawMessage(fmt.Sprintf(
+			`{"source_content":%q,"audience":"devs","inspect":true,"length_intent":"summary"}`,
+			makeSourceWithWordCount(3000))),
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("inspect with nil dispatcher should not error: %v", err)
+	}
+	var out struct {
+		Inspect          bool `json:"inspect"`
+		SourceWords      int  `json:"source_words"`
+		SuggestedTarget  int  `json:"suggested_target"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if !out.Inspect || out.SourceWords != 3000 || out.SuggestedTarget == 0 {
+		t.Errorf("inspect-without-dispatcher output incomplete: %+v", out)
+	}
+}

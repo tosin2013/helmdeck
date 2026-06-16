@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/tosin2013/helmdeck/internal/gateway"
 	"github.com/tosin2013/helmdeck/internal/packs"
@@ -37,6 +38,44 @@ const (
 	blogRewriteMaxTokens        = 16384
 	blogRewriteDefaultPersona   = "general"
 
+	// JIT length-sizing (issue #525 / #526). Calling agents declare an
+	// intent and the pack picks a word target appropriate for the
+	// source size. Static AGENTS.md word caps don't scale with source —
+	// a 7000-word source compressed against a 1300-2000 word target
+	// silently drops most of the content. The pack already sees the
+	// source; it's the right component to size the output.
+	blogRewriteIntentSummary    = "summary"
+	blogRewriteIntentThorough   = "thorough"
+	blogRewriteIntentExhaustive = "exhaustive"
+	blogRewriteIntentDefault    = blogRewriteIntentThorough
+
+	// Tokens-per-word budget for plumbing max_tokens. English averages
+	// ~1.3 tokens/word; bump to 1.7 to leave headroom for the model's
+	// formatting (markdown headings, lists) and the "Source:" line.
+	blogRewriteTokensPerWord = 1.7
+)
+
+// blogRewriteIntentRow holds the sizing parameters for one intent. The
+// ratio multiplies source word count to pick a target; floor and ceiling
+// clamp at extremes so a 100-word source with intent=exhaustive still
+// gets a usable target, and a 50k-word source with intent=summary
+// doesn't blow up the model's max_tokens.
+type blogRewriteIntentRow struct {
+	ratio   float64
+	floor   int
+	ceiling int
+}
+
+// blogRewriteIntentTable is the initial sizing heuristic. Numbers are
+// defaults to be revisited as empirical data lands per #526; live in
+// named constants so the operator can read them, not load-bearing.
+var blogRewriteIntentTable = map[string]blogRewriteIntentRow{
+	blogRewriteIntentSummary:    {ratio: 0.10, floor: 300, ceiling: 1200},
+	blogRewriteIntentThorough:   {ratio: 0.30, floor: 800, ceiling: 2500},
+	blogRewriteIntentExhaustive: {ratio: 0.55, floor: 1500, ceiling: 6000},
+}
+
+const (
 	// blogRewriteSystemPrompt is templated with audience + angle + an
 	// optional title block AND a persona-specific style directive. The
 	// body codifies the strategic advice agents commonly give about
@@ -106,6 +145,131 @@ type blogRewriteInput struct {
 	// academic; anything else is a freeform style hint. See
 	// blogRewritePersonas.
 	Persona string `json:"persona"`
+
+	// JIT length-sizing inputs (issue #526). All optional; back-compat
+	// preserved when all four are zero/empty (handler falls back to the
+	// default intent, which matches today's effective behavior).
+	//
+	// LengthIntent: declarative — "summary" / "thorough" / "exhaustive".
+	// Pack measures source, picks a target from blogRewriteIntentTable.
+	LengthIntent string `json:"length_intent"`
+	// Inspect: pack measures source, returns the suggestion, and does
+	// NOT call the model. Useful when an agent wants to negotiate.
+	Inspect bool `json:"inspect"`
+	// TargetWordsMin / TargetWordsMax: explicit numeric overrides. Both
+	// must be > 0 to be honored; partial values fall through to intent.
+	TargetWordsMin int `json:"target_words_min"`
+	TargetWordsMax int `json:"target_words_max"`
+}
+
+// countWords returns a whitespace-delimited word count for s. Markdown
+// fences/headings/lists count as words — fine for sizing because the
+// model's output will contain the same kind of markup at similar rates.
+func countWords(s string) int {
+	return len(strings.Fields(s))
+}
+
+// blogRewriteSize captures the chosen target range for one call. Min
+// and max bracket the desired output length; chosen is the midpoint
+// the pack reports as target_words_chosen. applied names where the
+// numbers came from ("intent:thorough" / "explicit" / "default").
+type blogRewriteSize struct {
+	min, max, chosen int
+	applied          string
+}
+
+// sizeForIntent resolves a target word range from the intent table.
+// Clamping at floor/ceiling keeps both extremes safe — a tiny source
+// with intent=exhaustive still gets a usable target, and a huge source
+// with intent=summary stays under the model's max_tokens.
+func sizeForIntent(sourceWords int, intent string) blogRewriteSize {
+	key := strings.ToLower(strings.TrimSpace(intent))
+	if key == "" {
+		key = blogRewriteIntentDefault
+	}
+	row, ok := blogRewriteIntentTable[key]
+	if !ok {
+		// Unknown intent string falls back to the default rather than
+		// erroring — agents that misspell shouldn't fail the whole
+		// rewrite; the chosen target is still sensible.
+		row = blogRewriteIntentTable[blogRewriteIntentDefault]
+		key = blogRewriteIntentDefault
+	}
+	chosen := int(float64(sourceWords) * row.ratio)
+	if chosen < row.floor {
+		chosen = row.floor
+	}
+	if chosen > row.ceiling {
+		chosen = row.ceiling
+	}
+	// ±15% bracket around chosen, re-clamped to the row bounds. Gives
+	// the model some leeway without letting it drift outside the
+	// intent's range.
+	minTarget := chosen * 85 / 100
+	maxTarget := chosen * 115 / 100
+	if minTarget < row.floor {
+		minTarget = row.floor
+	}
+	if maxTarget > row.ceiling {
+		maxTarget = row.ceiling
+	}
+	return blogRewriteSize{min: minTarget, max: maxTarget, chosen: chosen, applied: "intent:" + key}
+}
+
+// resolveBlogRewriteSize applies the input precedence: explicit numeric
+// (both bounds set) > length_intent > default. Returns the chosen size
+// + a label naming which path was taken so the output can echo it back.
+func resolveBlogRewriteSize(sourceWords int, in *blogRewriteInput) blogRewriteSize {
+	if in.TargetWordsMin > 0 && in.TargetWordsMax > 0 && in.TargetWordsMax >= in.TargetWordsMin {
+		return blogRewriteSize{
+			min:     in.TargetWordsMin,
+			max:     in.TargetWordsMax,
+			chosen:  (in.TargetWordsMin + in.TargetWordsMax) / 2,
+			applied: "explicit",
+		}
+	}
+	return sizeForIntent(sourceWords, in.LengthIntent)
+}
+
+// detectBlogRewriteTruncation decides whether the rewrite was cut short
+// by max_tokens. The strong signal is finishReason=="length"; when the
+// gateway provider doesn't expose finishReason (Ollama doesn't always),
+// we fall back to a heuristic: output near the upper target bound AND
+// ending without sentence-terminating punctuation. Imperfect, but
+// better than silent truncation when the agent has no way to ask.
+func detectBlogRewriteTruncation(finishReason, body string, outputWords, maxTarget int) bool {
+	if strings.EqualFold(finishReason, "length") {
+		return true
+	}
+	if maxTarget <= 0 {
+		return false
+	}
+	if outputWords < (maxTarget*95)/100 {
+		return false
+	}
+	// Look at the last ~30 runes for a sentence terminator. Code fences
+	// and tables don't end with punctuation in normal prose, so the
+	// heuristic is conservative; it's intentionally a hint, not a
+	// guarantee. The strong signal is finishReason.
+	trimmed := strings.TrimRightFunc(body, unicode.IsSpace)
+	if trimmed == "" {
+		return false
+	}
+	tail := trimmed
+	if len(tail) > 30 {
+		tail = tail[len(tail)-30:]
+	}
+	last := rune(tail[len(tail)-1])
+	// Decode the last rune properly so trailing multi-byte characters
+	// (em-dash, ellipsis) don't get misread as raw bytes.
+	for _, r := range tail {
+		last = r
+	}
+	switch last {
+	case '.', '!', '?', ')', '"', '\'', '`':
+		return false
+	}
+	return true
 }
 
 // BlogRewriteForAudience constructs the pack. The dispatcher (vault-resolved
@@ -119,9 +283,9 @@ func BlogRewriteForAudience(d vision.Dispatcher) *packs.Pack {
 		Metadata: packs.PackMetadata{
 			Accepts:        []string{"markdown", "source_content"},
 			Produces:       []string{"blog_markdown"},
-			IntentKeywords: []string{"rewrite for audience", "expand brief into blog", "translate source into blog post", "make this technical/marketing/executive"},
-			TypicalUse:     "Generator pack at the heart of every *-rewrite-blog pipeline — turns a brief/scrape/parsed-doc into an original post for a stated audience.",
-			Limitations:    []string{"does not fetch sources (call doc.parse / web.scrape / research.deep first)", "does not insert inline citations (chain content.ground rewrite:false after)", "does not publish to a CMS (chain blog.publish to save the artifact)"},
+			IntentKeywords: []string{"rewrite for audience", "expand brief into blog", "translate source into blog post", "make this technical/marketing/executive", "summarize this", "thorough rewrite", "exhaustive rewrite"},
+			TypicalUse:     "Generator pack at the heart of every *-rewrite-blog pipeline — turns a brief/scrape/parsed-doc into an original post for a stated audience. Use length_intent (summary / thorough / exhaustive) to scale the output to the source; the pack sizes the target word range from the source it actually sees.",
+			Limitations:    []string{"does not fetch sources (call doc.parse / web.scrape / research.deep first)", "does not insert inline citations (chain content.ground rewrite:false after)", "does not publish to a CMS (chain blog.publish to save the artifact)", "truncated:true signals the model hit max_tokens — re-run with a smaller length_intent or larger max_tokens"},
 		},
 		InputSchema: packs.BasicSchema{
 			// `model` is no longer Required: when omitted, the handler
@@ -129,21 +293,43 @@ func BlogRewriteForAudience(d vision.Dispatcher) *packs.Pack {
 			// rationale as content.ground (see model_defaults.go).
 			Required: []string{"source_content", "audience"},
 			Properties: map[string]string{
-				"source_content": "string",
-				"audience":       "string",
-				"angle":          "string",
-				"title":          "string",
-				"model":          "string",
-				"max_tokens":     "number",
-				"persona":        "string",
+				"source_content":    "string",
+				"audience":          "string",
+				"angle":             "string",
+				"title":             "string",
+				"model":             "string",
+				"max_tokens":        "number",
+				"persona":           "string",
+				"length_intent":     "string",
+				"inspect":           "boolean",
+				"target_words_min":  "number",
+				"target_words_max":  "number",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
+			// markdown + model are always present (markdown is empty
+			// when inspect:true — the schema validator just wants the
+			// field; callers branch on `inspect` in the output).
 			Required: []string{"markdown", "model"},
 			Properties: map[string]string{
-				"markdown":     "string",
-				"model":        "string",
-				"persona_used": "string",
+				"markdown":              "string",
+				"model":                 "string",
+				"persona_used":          "string",
+				"source_words":          "number",
+				"target_words_chosen":   "number",
+				"target_words_min":      "number",
+				"target_words_max":      "number",
+				"output_words":          "number",
+				"compression_ratio":     "number",
+				"length_intent_applied": "string",
+				"truncated":             "boolean",
+				// Inspect mode only — present when the call was an
+				// `inspect:true` short-circuit (no model call).
+				"inspect":              "boolean",
+				"suggested_target":     "number",
+				"suggested_target_min": "number",
+				"suggested_target_max": "number",
+				"reason":               "string",
 			},
 		},
 		Handler: blogRewriteHandler(d),
@@ -155,10 +341,6 @@ func BlogRewriteForAudience(d vision.Dispatcher) *packs.Pack {
 
 func blogRewriteHandler(d vision.Dispatcher) packs.HandlerFunc {
 	return func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
-		if d == nil {
-			return nil, &packs.PackError{Code: packs.CodeInternal,
-				Message: "blog.rewrite_for_audience registered without a gateway dispatcher"}
-		}
 		var in blogRewriteInput
 		if err := json.Unmarshal(ec.Input, &in); err != nil {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
@@ -173,9 +355,53 @@ func blogRewriteHandler(d vision.Dispatcher) packs.HandlerFunc {
 		// model_defaults.go for the precedence chain.
 		in.Model = defaultPackModel(in.Model)
 
+		sourceWords := countWords(in.SourceContent)
+		size := resolveBlogRewriteSize(sourceWords, &in)
+
+		// Inspect mode: short-circuit before any dispatcher use. Pack
+		// returns the measurements + suggestion so the agent can
+		// negotiate. Per issue #525, this is the cheap path; it MUST
+		// NOT call the model. Validating the dispatcher first would
+		// block gateway-less deployments from inspecting.
+		if in.Inspect {
+			ec.Report(100, fmt.Sprintf("inspect: source=%d words, suggested target=%d-%d", sourceWords, size.min, size.max))
+			reason := fmt.Sprintf("source is %d words; applying %s for a target near %d words (range %d-%d)", sourceWords, size.applied, size.chosen, size.min, size.max)
+			return json.Marshal(map[string]any{
+				// markdown + model populated empty to satisfy the
+				// OutputSchema's Required list — engine validators
+				// reject missing required fields even when the
+				// semantic mode (inspect) doesn't produce them.
+				"markdown":              "",
+				"model":                 in.Model,
+				"inspect":               true,
+				"source_words":          sourceWords,
+				"suggested_target":      size.chosen,
+				"suggested_target_min":  size.min,
+				"suggested_target_max":  size.max,
+				"length_intent_applied": size.applied,
+				"reason":                reason,
+			})
+		}
+
+		// Real generate path requires a dispatcher; inspect doesn't.
+		if d == nil {
+			return nil, &packs.PackError{Code: packs.CodeInternal,
+				Message: "blog.rewrite_for_audience registered without a gateway dispatcher"}
+		}
+
+		// Plumb max_tokens. When the caller didn't set one, derive
+		// from the chosen target's upper bound; honor caller's value
+		// when it's at least the budget we'd derive (so an explicit
+		// max_tokens never silently truncates a chosen target).
+		derivedMax := int(float64(size.max) * blogRewriteTokensPerWord)
 		maxTokens := in.MaxTokens
 		if maxTokens <= 0 {
-			maxTokens = blogRewriteDefaultMaxTokens
+			maxTokens = derivedMax
+			if maxTokens < blogRewriteDefaultMaxTokens {
+				maxTokens = blogRewriteDefaultMaxTokens
+			}
+		} else if maxTokens < derivedMax {
+			maxTokens = derivedMax
 		}
 		if maxTokens < blogRewriteMinTokens {
 			maxTokens = blogRewriteMinTokens
@@ -198,9 +424,15 @@ func blogRewriteHandler(d vision.Dispatcher) packs.HandlerFunc {
 		}
 		personaDirective, personaUsed := resolveBlogRewritePersona(in.Persona)
 		system := fmt.Sprintf(blogRewriteSystemPrompt, in.Audience, angle, titleBlock, personaDirective)
+		// Append the chosen target range as a stronger, JIT-derived
+		// length directive that overrides the persona block's own
+		// range. Without this the persona's "800-1200 words" silently
+		// out-votes a chosen "exhaustive" target of e.g. 3300-4400.
+		system += fmt.Sprintf("\n\nTarget length for this post: %d-%d words (aim for the middle, ~%d). This target overrides any word-count range in the Style block above; treat the Style block as tone guidance only.", size.min, size.max, size.chosen)
+
 		user := "Source:\n\n" + in.SourceContent
 
-		ec.Report(10, fmt.Sprintf("rewriting for audience: %s (persona: %s)", in.Audience, personaUsed))
+		ec.Report(10, fmt.Sprintf("rewriting for audience: %s (persona: %s, target: %d-%d words)", in.Audience, personaUsed, size.min, size.max))
 		mt := maxTokens
 		chat, err := d.Dispatch(ctx, gateway.ChatRequest{
 			Model:     in.Model,
@@ -221,11 +453,26 @@ func blogRewriteHandler(d vision.Dispatcher) packs.HandlerFunc {
 			return nil, &packs.PackError{Code: packs.CodeHandlerFailed, Message: "gateway returned an empty rewrite"}
 		}
 
-		ec.Report(100, "rewrite complete")
+		outputWords := countWords(body)
+		truncated := detectBlogRewriteTruncation(chat.Choices[0].FinishReason, body, outputWords, size.max)
+		compressionRatio := 0.0
+		if sourceWords > 0 {
+			compressionRatio = float64(outputWords) / float64(sourceWords)
+		}
+
+		ec.Report(100, fmt.Sprintf("rewrite complete: %d words (target %d-%d, truncated=%v)", outputWords, size.min, size.max, truncated))
 		return json.Marshal(map[string]any{
-			"markdown":     body,
-			"model":        in.Model,
-			"persona_used": personaUsed,
+			"markdown":              body,
+			"model":                 in.Model,
+			"persona_used":          personaUsed,
+			"source_words":          sourceWords,
+			"target_words_chosen":   size.chosen,
+			"target_words_min":      size.min,
+			"target_words_max":      size.max,
+			"output_words":          outputWords,
+			"compression_ratio":     compressionRatio,
+			"length_intent_applied": size.applied,
+			"truncated":             truncated,
 		})
 	}
 }

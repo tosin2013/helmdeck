@@ -95,6 +95,24 @@ import (
 const (
 	defaultContentGroundClaims = 5
 	maxContentGroundClaims     = 8
+
+	// JIT length-sizing constants (issue #532 / convention #525).
+	// content.ground is **cost-cap shaped** like research.deep —
+	// each claim costs a Firecrawl /v1/search + a per-source LLM
+	// verify call. Intent maps to the existing max_claims input:
+	//   summary    → 3 claims
+	//   thorough   → 5 claims (matches the legacy default)
+	//   exhaustive → 8 claims (matches the legacy ceiling)
+	//
+	// Despite the issue's original "back-compat break" framing,
+	// the current code is already capped at 8 with a default of 5
+	// — exhaustive=8 is just a label for today's hard cap, not a
+	// new behavior. Existing callers passing `max_claims` see ZERO
+	// change.
+	contentGroundIntentSummary    = "summary"
+	contentGroundIntentThorough   = "thorough"
+	contentGroundIntentExhaustive = "exhaustive"
+	contentGroundIntentDefault    = contentGroundIntentThorough
 	// defaultContentGroundTokens is the completion-token cap for the
 	// claim-extractor call. 1024 was too tight: the system prompt +
 	// topic + 5-8 claim JSON entries can land near ~750 tokens, leaving
@@ -141,6 +159,50 @@ Rules:
 	contentGroundConcurrency = 4
 )
 
+// contentGroundIntentTable maps each intent name to the max_claims
+// value it should produce. Mirrors researchDeepIntentTable's shape.
+var contentGroundIntentTable = map[string]int{
+	contentGroundIntentSummary:    3,
+	contentGroundIntentThorough:   5,
+	contentGroundIntentExhaustive: 8,
+}
+
+// contentGroundSize is the resolved max_claims + label for one call.
+// Mirrors the size struct in other JIT-adopted packs.
+type contentGroundSize struct {
+	maxClaims int
+	applied   string // intent:summary / explicit / default
+}
+
+// resolveContentGroundSize encodes the precedence:
+//  1. MaxClaims > 0 (explicit) → honor verbatim, clamped to ceiling
+//  2. LengthIntent set → table
+//  3. Default → defaultContentGroundClaims (5, matches legacy default)
+//
+// Note: thorough's row (5) equals the legacy default and exhaustive's
+// row (8) equals the legacy ceiling — so existing callers see ZERO
+// numerical behavior change. Labeling distinguishes which path the
+// resolver took.
+func resolveContentGroundSize(in *contentGroundInput) contentGroundSize {
+	if in.MaxClaims > 0 {
+		clamped := in.MaxClaims
+		if clamped > maxContentGroundClaims {
+			clamped = maxContentGroundClaims
+		}
+		return contentGroundSize{maxClaims: clamped, applied: "explicit"}
+	}
+	key := strings.ToLower(strings.TrimSpace(in.LengthIntent))
+	if key != "" {
+		mc, ok := contentGroundIntentTable[key]
+		if !ok {
+			mc = contentGroundIntentTable[contentGroundIntentDefault]
+			key = contentGroundIntentDefault
+		}
+		return contentGroundSize{maxClaims: mc, applied: "intent:" + key}
+	}
+	return contentGroundSize{maxClaims: defaultContentGroundClaims, applied: "default"}
+}
+
 // ContentGround constructs the pack.
 func ContentGround(d vision.Dispatcher) *packs.Pack {
 	return &packs.Pack{
@@ -153,9 +215,9 @@ func ContentGround(d vision.Dispatcher) *packs.Pack {
 		Metadata: packs.PackMetadata{
 			Accepts:        []string{"markdown", "text", "clone_path+path"},
 			Produces:       []string{"grounded_markdown"},
-			IntentKeywords: []string{"add citations", "fact check", "cite sources", "ground claims", "strengthen claims"},
-			TypicalUse:     "Annotator pack — inserts [source](url) links for the claims it can find sources for. Use as the citation pass AFTER a generator pack (e.g. blog.rewrite_for_audience) for the rewrite-blog pipeline family.",
-			Limitations:    []string{"is an ANNOTATOR, not a GENERATOR — output is roughly the same length and shape as input", "requires HELMDECK_FIRECRAWL_ENABLED + the Firecrawl overlay", "does not generate prose from a brief — pasted briefs come back as the brief plus a few links"},
+			IntentKeywords: []string{"add citations", "fact check", "cite sources", "ground claims", "strengthen claims", "quick grounding pass", "thorough grounding", "exhaustive grounding"},
+			TypicalUse:     "Annotator pack — inserts [source](url) links for the claims it can find sources for. Use as the citation pass AFTER a generator pack (e.g. blog.rewrite_for_audience) for the rewrite-blog pipeline family. Use length_intent (summary / thorough / exhaustive) to scale per-call cost — summary=3 claims, thorough=5, exhaustive=8.",
+			Limitations:    []string{"is an ANNOTATOR, not a GENERATOR — output is roughly the same length and shape as input", "requires HELMDECK_FIRECRAWL_ENABLED + the Firecrawl overlay", "does not generate prose from a brief — pasted briefs come back as the brief plus a few links", "truncated:true signals the claim extractor LLM hit max_tokens (or the rewrite path truncated) — fewer claims surfaced than the post may actually contain"},
 		},
 		// NeedsSession is false because the text-mode path doesn't
 		// require a session. When clone_path + path are provided the
@@ -173,18 +235,26 @@ func ContentGround(d vision.Dispatcher) *packs.Pack {
 			// and the call rejects with "model: must have required
 			// properties model" before any actual work begins.
 			Properties: map[string]string{
-				"clone_path": "string",
-				"path":       "string",
-				"text":       "string",
-				"model":      "string",
-				"max_claims": "number",
-				"topic":      "string",
-				"rewrite":    "boolean",
-				"persona":    "string",
+				"clone_path":    "string",
+				"path":          "string",
+				"text":          "string",
+				"model":         "string",
+				"max_claims":    "number",
+				"topic":         "string",
+				"rewrite":       "boolean",
+				"persona":       "string",
+				"length_intent": "string",
+				"inspect":       "boolean",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
-			Required: []string{"claims_considered", "claims_grounded", "sha256"},
+			// Required deliberately narrows in inspect mode — the
+			// engine's BasicSchema.Validate rejects missing required
+			// fields. Inspect doesn't produce claims_considered /
+			// _grounded / sha256 because no extraction happens. We
+			// drop the inspect-irrelevant fields from Required and
+			// let the runtime path keep populating them.
+			Required: []string{},
 			Properties: map[string]string{
 				"path":              "string",
 				"claims_considered": "number",
@@ -196,6 +266,16 @@ func ContentGround(d vision.Dispatcher) *packs.Pack {
 				"grounded_text":     "string",
 				"artifact_key":      "string",
 				"persona_used":      "string",
+				// JIT length-sizing telemetry (issue #531). Reported
+				// on every generate response so callers see what
+				// scale the pack ran at.
+				"max_claims_applied":    "number",
+				"length_intent_applied": "string",
+				"truncated":             "boolean",
+				// Inspect mode only.
+				"inspect":              "boolean",
+				"suggested_max_claims": "number",
+				"reason":               "string",
 			},
 		},
 		Handler: contentGroundHandler(d),
@@ -244,6 +324,18 @@ type contentGroundInput struct {
 	// Ignored when Rewrite=false (citation-only mode doesn't change
 	// voice). See contentGroundPersonas.
 	Persona string `json:"persona,omitempty"`
+
+	// JIT length-sizing inputs (issue #531 / convention #525).
+	// LengthIntent declares "summary" / "thorough" / "exhaustive";
+	// the pack maps that to a max_claims value (3 / 5 / 8) when
+	// explicit MaxClaims isn't set. Explicit MaxClaims wins
+	// (back-compat preserved).
+	LengthIntent string `json:"length_intent,omitempty"`
+	// Inspect: return the resolved max_claims + intent without
+	// firing Firecrawl or the LLMs. Skips the Firecrawl-enabled
+	// gate too, so agents can plan in environments where the
+	// overlay isn't wired.
+	Inspect bool `json:"inspect,omitempty"`
 }
 
 // claimPlan is the parsed shape the extractor LLM returns.
@@ -263,6 +355,28 @@ type grounding struct {
 
 func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 	return func(ctx context.Context, ec *packs.ExecutionContext) (json.RawMessage, error) {
+		var in contentGroundInput
+		if err := json.Unmarshal(ec.Input, &in); err != nil {
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
+		}
+
+		// JIT inspect short-circuit (issue #531). Runs before the
+		// dispatcher / Firecrawl-enabled checks so agents can plan
+		// a grounding pass in environments where Firecrawl isn't
+		// up. No HTTP calls, no LLM calls.
+		if in.Inspect {
+			size := resolveContentGroundSize(&in)
+			reason := fmt.Sprintf(
+				"applying %s for max_claims=%d (per-claim Firecrawl + verify LLM cost). No grounding ran.",
+				size.applied, size.maxClaims)
+			return json.Marshal(map[string]any{
+				"inspect":               true,
+				"suggested_max_claims":  size.maxClaims,
+				"length_intent_applied": size.applied,
+				"reason":                reason,
+			})
+		}
+
 		if d == nil {
 			return nil, &packs.PackError{
 				Code:    packs.CodeInternal,
@@ -281,10 +395,6 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 			base = defaultFirecrawlURL
 		}
 
-		var in contentGroundInput
-		if err := json.Unmarshal(ec.Input, &in); err != nil {
-			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: err.Error(), Cause: err}
-		}
 		// Resolve a default when the caller omitted model. Tier C
 		// models calling this pack via MCP routinely skip the model
 		// arg; defaultPackModel guarantees a non-empty value.
@@ -293,13 +403,13 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 		// path can echo persona_used — including the "no claims found"
 		// early return. directive is only consumed when Rewrite=true.
 		personaDirective, personaUsed := resolveContentGroundPersona(in.Persona)
-		maxClaims := in.MaxClaims
-		if maxClaims <= 0 {
-			maxClaims = defaultContentGroundClaims
-		}
-		if maxClaims > maxContentGroundClaims {
-			maxClaims = maxContentGroundClaims
-		}
+		// JIT length-sizing precedence (issue #531): explicit
+		// max_claims > length_intent > legacy default 5. Existing
+		// callers passing max_claims see ZERO behavior change —
+		// the resolver's clamping matches the existing inline
+		// check that used to live here.
+		size := resolveContentGroundSize(&in)
+		maxClaims := size.maxClaims
 		maxTokens := defaultContentGroundTokens
 		if in.MaxCompletionTokens > 0 {
 			if in.MaxCompletionTokens > maxContentGroundTokens {
@@ -373,11 +483,16 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 		// gets a dedicated line in the user message — the prompt
 		// knows what to do with it because it reads like part of
 		// the goal framing rather than a schema field.
-		ec.Report(10, "extracting claims")
-		claims, rawModel, perr := extractClaims(ctx, d, in.Model, original, in.Topic, maxClaims, maxTokens)
+		ec.Report(10, fmt.Sprintf("extracting claims (max %d, %s)", maxClaims, size.applied))
+		claims, rawModel, extractFinishReason, perr := extractClaims(ctx, d, in.Model, original, in.Topic, maxClaims, maxTokens)
 		if perr != nil {
 			return nil, perr
 		}
+		// Track truncation: extractor finish_reason=length means the
+		// claim list may be incomplete. The rewrite step's truncation
+		// is handled separately (errRewriteTruncated falls back to
+		// the citation-only version) and folded into this flag below.
+		extractorTruncated := strings.EqualFold(extractFinishReason, "length")
 		if len(claims) == 0 {
 			// No groundable claims — return a clean report, don't
 			// touch the file. Not an error: a well-grounded post
@@ -399,6 +514,10 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 				// claims. Here the text is unchanged from the input.
 				"grounded_text": original,
 				"persona_used":  personaUsed,
+				// JIT length-sizing telemetry (issue #531).
+				"max_claims_applied":    maxClaims,
+				"length_intent_applied": size.applied,
+				"truncated":             extractorTruncated,
 			})
 		}
 		_ = rawModel // retained for future audit logging; not surfaced today
@@ -575,10 +694,18 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 		// formal-academic for every input. Citation-only mode
 		// (rewrite=false) doesn't touch the prose, so persona is
 		// ignored there by design.
+		rewriteTruncated := false
 		if in.Rewrite && len(groundings) > 0 {
 			ec.Report(85, fmt.Sprintf("rewriting prose with sources (persona: %s)", personaUsed))
 			rewritten, err := rewriteWithSources(ctx, d, in.Model, patched, groundings, personaDirective)
 			if err != nil {
+				// errRewriteTruncated is a recoverable signal — the
+				// pack ships the citation-only version but flags
+				// truncated:true so the operator knows the rewrite
+				// path hit max_tokens.
+				if errors.Is(err, errRewriteTruncated) {
+					rewriteTruncated = true
+				}
 				ec.Logger.Warn("rewrite failed, keeping citation-only version", "err", err)
 			} else if strings.TrimSpace(rewritten) != "" {
 				patched = rewritten
@@ -622,6 +749,15 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 			"file_changed":      fileChanged,
 			"grounded_text":     patched,
 			"persona_used":      personaUsed,
+			// JIT length-sizing telemetry (issue #531). truncated
+			// fires if EITHER the claim extractor hit max_tokens
+			// (incomplete claim list) OR the rewrite step truncated
+			// (citation-only fallback shipped instead). Operators
+			// reading truncated:true re-run with smaller intent or
+			// larger max_completion_tokens.
+			"max_claims_applied":    maxClaims,
+			"length_intent_applied": size.applied,
+			"truncated":             extractorTruncated || rewriteTruncated,
 		}
 		if artifactKey != "" {
 			out["artifact_key"] = artifactKey
@@ -636,7 +772,7 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 func extractClaims(ctx context.Context, d vision.Dispatcher, model, markdown, topic string, maxClaims, maxTokens int) ([]struct {
 	Text  string `json:"text"`
 	Query string `json:"query"`
-}, string, *packs.PackError) {
+}, string, string, *packs.PackError) {
 	var userMsg strings.Builder
 	fmt.Fprintf(&userMsg, "MAX_CLAIMS: %d\n", maxClaims)
 	if strings.TrimSpace(topic) != "" {
@@ -654,25 +790,26 @@ func extractClaims(ctx context.Context, d vision.Dispatcher, model, markdown, to
 	}
 	resp, err := d.Dispatch(ctx, req)
 	if err != nil {
-		return nil, "", dispatchError("claim extractor dispatch", err)
+		return nil, "", "", dispatchError("claim extractor dispatch", err)
 	}
 	if len(resp.Choices) == 0 {
-		return nil, "", &packs.PackError{
+		return nil, "", "", &packs.PackError{
 			Code:    packs.CodeHandlerFailed,
 			Message: "claim extractor returned no choices",
 			Cause:   errors.New("empty choices"),
 		}
 	}
+	finishReason := resp.Choices[0].FinishReason
 	raw := strings.TrimSpace(resp.Choices[0].Message.Content.Text())
 	plan, perr := parseClaimPlan(raw)
 	if perr != nil {
-		return nil, raw, perr
+		return nil, raw, finishReason, perr
 	}
 	// Cap to maxClaims in case the model ignored the instruction.
 	if len(plan.Claims) > maxClaims {
 		plan.Claims = plan.Claims[:maxClaims]
 	}
-	return plan.Claims, raw, nil
+	return plan.Claims, raw, finishReason, nil
 }
 
 // parseClaimPlan delegates to the shared DecodeStructuredResponse

@@ -36,12 +36,26 @@ Two input modes — supply **either** `text` (in-memory) **or** `clone_path` + `
 | `text` | `string` | one of | — | Markdown to ground inline. The patched markdown comes back in the response; nothing is written to disk. **Use this when the user provides markdown in chat.** |
 | `clone_path` | `string` | one of | — | Session clone root. Required if `path` is set. |
 | `path` | `string` | with `clone_path` | — | Relative markdown file path inside the clone (e.g. `posts/2026-quantum.md`). The pack patches it in place. |
-| `model` | `string` | yes | — | Provider/model for claim extraction. Strict JSON-schema output; needs a tool-capable model. |
-| `max_claims` | `number` | no | `5` | Cap on claims to ground. Hard cap at 8 (Firecrawl per-call cost). |
+| `model` | `string` | no | resolves via `defaultPackModel()` | Provider/model for claim extraction. Strict JSON-schema output; needs a tool-capable model. |
+| `max_claims` | `number` | no | `5` | Explicit cap on claims to ground. Hard cap at 8 (Firecrawl per-call cost). **Wins over `length_intent`** when both are set; back-compat preserved. |
 | `topic` | `string` | no | — | Hint for the claim extractor. e.g. `"quantum computing"` narrows extraction to topic-relevant claims and biases the search step. |
 | `rewrite` | `boolean` | no | `false` | When `true`, the LLM also rewrites weak claims into stronger prose backed by the discovered source. More expensive (multiple LLM passes); use when "make this blog post more credible" is the goal. |
 | `max_completion_tokens` | `number` | no | `2048` | Cap on the claim-extractor LLM's completion. Raise when running against a verbose weak model or a long post — JSON truncation surfaces as an unparseable-JSON handler error. Hard upper bound: `8192`. |
+| `length_intent` | `string` | no | — | JIT length sizing (issue [#531](https://github.com/tosin2013/helmdeck/issues/531)) — one of `summary` / `thorough` / `exhaustive`. Maps directly to `max_claims` (3 / 5 / 8). Honored only when `max_claims` is unset; **strictly back-compat** — thorough's value matches the legacy default and exhaustive's matches the legacy ceiling. |
+| `inspect` | `boolean` | no | `false` | When `true`, pack returns the resolved `max_claims` + intent without firing Firecrawl or the LLMs. Also skips the `HELMDECK_FIRECRAWL_ENABLED` gate so agents can plan in environments where the overlay isn't wired. |
 | `_session_id` | `string` | yes (file mode) | — | Required when `clone_path` is set; not used in text mode. |
+
+### Length intent → max_claims
+
+`content.ground` is **cost-cap shaped**: each claim costs a Firecrawl `/v1/search` call + a per-source LLM verify call. Intent maps directly to the existing `max_claims` input:
+
+| Intent | `max_claims` value |
+|---|---|
+| `summary` | 3 |
+| `thorough` | 5 (matches legacy default) |
+| `exhaustive` | 8 (matches legacy ceiling) |
+
+**Precedence**: `inspect:true` short-circuit → explicit `max_claims` (`"explicit"`, clamped to `[1, 8]`) → `length_intent` (`"intent:*"`) → legacy default 5 (`"default"`). Existing callers passing `max_claims` see **ZERO behavior change** — the resolver's clamping matches the inline check that used to live in the handler.
 
 ## Outputs
 
@@ -56,6 +70,12 @@ Two input modes — supply **either** `text` (in-memory) **or** `clone_path` + `
 | `sha256` | `string` | Hex sha256 of the patched content. |
 | `artifact_key` | `string` | (File mode, when the file changed.) Key of the uploaded grounded-markdown artifact. |
 | `file_changed` | `boolean` | (File mode only.) `false` when no claims were grounded → file untouched. |
+| `max_claims_applied` | `number` | The cap actually used (after precedence + clamping). |
+| `length_intent_applied` | `string` | Where the cap came from — `intent:summary` / `intent:thorough` / `intent:exhaustive` / `explicit` / `default`. |
+| `truncated` | `boolean` | `true` when EITHER the claim extractor LLM hit `finish_reason=length` (the claim list may be incomplete) OR the rewrite step truncated (the citation-only fallback ships instead). Re-run with smaller `length_intent` or larger `max_completion_tokens`. |
+| `inspect` | `boolean` | Inspect-mode only — always `true` in the inspect response. |
+| `suggested_max_claims` | `number` | Inspect-mode only — what the pack would pick. |
+| `reason` | `string` | Inspect-mode only — human-readable explanation. |
 
 ## Vault credentials needed
 

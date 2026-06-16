@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -876,5 +877,212 @@ func TestContentGround_FuzzyClaimMatch_DoubleSpacedSourceGrounds(t *testing.T) {
 	}
 	if len(out.Skipped) != 0 {
 		t.Errorf("nothing should be skipped; got %v", out.Skipped)
+	}
+}
+
+// --- JIT length-sizing (issue #531 / convention #525) ---------------------
+
+// TestContentGround_Inspect_NoFirecrawlNoDispatcher — inspect mode
+// short-circuits before the dispatcher / Firecrawl-enabled gate.
+// Cheap planning helper that works in gateway-less, Firecrawl-less
+// environments.
+func TestContentGround_Inspect_NoFirecrawlNoDispatcher(t *testing.T) {
+	// Don't enable Firecrawl. Inspect must skip the gate.
+	pack := ContentGround(nil)
+	ec := &packs.ExecutionContext{
+		Pack:  pack,
+		Input: json.RawMessage(`{"text":"some markdown","inspect":true,"length_intent":"summary"}`),
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("inspect with nil dispatcher + Firecrawl disabled: %v", err)
+	}
+	var out struct {
+		Inspect             bool   `json:"inspect"`
+		SuggestedMaxClaims  int    `json:"suggested_max_claims"`
+		LengthIntentApplied string `json:"length_intent_applied"`
+		Reason              string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Inspect {
+		t.Errorf("inspect not echoed")
+	}
+	if out.SuggestedMaxClaims != 3 {
+		t.Errorf("suggested_max_claims = %d, want 3 (summary)", out.SuggestedMaxClaims)
+	}
+	if out.LengthIntentApplied != "intent:summary" {
+		t.Errorf("applied = %q, want intent:summary", out.LengthIntentApplied)
+	}
+	if !strings.Contains(out.Reason, "summary") || !strings.Contains(out.Reason, "3") {
+		t.Errorf("reason should mention intent + count: %q", out.Reason)
+	}
+}
+
+// TestContentGround_ResolveSize_Precedence — explicit max_claims >
+// length_intent > legacy default. Pinned in code so the precedence
+// doesn't drift from docs.
+func TestContentGround_ResolveSize_Precedence(t *testing.T) {
+	// (1) explicit wins, clamped to ceiling.
+	in := contentGroundInput{MaxClaims: 20, LengthIntent: "summary"}
+	if size := resolveContentGroundSize(&in); size.maxClaims != maxContentGroundClaims || size.applied != "explicit" {
+		t.Errorf("explicit clamp: maxClaims=%d applied=%q", size.maxClaims, size.applied)
+	}
+	// (2) explicit within range.
+	in = contentGroundInput{MaxClaims: 4, LengthIntent: "summary"}
+	if size := resolveContentGroundSize(&in); size.maxClaims != 4 || size.applied != "explicit" {
+		t.Errorf("explicit honored: maxClaims=%d applied=%q", size.maxClaims, size.applied)
+	}
+	// (3) intent.
+	in = contentGroundInput{LengthIntent: "summary"}
+	if size := resolveContentGroundSize(&in); size.maxClaims != 3 || size.applied != "intent:summary" {
+		t.Errorf("intent: maxClaims=%d applied=%q", size.maxClaims, size.applied)
+	}
+	// (4) default.
+	in = contentGroundInput{}
+	size := resolveContentGroundSize(&in)
+	if size.maxClaims != defaultContentGroundClaims || size.applied != "default" {
+		t.Errorf("default: maxClaims=%d applied=%q", size.maxClaims, size.applied)
+	}
+}
+
+// TestContentGround_LengthIntent_ScalesByIntent — each intent maps to
+// the right max_claims value. Verified by reading max_claims_applied
+// in the output.
+func TestContentGround_LengthIntent_ScalesByIntent(t *testing.T) {
+	cases := []struct {
+		intent string
+		want   int
+	}{
+		{"summary", 3},
+		{"thorough", 5},
+		{"exhaustive", 8},
+	}
+	for _, tc := range cases {
+		t.Run(tc.intent, func(t *testing.T) {
+			markdown := "A claim. Another claim.\n"
+			exec := &execScript{}
+			// No claims found → early-return path; we only need
+			// the JIT fields populated in that response.
+			fc := stubFirecrawlFromHandler(t, func(w http.ResponseWriter, r *http.Request) {
+				writeSearchResult(w)
+			})
+			disp := &scriptedDispatcherWT{replies: []string{
+				// Empty claim list → early return with JIT fields.
+				`{"claims":[]}`,
+			}}
+			raw, err := runContentGround(t, disp, exec, fc, fmt.Sprintf(
+				`{"text":%q,"length_intent":%q}`, markdown, tc.intent))
+			if err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+			var out struct {
+				MaxClaimsApplied    int    `json:"max_claims_applied"`
+				LengthIntentApplied string `json:"length_intent_applied"`
+			}
+			_ = json.Unmarshal(raw, &out)
+			if out.MaxClaimsApplied != tc.want {
+				t.Errorf("intent=%s: max_claims_applied = %d, want %d",
+					tc.intent, out.MaxClaimsApplied, tc.want)
+			}
+			if want := "intent:" + tc.intent; out.LengthIntentApplied != want {
+				t.Errorf("applied = %q, want %q", out.LengthIntentApplied, want)
+			}
+		})
+	}
+}
+
+// TestContentGround_BackCompat_ExplicitMaxClaimsWins — when max_claims
+// is set, it wins over length_intent. Existing callers see ZERO change.
+func TestContentGround_BackCompat_ExplicitMaxClaimsWins(t *testing.T) {
+	markdown := "A claim.\n"
+	exec := &execScript{}
+	fc := stubFirecrawlFromHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		writeSearchResult(w)
+	})
+	disp := &scriptedDispatcherWT{replies: []string{`{"claims":[]}`}}
+	raw, err := runContentGround(t, disp, exec, fc, fmt.Sprintf(
+		`{"text":%q,"max_claims":7,"length_intent":"summary"}`, markdown))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		MaxClaimsApplied    int    `json:"max_claims_applied"`
+		LengthIntentApplied string `json:"length_intent_applied"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.MaxClaimsApplied != 7 {
+		t.Errorf("max_claims_applied = %d, want 7 (explicit honored)", out.MaxClaimsApplied)
+	}
+	if out.LengthIntentApplied != "explicit" {
+		t.Errorf("applied = %q, want explicit", out.LengthIntentApplied)
+	}
+}
+
+// TestContentGround_BackCompat_DefaultLabel — no input → legacy
+// default 5 with applied:"default" (distinct from "intent:thorough"
+// so callers can tell which path ran).
+func TestContentGround_BackCompat_DefaultLabel(t *testing.T) {
+	markdown := "A claim.\n"
+	exec := &execScript{}
+	fc := stubFirecrawlFromHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		writeSearchResult(w)
+	})
+	disp := &scriptedDispatcherWT{replies: []string{`{"claims":[]}`}}
+	raw, err := runContentGround(t, disp, exec, fc, fmt.Sprintf(
+		`{"text":%q}`, markdown))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		MaxClaimsApplied    int    `json:"max_claims_applied"`
+		LengthIntentApplied string `json:"length_intent_applied"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.MaxClaimsApplied != defaultContentGroundClaims {
+		t.Errorf("max_claims_applied = %d, want %d (legacy default)",
+			out.MaxClaimsApplied, defaultContentGroundClaims)
+	}
+	if out.LengthIntentApplied != "default" {
+		t.Errorf("applied = %q, want default", out.LengthIntentApplied)
+	}
+}
+
+// TestContentGround_Truncated_ExtractorFinishReasonLength — extractor
+// LLM hitting finish_reason=length surfaces as truncated:true so
+// callers can re-run with smaller intent or larger
+// max_completion_tokens.
+func TestContentGround_Truncated_ExtractorFinishReasonLength(t *testing.T) {
+	markdown := "A claim.\n"
+	exec := &execScript{}
+	fc := stubFirecrawlFromHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		writeSearchResult(w)
+	})
+	disp := &scriptedDispatcherWT{
+		replies:       []string{`{"claims":[]}`},
+		finishReasons: []string{"length"},
+	}
+	raw, err := runContentGround(t, disp, exec, fc, fmt.Sprintf(
+		`{"text":%q}`, markdown))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		Truncated bool `json:"truncated"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if !out.Truncated {
+		t.Error("extractor finish_reason=length should set truncated:true")
+	}
+}
+
+// TestContentGround_UnknownIntentFallsBack — misspelled intent falls
+// back to thorough rather than erroring.
+func TestContentGround_UnknownIntentFallsBack(t *testing.T) {
+	in := contentGroundInput{LengthIntent: "deeper-than-deep-dive"}
+	size := resolveContentGroundSize(&in)
+	if size.applied != "intent:thorough" {
+		t.Errorf("applied = %q, want intent:thorough", size.applied)
 	}
 }

@@ -50,6 +50,24 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 | `webhook_secret` | `string` | no | — | HMAC signature secret for the webhook callback. |
 | `hero_image_prompt` | `string` | no | — | When non-empty (v0.12.0 #146), the pack calls `image.generate` and inlines the resulting PNG INTO slide 1's content (no `---` separator) so the per-slide TTS pipeline still sees a narrated slide. Skipped automatically during `dry_run`. Fails loud on missing `fal-key` credential. |
 | `hero_image_model` | `string` | no | `"fal-ai/flux/schnell"` | fal.ai model used when `hero_image_prompt` is set. Browse choices via the `helmdeck://image-models` MCP resource. |
+| `length_intent` | `string` | no | — | JIT density reporting (issue [#530](https://github.com/tosin2013/helmdeck/issues/530)) — one of `summary` / `thorough` / `exhaustive`. Pack measures the deck's actual words-per-narrated-slide and reports how many slides fall inside the declared intent's range. **Observational only** — slides.narrate doesn't generate or trim notes (that's slides.outline's job). |
+| `inspect` | `boolean` | no | `false` | When `true`, pack parses the markdown, computes density stats, returns the suggestion, and exits — no session, no vault, no Marp render. The cheapest deck-quality check available. |
+| `words_per_slide_min` | `number` | no | — | Explicit numeric override of the intent range's floor. Both `min` and `max` must be set (with `max >= min`) to be honored. |
+| `words_per_slide_max` | `number` | no | — | Explicit numeric override of the intent range's ceiling. See `words_per_slide_min`. |
+
+### Length intent (observational)
+
+Unlike `blog.rewrite_for_audience` (#527) or `podcast.generate` (#533) where the pack actively sizes the output, `slides.narrate` takes the deck as-is — the narration text is already in the input markdown's `<!-- speaker notes -->` comments (typically prepared by `slides.outline`). JIT length sizing here is therefore **observational**: the agent declares the density they expected, the pack measures what they actually got, and reports the gap.
+
+| Intent | Words per narrated slide | Approx duration at 150 wpm |
+|---|---|---|
+| `summary` | 40-60 | ~16-24 s |
+| `thorough` (default for stats baseline) | 80-120 | ~32-48 s |
+| `exhaustive` | 150-220 | ~60-88 s |
+
+**Precedence**: `inspect:true` → both `words_per_slide_min` + `words_per_slide_max` set (`"explicit"`) → `length_intent` set (`"intent:*"`) → no input (`"default:reporting-only"`, thorough's range used as the stats baseline).
+
+When the deck's measured density doesn't match the declared intent, the agent's next move is to re-run `slides.outline` with adjusted notes — not to re-run `slides.narrate`. The pack reports; the upstream caller decides.
 
 ## Outputs
 
@@ -66,6 +84,16 @@ Get a key from <https://elevenlabs.io/app/settings/api-keys>. Free tier is 10,00
 | `captions_artifact_key` | `string` | Sidecar SRT file (`captions.srt`). Default-present unless `captions_sidecar:false`. YouTube Studio "Subtitles → Upload file → With timing" auto-imports as the CC track. Empty string when the sidecar was suppressed or the artifact-store Put failed (Put failures are logged but don't fail the run). |
 | `captions_burned_in` | `boolean` | Always emitted (even when false) so consumers can branch on its presence. `true` only when `captions_burn_in:true` was passed AND the SRT was successfully written to the burn-in path. |
 | `hero_image_model_used` | `string` | Only when `hero_image_prompt` was set. Echoes the model that actually generated the hero. |
+| `source_words_per_slide_avg` | `number` | Average word count across slides with non-empty notes. Silent slides excluded so intro/outro placeholders don't drag the signal down. |
+| `source_words_per_slide_min` / `_max` | `number` | Tightest / loosest narrated slide in the deck. |
+| `narrated_slide_count` | `number` | Count of slides whose notes are non-empty. |
+| `slides_within_intent_range` | `number` | How many narrated slides fall inside the declared intent's `[floor, ceiling]` range. |
+| `slides_outside_intent_range` | `number` | How many fall outside. |
+| `length_intent_applied` | `string` | Where the range came from — `intent:summary` / `intent:thorough` / `intent:exhaustive` / `explicit` / `default:reporting-only`. |
+| `truncated` | `boolean` | `true` when the engagement-metadata LLM hit `finish_reason=length`. TTS calls are HTTP (not gateway dispatch) so don't surface a truncation signal — this is engagement-only. |
+| `inspect` | `boolean` | Inspect-mode only — always `true` in the inspect response. |
+| `suggested_intent` | `string` | Inspect-mode only — which intent's range the deck's actual density best matches. Empty when no slides are narrated. |
+| `reason` | `string` | Inspect-mode only — human-readable summary of the measurement and suggestion. |
 
 ### Captions
 

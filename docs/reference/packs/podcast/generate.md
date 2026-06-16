@@ -55,7 +55,9 @@ For mode C with `source_url`, the Firecrawl overlay must be enabled (`HELMDECK_F
 | `max_tokens` | `number` | no | `4096` | LLM cap for script generation. |
 | `model_id` | `string` | no | `"eleven_turbo_v2_5"` | ElevenLabs TTS model. `eleven_turbo_v2_5` is fast/cheap; `eleven_multilingual_v2` for non-English. |
 | `theme` | `string` | no | `"deep-dive"` | One of: `interview`, `debate`, `news-roundup`, `deep-dive`, `solo-essay`. Influences modes B/C only. |
-| `duration_target_min` | `number` | no | `8` | LLM target length in minutes (modes B/C). At ~150 wpm, an 8-min target asks for ~1200 total words. |
+| `duration_target_min` | `number` | no | `8` | Explicit numeric override of the target length in minutes (modes B/C). At ~150 wpm, an 8-min target asks for ~1200 total words. **Takes precedence** over `length_intent`; preserved verbatim for back-compat. |
+| `length_intent` | `string` | no | — | JIT length sizing (issue [#528](https://github.com/tosin2013/helmdeck/issues/528)) — one of `summary` / `thorough` / `exhaustive`. Pack measures the source (script text or `source_text`), picks a `duration_target_min` from the heuristic table below. Honored only when `duration_target_min` is unset; back-compat with no-input callers preserved (legacy 8-min default). |
+| `inspect` | `boolean` | no | `false` | When `true`, pack returns the measurement + suggested duration and does NOT call the gateway / open a session / touch vault. Works without a dispatcher or session executor — pure planning helper. Does NOT scrape `source_url` (use `source_text` if you want a measured suggestion for inline content). |
 | `silence_between_turns_ms` | `number` | no | `600` | Pause between consecutive turns (ms). 600ms feels conversational; 200ms feels rushed; 1000ms feels formal. |
 | `generate_cover_prompt` | `boolean` | no | `false` | When `true`, output includes `cover_image_prompt` — a one-paragraph prompt the agent can pass to a future image-gen pack for cover art. |
 | `cover_image` | `boolean` | no | `false` | When `true`, the pack auto-generates the cover via `image.generate` and surfaces `cover_image_artifact_key` in the output. Uses the same prompt as `generate_cover_prompt`. Honored only outside `dry_run`. Added v0.12.0 (#146). |
@@ -68,11 +70,25 @@ For mode C with `source_url`, the Firecrawl overlay must be enabled (`HELMDECK_F
 
 **Validation:**
 - Exactly one of `script` / `prompt` / (`source_url` OR `source_text`)
-- `prompt` and `source_*` modes require `model`
+- `prompt` and `source_*` modes require `model` (skipped when `inspect:true` — inspect doesn't call the model)
 - Every speaker referenced in `script` (mode A) must exist in `speakers`
 - `theme` must be in the closed set
 - `engine` must be `"elevenlabs"` (day 1)
-- `source_url` requires `HELMDECK_FIRECRAWL_ENABLED=true`
+- `source_url` requires `HELMDECK_FIRECRAWL_ENABLED=true` (skipped when `inspect:true` — inspect doesn't scrape)
+
+### Length intent heuristic
+
+The pack picks a chosen target duration by multiplying source reading time (`source_words / 150 wpm`) by the row multiplier, then clamping to floor/ceiling.
+
+| Intent | Multiplier (vs source reading time) | Floor (min) | Ceiling (min) |
+|---|---|---|---|
+| `summary` | 0.20 | 1 | 3 |
+| `thorough` (default for intent path) | 0.50 | 3 | 8 |
+| `exhaustive` | 0.90 | 6 | 12 |
+
+**Precedence**: `inspect:true` short-circuits everything > `duration_target_min > 0` (explicit numeric) > `length_intent` set → table > **legacy default 8 min** (when neither numeric nor intent is set — preserves back-compat for existing callers).
+
+For mode A (script provided), `length_intent` doesn't apply — the script's length is intrinsic. The output reports `length_intent_applied: "n/a:script"` so callers see why.
 
 ## Outputs
 
@@ -94,6 +110,51 @@ For mode C with `source_url`, the Firecrawl overlay must be enabled (`HELMDECK_F
 | `cover_image_model_used` | `string` | Only when `cover_image: true`. Echoes the model that actually generated the cover. |
 | `engagement` | `object` | Default-on when a dispatcher is wired (set `metadata_model:""` to disable). Apple Podcasts + Podcasting 2.0 shape: `{title, subtitle, summary, show_notes_md, chapters: [{startTime, title}], hook_30s, cta: {placement, copy}, language, format_ceiling_note, title_char_count}`. `chapters[0].startTime` is always `0`, `cta.placement` is always `"mid-roll"` — both server-side defensive overrides regardless of what the LLM emitted. |
 | `engagement_artifact_key` | `string` | Present only when engagement metadata was generated. JSON sidecar file mirroring the inline `engagement` object. |
+| `source_words` | `number` | Whitespace-delimited word count of the source (script text in mode A, `source_text` in mode C-2, scraped text in mode C-1). `0` in mode B (prompt is a planning instruction, not source). |
+| `target_duration_min_chosen` | `number` | The duration the pack picked and plumbed into `GenerateScript`. Reflects precedence: `duration_target_min` > intent table > legacy default. |
+| `actual_duration_min` | `number` | What the rendered MP3 actually clocks at (`duration_s / 60`). Compare against `target_duration_min_chosen` to see how close the model landed. |
+| `length_intent_applied` | `string` | Where the chosen duration came from — `intent:summary` / `intent:thorough` / `intent:exhaustive` / `explicit` / `default:legacy-8min` / `n/a:script`. |
+| `truncated` | `boolean` | `true` when the script-generation LLM hit `finish_reason=length`. The parsed script may be incomplete — re-run with a smaller `length_intent` or larger `max_tokens`. |
+
+### Inspect-mode response
+
+When `inspect:true`, the pack returns a minimal planning response — no model call, no artifact upload, no session work:
+
+| Field | Type | Notes |
+|---|---|---|
+| `engine` | `string` | Echo (e.g. `"elevenlabs"`). |
+| `inspect` | `boolean` | Always `true`. |
+| `source_words` | `number` | Word count of script text (mode A) or `source_text` (mode C-2). `0` in prompt mode + source_url mode (no scrape). |
+| `suggested_duration_min` | `number` | What the intent table would pick. |
+| `length_intent_applied` | `string` | `intent:summary` / `intent:thorough` / `intent:exhaustive`. |
+| `reason` | `string` | Human-readable explanation, e.g. `"source is 3000 words; applying intent:thorough for a target of 8 minutes (floor/ceiling clamped)"`. |
+
+Example inspect call (no model, no session, no vault):
+
+```bash
+curl -fsS -X POST http://localhost:3000/api/v1/packs/podcast.generate \
+  -H "Authorization: Bearer $JWT" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "speakers":     {"A": "v1"},
+    "source_text":  "# Long article...\n\n[~5000 words]",
+    "inspect":      true,
+    "length_intent":"thorough"
+  }'
+```
+
+Response (no token cost, no TTS cost):
+
+```json
+{
+  "engine": "elevenlabs",
+  "inspect": true,
+  "source_words": 5000,
+  "suggested_duration_min": 8,
+  "length_intent_applied": "intent:thorough",
+  "reason": "source is 5000 words; applying intent:thorough for a target of 8 minutes (floor/ceiling clamped)"
+}
+```
 
 ### Engagement metadata — what's baked in vs operator-overridable
 

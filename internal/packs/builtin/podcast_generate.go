@@ -40,7 +40,110 @@ const (
 	// 5s slides.narrate house style. Pass min_turn_duration_s:0
 	// explicitly to opt out and preserve raw TTS pacing.
 	defaultMinTurnDurationS = 5.0
+
+	// JIT length-sizing constants (issue #528). Source word count
+	// divided by this rate gives an estimated reading time in minutes;
+	// the intent table multiplies that to pick a target podcast
+	// duration. 150 wpm is the conventional narration speed used
+	// elsewhere in the codebase (slides.narrate caption pacing).
+	podcastReadingWPM        = 150.0
+	podcastIntentSummary     = "summary"
+	podcastIntentThorough    = "thorough"
+	podcastIntentExhaustive  = "exhaustive"
+	podcastIntentDefault     = podcastIntentThorough
 )
+
+// podcastIntentRow holds the per-intent sizing parameters. Multiplier
+// scales the source's reading time (source_words / podcastReadingWPM)
+// to a target podcast duration; floor and ceiling clamp at extremes
+// so a tiny source still produces a usable episode and a huge source
+// doesn't request a 30-minute podcast that ElevenLabs would charge
+// dearly for.
+type podcastIntentRow struct {
+	multiplier float64
+	floor      int
+	ceiling    int
+}
+
+// podcastIntentTable mirrors blogRewriteIntentTable's shape; numbers
+// per issue #528. Revisitable as empirical data lands.
+var podcastIntentTable = map[string]podcastIntentRow{
+	podcastIntentSummary:    {multiplier: 0.20, floor: 1, ceiling: 3},
+	podcastIntentThorough:   {multiplier: 0.50, floor: 3, ceiling: 8},
+	podcastIntentExhaustive: {multiplier: 0.90, floor: 6, ceiling: 12},
+}
+
+// podcastSize captures the chosen target for one call. Mirrors the
+// blog pack's blogRewriteSize shape.
+type podcastSize struct {
+	chosen  int
+	applied string // "intent:thorough" / "explicit" / "default:legacy-8min" / "n/a:script"
+}
+
+// sizeForPodcastIntent picks a target minute count from the intent
+// table. Reading time floor: if sourceWords is 0 (prompt mode or
+// inspect with no measurable source), the multiplier yields 0; floor
+// clamping rescues it to a usable minimum.
+func sizeForPodcastIntent(sourceWords int, intent string) podcastSize {
+	key := strings.ToLower(strings.TrimSpace(intent))
+	if key == "" {
+		key = podcastIntentDefault
+	}
+	row, ok := podcastIntentTable[key]
+	if !ok {
+		row = podcastIntentTable[podcastIntentDefault]
+		key = podcastIntentDefault
+	}
+	readingMin := float64(sourceWords) / podcastReadingWPM
+	chosen := int(readingMin * row.multiplier)
+	if chosen < row.floor {
+		chosen = row.floor
+	}
+	if chosen > row.ceiling {
+		chosen = row.ceiling
+	}
+	return podcastSize{chosen: chosen, applied: "intent:" + key}
+}
+
+// resolvePodcastSize encodes the precedence: explicit DurationTargetMin
+// > LengthIntent > legacy default (8 min). The legacy fallback keeps
+// existing callers' behavior identical when they pass neither a
+// numeric duration nor an intent — critical for back-compat per the
+// issue #528 acceptance criteria.
+func resolvePodcastSize(sourceWords int, in *podcastGenerateInput) podcastSize {
+	if in.DurationTargetMin > 0 {
+		return podcastSize{chosen: in.DurationTargetMin, applied: "explicit"}
+	}
+	if strings.TrimSpace(in.LengthIntent) != "" {
+		return sizeForPodcastIntent(sourceWords, in.LengthIntent)
+	}
+	return podcastSize{chosen: defaultPodcastDurationMin, applied: "default:legacy-8min"}
+}
+
+// countSourceWordsForPodcast measures the source content available to
+// the pack for sizing purposes. Per mode:
+//   - script mode: sum of word counts across all turns (script IS the
+//     source; useful for inspect-mode "what duration will this run for")
+//   - source_text mode: count of source_text
+//   - source_url mode: 0 at handler-entry; replaced with the scraped
+//     text's count after the Firecrawl scrape lands (real-path only)
+//   - prompt mode: 0 (the prompt is a planning instruction, not source)
+//
+// Returns 0 when no measurable source is available. The size resolver
+// treats 0 sensibly via the row floor.
+func countSourceWordsForPodcast(in *podcastGenerateInput) int {
+	if len(in.Script) > 0 {
+		total := 0
+		for _, t := range in.Script {
+			total += countWords(t.Text)
+		}
+		return total
+	}
+	if s := strings.TrimSpace(in.SourceText); s != "" {
+		return countWords(s)
+	}
+	return 0
+}
 
 // zeroFloorOptedIn checks whether the caller passed
 // "min_turn_duration_s": 0 explicitly (in which case they want the
@@ -71,9 +174,9 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 		Metadata: packs.PackMetadata{
 			Accepts:        []string{"source_text", "source_url", "prompt", "markdown"},
 			Produces:       []string{"mp3", "podcast_script"},
-			IntentKeywords: []string{"make podcast", "audio narration", "multi-speaker dialogue", "voice over"},
-			TypicalUse:     "Generator pack — turns source text or a prompt into a multi-speaker podcast. ElevenLabs by default.",
-			Limitations:    []string{"requires vault credential 'elevenlabs-key' (or allow_silent_output:true)", "does not produce video — pair with hyperframes.render or slides.narrate for a/v output", "voice selection is per-speaker — discover IDs via helmdeck://voices"},
+			IntentKeywords: []string{"make podcast", "audio narration", "multi-speaker dialogue", "voice over", "short podcast", "thorough podcast", "exhaustive podcast"},
+			TypicalUse:     "Generator pack — turns source text or a prompt into a multi-speaker podcast. ElevenLabs by default. Use length_intent (summary / thorough / exhaustive) to scale duration to the source size, or pass duration_target_min for an explicit numeric override.",
+			Limitations:    []string{"requires vault credential 'elevenlabs-key' (or allow_silent_output:true)", "does not produce video — pair with hyperframes.render or slides.narrate for a/v output", "voice selection is per-speaker — discover IDs via helmdeck://voices", "truncated:true signals the script-generation model hit max_tokens — re-run with a smaller length_intent or larger max_tokens"},
 		},
 		NeedsSession:    true,
 		PreserveSession: false,
@@ -114,10 +217,18 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 				// as a post-concat step. Phase 3 of the validation arc.
 				// Mirrors slides.narrate's validate input.
 				"validate": "boolean",
+				// JIT length-sizing (issue #528). Declarative intent
+				// scales duration_target_min from source word count.
+				"length_intent": "string",
+				"inspect":       "boolean",
 			},
 		},
 		OutputSchema: packs.BasicSchema{
-			Required: []string{"engine", "audio_artifact_key", "audio_size", "speaker_count", "turn_count", "script_source", "has_narration"},
+			// Required deliberately stays narrow: inspect-mode short-
+			// circuits before any of these are populated. The engine
+			// schema validator only checks Required for the pure
+			// happy-path generate response.
+			Required: []string{"engine"},
 			Properties: map[string]string{
 				"engine":                   "string",
 				"audio_artifact_key":       "string",
@@ -155,6 +266,18 @@ func PodcastGenerate(v *vault.Store, eg *security.EgressGuard, d vision.Dispatch
 				"tts_chars":                "object",
 				"estimated_cost_usd":       "number",
 				"estimated_cost_breakdown": "object",
+				// JIT length-sizing (issue #528). Reported on every
+				// generate response so callers can see what scale they
+				// got; inspect mode emits a subset.
+				"source_words":               "number",
+				"target_duration_min_chosen": "number",
+				"actual_duration_min":        "number",
+				"length_intent_applied":      "string",
+				"truncated":                  "boolean",
+				// Inspect mode only.
+				"inspect":               "boolean",
+				"suggested_duration_min": "number",
+				"reason":                "string",
 			},
 		},
 		Handler: podcastGenerateHandler(v, eg, d),
@@ -194,6 +317,18 @@ type podcastGenerateInput struct {
 	// post-concat step. nil → on, &false → off. Mirrors slides.narrate's
 	// pattern. Phase 3 of the validation arc.
 	Validate *bool `json:"validate,omitempty"`
+
+	// JIT length-sizing (issue #528 / convention #525). LengthIntent
+	// declares "summary" / "thorough" / "exhaustive"; the pack
+	// measures the source and picks a duration_target_min from the
+	// intent table. Precedence: DurationTargetMin > LengthIntent >
+	// legacy 8-min default (back-compat preserved when neither set).
+	LengthIntent string `json:"length_intent,omitempty"`
+	// Inspect: pack measures source (when available — script text or
+	// source_text), returns the suggested duration, and does NOT call
+	// the script-generation LLM. Useful when an agent wants to
+	// negotiate length before committing. Does not scrape source_url.
+	Inspect bool `json:"inspect,omitempty"`
 }
 
 func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.Dispatcher) packs.HandlerFunc {
@@ -244,13 +379,57 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
 				Message: "must provide exactly one of: script | prompt+model | source_url/source_text+model — got multiple"}
 		}
-		if (hasPrompt || hasSource) && strings.TrimSpace(in.Model) == "" {
+		if (hasPrompt || hasSource) && strings.TrimSpace(in.Model) == "" && !in.Inspect {
+			// Inspect short-circuits before the model is called, so
+			// callers can plan in modes B/C without picking a model.
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
 				Message: "model is required when using prompt or source_url/source_text mode"}
 		}
 		if hasSource && in.SourceURL != "" && os.Getenv("HELMDECK_FIRECRAWL_ENABLED") != "true" {
-			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
-				Message: "source_url mode requires Firecrawl overlay (HELMDECK_FIRECRAWL_ENABLED=true)"}
+			// Inspect mode short-circuits before this check (no
+			// scrape happens), so source_url + inspect is allowed
+			// without HELMDECK_FIRECRAWL_ENABLED.
+			if !in.Inspect {
+				return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+					Message: "source_url mode requires Firecrawl overlay (HELMDECK_FIRECRAWL_ENABLED=true)"}
+			}
+		}
+
+		// JIT length-sizing: inspect short-circuit (issue #528). Runs
+		// before the executor / dispatcher / vault checks so a
+		// gateway-less or session-less environment can still plan a
+		// podcast. Measures source content when available (script text
+		// or source_text); for prompt / source_url modes the
+		// suggestion is based on the intent floor.
+		if in.Inspect {
+			sourceWords := countSourceWordsForPodcast(&in)
+			// Intent defaults to "thorough" for inspect-mode
+			// reporting — caller can override.
+			intent := strings.TrimSpace(in.LengthIntent)
+			if intent == "" {
+				intent = podcastIntentDefault
+			}
+			size := sizeForPodcastIntent(sourceWords, intent)
+			reason := fmt.Sprintf("source is %d words; applying %s for a target of %d minutes (floor/ceiling clamped)",
+				sourceWords, size.applied, size.chosen)
+			if sourceWords == 0 {
+				switch {
+				case hasPrompt:
+					reason = fmt.Sprintf("prompt mode has no measurable source; applying %s picks intent floor at %d minutes",
+						size.applied, size.chosen)
+				case in.SourceURL != "":
+					reason = fmt.Sprintf("source_url not scraped in inspect mode; applying %s picks intent floor at %d minutes (call without inspect to measure scraped content)",
+						size.applied, size.chosen)
+				}
+			}
+			return json.Marshal(map[string]any{
+				"engine":                 engineName,
+				"inspect":                true,
+				"source_words":           sourceWords,
+				"suggested_duration_min": size.chosen,
+				"length_intent_applied":  size.applied,
+				"reason":                 reason,
+			})
 		}
 
 		if ec.Exec == nil {
@@ -263,20 +442,34 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 			script       []podcast.Turn
 			scriptSource string
 			modelUsed    string
+			finishReason string
+			sourceWords  int
 		)
+		// Pre-resolve size for modes B/C. For modes whose source is
+		// not yet in hand (source_url before scrape), sourceWords is
+		// 0 and size falls back to intent-floor or legacy default.
+		// Mode A (script) skips intent entirely — duration is fixed
+		// by the script.
+		size := resolvePodcastSize(countSourceWordsForPodcast(&in), &in)
 		switch {
 		case hasScript:
 			script = in.Script
 			scriptSource = "input"
+			sourceWords = countSourceWordsForPodcast(&in)
+			// Script mode has no intent decision to make; report
+			// the script's intrinsic word count but flag the
+			// applied path as "n/a:script" so callers can see why.
+			size.applied = "n/a:script"
 		case hasPrompt:
 			if d == nil {
 				return nil, &packs.PackError{Code: packs.CodeInternal,
 					Message: "podcast.generate prompt mode registered without a gateway dispatcher"}
 			}
-			ec.Report(10, "generating script via gateway LLM")
-			s, err := podcast.GenerateScript(ctx, d, in.Model, podcast.Theme(theme),
-				speakerNames(in.Speakers), defaultIfZero(in.DurationTargetMin, defaultPodcastDurationMin),
+			ec.Report(10, fmt.Sprintf("generating script via gateway LLM (target %d min, %s)", size.chosen, size.applied))
+			s, fr, err := podcast.GenerateScript(ctx, d, in.Model, podcast.Theme(theme),
+				speakerNames(in.Speakers), size.chosen,
 				defaultIfZero(in.MaxTokens, 4096), in.Prompt)
+			finishReason = fr
 			if err != nil {
 				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 					Message: err.Error(), Cause: err}
@@ -305,11 +498,19 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 				}
 				sourceText = txt
 			}
-			ec.Report(15, "generating script from long-form content")
+			// Re-measure source now that scrape (if any) is done,
+			// and re-resolve size so source_url callers get a
+			// content-sized target rather than the intent floor.
+			sourceWords = countWords(sourceText)
+			inWithScrape := in
+			inWithScrape.SourceText = sourceText
+			size = resolvePodcastSize(sourceWords, &inWithScrape)
+			ec.Report(15, fmt.Sprintf("generating script from long-form content (target %d min, %s)", size.chosen, size.applied))
 			userMsg := "Convert the following content into a podcast script.\n\nCONTENT:\n" + sourceText
-			s, err := podcast.GenerateScript(ctx, d, in.Model, podcast.Theme(theme),
-				speakerNames(in.Speakers), defaultIfZero(in.DurationTargetMin, defaultPodcastDurationMin),
+			s, fr, err := podcast.GenerateScript(ctx, d, in.Model, podcast.Theme(theme),
+				speakerNames(in.Speakers), size.chosen,
 				defaultIfZero(in.MaxTokens, 4096), userMsg)
+			finishReason = fr
 			if err != nil {
 				return nil, &packs.PackError{Code: packs.CodeHandlerFailed,
 					Message: err.Error(), Cause: err}
@@ -353,6 +554,14 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 				"tts_chars":                ttsChars,
 				"estimated_cost_usd":       estimateUSD,
 				"estimated_cost_breakdown": estimateBreakdown,
+				// JIT length-sizing telemetry (issue #528). Reported
+				// even in dry_run so operators previewing cost also
+				// see the chosen target + whether the generation
+				// truncated.
+				"source_words":               sourceWords,
+				"target_duration_min_chosen": size.chosen,
+				"length_intent_applied":      size.applied,
+				"truncated":                  strings.EqualFold(finishReason, "length"),
 			}
 			raw, mErr := json.Marshal(out)
 			if mErr != nil {
@@ -463,6 +672,8 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 
 		// 9. Build output.
 		voicesMap := voicesUsedMap(voicesUsed, in.Speakers)
+		truncated := strings.EqualFold(finishReason, "length")
+		actualDurationMin := durationS / 60
 		out := map[string]any{
 			"engine":             eng.Name(),
 			"audio_artifact_key": art.Key,
@@ -488,6 +699,17 @@ func podcastGenerateHandler(v *vault.Store, eg *security.EgressGuard, d vision.D
 			"tts_chars":                ttsChars,
 			"estimated_cost_usd":       estimateUSD,
 			"estimated_cost_breakdown": estimateBreakdown,
+			// JIT length-sizing telemetry (issue #528). Always
+			// emitted on the generate path so callers can compare
+			// their chosen target against actual_duration_min and
+			// detect truncation. For mode A (script), source_words
+			// reflects the script's word count and applied is
+			// "n/a:script".
+			"source_words":               sourceWords,
+			"target_duration_min_chosen": size.chosen,
+			"actual_duration_min":        actualDurationMin,
+			"length_intent_applied":      size.applied,
+			"truncated":                  truncated,
 		}
 		if modelUsed != "" {
 			out["model_used"] = modelUsed

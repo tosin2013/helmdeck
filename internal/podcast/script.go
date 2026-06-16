@@ -69,6 +69,10 @@ func speakerKeysSorted(m map[string]string) string {
 // fences despite the instruction). The retry-on-malformed loop is
 // kept simple: parse once, fall back to extracting the first
 // balanced [...] block, give up on second failure.
+//
+// The second return value is the gateway's finish_reason ("stop" /
+// "length" / etc) so the caller can surface truncation. Empty when
+// the provider didn't expose it (e.g. some Ollama paths).
 func GenerateScript(
 	ctx context.Context,
 	d vision.Dispatcher,
@@ -78,9 +82,9 @@ func GenerateScript(
 	durationMin int,
 	maxTokens int,
 	userPrompt string,
-) ([]Turn, error) {
+) ([]Turn, string, error) {
 	if d == nil {
-		return nil, errors.New("no gateway dispatcher (script generation requires LLM)")
+		return nil, "", errors.New("no gateway dispatcher (script generation requires LLM)")
 	}
 	if maxTokens <= 0 {
 		maxTokens = 4096
@@ -96,24 +100,25 @@ func GenerateScript(
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("script generation dispatch: %w", err)
+		return nil, "", fmt.Errorf("script generation dispatch: %w", err)
 	}
 	if len(resp.Choices) == 0 {
-		return nil, errors.New("script generation: model returned no choices")
+		return nil, "", errors.New("script generation: model returned no choices")
 	}
+	finishReason := resp.Choices[0].FinishReason
 	raw := strings.TrimSpace(resp.Choices[0].Message.Content.Text())
 	if raw == "" {
-		return nil, errors.New("script generation: model returned empty text")
+		return nil, finishReason, errors.New("script generation: model returned empty text")
 	}
 
 	turns, err := parseScriptJSON(raw)
 	if err != nil {
-		return nil, fmt.Errorf("script generation: %w (raw: %s)", err, truncateForErr(raw, 256))
+		return nil, finishReason, fmt.Errorf("script generation: %w (raw: %s)", err, truncateForErr(raw, 256))
 	}
 	if len(turns) == 0 {
-		return nil, errors.New("script generation: model returned empty script")
+		return nil, finishReason, errors.New("script generation: model returned empty script")
 	}
-	return turns, nil
+	return turns, finishReason, nil
 }
 
 // parseScriptJSON decodes the model's response into []Turn. Tolerates:

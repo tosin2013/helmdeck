@@ -824,3 +824,280 @@ func TestPodcastGenerate_RealRun_IncludesCostBlock(t *testing.T) {
 		t.Error("real run should include estimated_cost_usd in response")
 	}
 }
+
+// --- JIT length-sizing (issue #528 / convention #525) ---------------------
+
+// TestPodcastGenerate_Inspect_NoDispatcherNoSession — inspect mode must
+// short-circuit before any dispatcher / session / vault use, so it works
+// in gateway-less / session-less environments. The agent's planning
+// flow uses this to size before committing tokens.
+func TestPodcastGenerate_Inspect_NoDispatcherNoSession(t *testing.T) {
+	pack := PodcastGenerate(nil, nil, nil)
+	ec := &packs.ExecutionContext{
+		Pack:  pack,
+		Input: json.RawMessage(`{"speakers":{"A":"v1"},"source_text":"` + strings.Repeat("word ", 3000) + `","inspect":true,"length_intent":"thorough"}`),
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("inspect with nil dispatcher/session should not error: %v", err)
+	}
+	var out struct {
+		Inspect              bool   `json:"inspect"`
+		SourceWords          int    `json:"source_words"`
+		SuggestedDurationMin int    `json:"suggested_duration_min"`
+		LengthIntentApplied  string `json:"length_intent_applied"`
+		Reason               string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Inspect {
+		t.Errorf("inspect flag not echoed: %+v", out)
+	}
+	if out.SourceWords != 3000 {
+		t.Errorf("source_words = %d, want 3000", out.SourceWords)
+	}
+	// 3000 words / 150 wpm = 20 reading min; * 0.50 = 10 min;
+	// clamped to thorough ceiling 8.
+	if out.SuggestedDurationMin != 8 {
+		t.Errorf("suggested_duration_min = %d, want 8 (clamped to thorough ceiling)", out.SuggestedDurationMin)
+	}
+	if out.LengthIntentApplied != "intent:thorough" {
+		t.Errorf("length_intent_applied = %q, want intent:thorough", out.LengthIntentApplied)
+	}
+	if !strings.Contains(out.Reason, "3000") || !strings.Contains(out.Reason, "thorough") {
+		t.Errorf("reason should mention source size + applied intent: %q", out.Reason)
+	}
+}
+
+// TestPodcastGenerate_Inspect_ScriptMode — inspect on script mode reports
+// the script's word count and flags applied as "n/a:script" so the
+// caller knows JIT didn't pick a target (script length is intrinsic).
+func TestPodcastGenerate_Inspect_ScriptMode(t *testing.T) {
+	// Note: script-mode inspect picks intent:thorough by default
+	// since the inspect branch runs sizeForPodcastIntent regardless
+	// of mode. The applied label is intent:thorough; mode-specific
+	// "n/a:script" only applies on the generate path.
+	pack := PodcastGenerate(nil, nil, nil)
+	ec := &packs.ExecutionContext{
+		Pack: pack,
+		Input: json.RawMessage(`{
+			"speakers": {"A":"v1"},
+			"script":   [{"speaker":"A","text":"one two three four five"}],
+			"inspect":  true
+		}`),
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("inspect script-mode: %v", err)
+	}
+	var out struct {
+		SourceWords          int `json:"source_words"`
+		SuggestedDurationMin int `json:"suggested_duration_min"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.SourceWords != 5 {
+		t.Errorf("source_words = %d, want 5", out.SourceWords)
+	}
+	// 5 words → 0.03 reading min → 0.015 * thorough; clamps to floor 3.
+	if out.SuggestedDurationMin != 3 {
+		t.Errorf("suggested_duration_min = %d, want 3 (floor)", out.SuggestedDurationMin)
+	}
+}
+
+// TestPodcastGenerate_Inspect_SourceURL_NoScrape — inspect mode does NOT
+// scrape source_url; reports source_words=0 with a helpful reason
+// mentioning the scrape would be required. Per #528 acceptance: inspect
+// is the cheap pack-internal path, no network.
+func TestPodcastGenerate_Inspect_SourceURL_NoScrape(t *testing.T) {
+	pack := PodcastGenerate(nil, nil, nil)
+	ec := &packs.ExecutionContext{
+		Pack: pack,
+		Input: json.RawMessage(`{
+			"speakers":      {"A":"v1"},
+			"source_url":    "https://example.com/article",
+			"model":         "openrouter/auto",
+			"inspect":       true,
+			"length_intent": "exhaustive"
+		}`),
+	}
+	raw, err := pack.Handler(context.Background(), ec)
+	if err != nil {
+		t.Fatalf("inspect source_url: %v", err)
+	}
+	var out struct {
+		SourceWords          int    `json:"source_words"`
+		SuggestedDurationMin int    `json:"suggested_duration_min"`
+		Reason               string `json:"reason"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.SourceWords != 0 {
+		t.Errorf("source_words = %d, want 0 (no scrape in inspect mode)", out.SourceWords)
+	}
+	if out.SuggestedDurationMin != 6 {
+		t.Errorf("suggested_duration_min = %d, want 6 (exhaustive floor)", out.SuggestedDurationMin)
+	}
+	if !strings.Contains(out.Reason, "source_url not scraped") {
+		t.Errorf("reason should explain no-scrape: %q", out.Reason)
+	}
+}
+
+// TestPodcastGenerate_LengthIntent_BackCompat_NoIntentNoNumeric — when
+// neither length_intent nor duration_target_min is set, the pack
+// preserves the legacy 8-min default. THIS IS THE CRITICAL BACK-COMPAT
+// TEST — existing callers must see zero behavior change.
+func TestPodcastGenerate_LengthIntent_BackCompat_NoIntentNoNumeric(t *testing.T) {
+	v := vaultWithElevenKey(t, "")
+	ex := &podcastTestExecutor{mp3Bytes: []byte("\xff\xfb\x90fakemp3")}
+	raw, err := runPodcastGenerate(t, v, ex, `{
+		"speakers": {"A":"v1"},
+		"script":   [{"speaker":"A","text":"hi"}],
+		"allow_silent_output": true
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		LengthIntentApplied     string `json:"length_intent_applied"`
+		TargetDurationMinChosen int    `json:"target_duration_min_chosen"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	// Script mode flips applied to "n/a:script" after the size
+	// resolver runs. The chosen value still reflects the
+	// resolver's pick — which for no-intent-no-numeric is the
+	// legacy 8-min default.
+	if out.LengthIntentApplied != "n/a:script" {
+		t.Errorf("script mode should label applied as n/a:script, got %q", out.LengthIntentApplied)
+	}
+	if out.TargetDurationMinChosen != 8 {
+		t.Errorf("back-compat: target_duration_min_chosen = %d, want 8 (legacy default)", out.TargetDurationMinChosen)
+	}
+}
+
+// TestPodcastGenerate_LengthIntent_BackCompat_ExplicitDurationWins —
+// when DurationTargetMin is set, it wins regardless of LengthIntent.
+// Power callers can still bypass the intent table.
+func TestPodcastGenerate_LengthIntent_BackCompat_ExplicitDurationWins(t *testing.T) {
+	v := vaultWithElevenKey(t, "")
+	ex := &podcastTestExecutor{mp3Bytes: []byte("\xff\xfb\x90fakemp3")}
+	raw, err := runPodcastGenerate(t, v, ex, `{
+		"speakers": {"A":"v1"},
+		"script":   [{"speaker":"A","text":"hi"}],
+		"duration_target_min": 11,
+		"length_intent": "summary",
+		"allow_silent_output": true
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		TargetDurationMinChosen int    `json:"target_duration_min_chosen"`
+		LengthIntentApplied     string `json:"length_intent_applied"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.TargetDurationMinChosen != 11 {
+		t.Errorf("explicit duration_target_min ignored: got %d, want 11", out.TargetDurationMinChosen)
+	}
+	// Script mode overrides applied to "n/a:script" after size
+	// resolution; in non-script mode this would be "explicit".
+	if out.LengthIntentApplied != "n/a:script" {
+		t.Errorf("script mode should label applied n/a:script; got %q", out.LengthIntentApplied)
+	}
+}
+
+// TestPodcastGenerate_OutputMetricsAlwaysPresent — verifies the new
+// JIT fields land on every generate response so downstream callers
+// can rely on them.
+func TestPodcastGenerate_OutputMetricsAlwaysPresent(t *testing.T) {
+	v := vaultWithElevenKey(t, "")
+	ex := &podcastTestExecutor{mp3Bytes: []byte("\xff\xfb\x90fakemp3")}
+	raw, err := runPodcastGenerate(t, v, ex, `{
+		"speakers": {"A":"v1"},
+		"script":   [{"speaker":"A","text":"hello world this is a test"}],
+		"allow_silent_output": true
+	}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	for _, k := range []string{
+		"source_words", "target_duration_min_chosen", "actual_duration_min",
+		"length_intent_applied", "truncated",
+	} {
+		if _, ok := out[k]; !ok {
+			t.Errorf("missing JIT metric %q in output", k)
+		}
+	}
+}
+
+// TestPodcastGenerate_SizeForIntent_TableUnit — unit-level test of
+// sizeForPodcastIntent across the three intents at a known source size.
+// Catches regression in the intent table or the multiplier math.
+func TestPodcastGenerate_SizeForIntent_TableUnit(t *testing.T) {
+	// 3000 words / 150 wpm = 20 reading min.
+	const srcWords = 3000
+	cases := []struct {
+		intent string
+		want   int
+	}{
+		{"summary", 3},     // 20 * 0.20 = 4, clamped to ceiling 3
+		{"thorough", 8},    // 20 * 0.50 = 10, clamped to ceiling 8
+		{"exhaustive", 12}, // 20 * 0.90 = 18, clamped to ceiling 12
+	}
+	for _, tc := range cases {
+		t.Run(tc.intent, func(t *testing.T) {
+			size := sizeForPodcastIntent(srcWords, tc.intent)
+			if size.chosen != tc.want {
+				t.Errorf("intent %s: chosen = %d, want %d", tc.intent, size.chosen, tc.want)
+			}
+			if size.applied != "intent:"+tc.intent {
+				t.Errorf("applied = %q", size.applied)
+			}
+		})
+	}
+}
+
+// TestPodcastGenerate_SizeForIntent_ClampFloor — tiny source with
+// exhaustive intent clamps to the floor rather than producing a
+// 0-minute podcast.
+func TestPodcastGenerate_SizeForIntent_ClampFloor(t *testing.T) {
+	size := sizeForPodcastIntent(50, "exhaustive") // 50/150*0.90 = 0.3 min
+	if size.chosen != 6 {                          // exhaustive floor
+		t.Errorf("chosen = %d, want 6 (exhaustive floor)", size.chosen)
+	}
+}
+
+// TestPodcastGenerate_SizeForIntent_UnknownIntentFallsBackToDefault —
+// misspelled intent falls back to thorough rather than erroring; agents
+// that fat-finger don't lose the whole call.
+func TestPodcastGenerate_SizeForIntent_UnknownIntentFallsBackToDefault(t *testing.T) {
+	size := sizeForPodcastIntent(3000, "deeper-than-deep-dive")
+	if size.applied != "intent:thorough" {
+		t.Errorf("applied = %q, want intent:thorough (fallback)", size.applied)
+	}
+}
+
+// TestPodcastGenerate_ResolvePodcastSize_Precedence — explicit numeric
+// > intent > default. Pinned at the resolver level so the precedence
+// rule lives in code, not just docs.
+func TestPodcastGenerate_ResolvePodcastSize_Precedence(t *testing.T) {
+	// (1) explicit numeric wins over intent.
+	in := podcastGenerateInput{DurationTargetMin: 9, LengthIntent: "summary"}
+	size := resolvePodcastSize(3000, &in)
+	if size.chosen != 9 || size.applied != "explicit" {
+		t.Errorf("explicit numeric should win; got chosen=%d applied=%q", size.chosen, size.applied)
+	}
+	// (2) intent wins when numeric absent.
+	in = podcastGenerateInput{LengthIntent: "summary"}
+	size = resolvePodcastSize(3000, &in)
+	if size.applied != "intent:summary" {
+		t.Errorf("intent should apply; got applied=%q", size.applied)
+	}
+	// (3) legacy default when neither set.
+	in = podcastGenerateInput{}
+	size = resolvePodcastSize(3000, &in)
+	if size.chosen != defaultPodcastDurationMin || size.applied != "default:legacy-8min" {
+		t.Errorf("legacy default expected; got chosen=%d applied=%q", size.chosen, size.applied)
+	}
+}

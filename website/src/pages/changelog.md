@@ -16,6 +16,14 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.29.2] - 2026-06-17
+
+**Theme**: "Silent-video fix + tunable Firecrawl/LLM concurrency."
+
+Two follow-ups landed within hours of v0.29.1: the `hyperframes.attach_audio` pack that closes the v0.28.x silent-video bug for unreliable upstream examples (`decision-tree` empirically), and an operator env var to tune `content.ground`'s per-call Firecrawl + verify concurrency. Both back-compat-safe; operators on v0.29.1 can upgrade directly with no input or schema changes.
+
+**Operator upgrade**: clean — no schema migrations, no removed packs. Existing pipelines/agents continue unchanged. The new pack is additive; the concurrency env var defaults to today's hardcoded `4` when unset. After tag push, pull `ghcr.io/tosin2013/helmdeck:0.29.2`, restart control-plane, and re-run `./scripts/configure-openclaw.sh` to stamp the new helmdeckVersion into the deployed SKILL.md.
+
 ### Added
 - `content.ground` Phase 2 concurrency is now operator-tunable via `HELMDECK_CONTENT_GROUND_CONCURRENCY` ([#524](https://github.com/tosin2013/helmdeck/issues/524)). Default stays `4` (the historical hardcoded value), range `[1, 32]`. Out-of-range or non-numeric values silently fall back to the default — an operator typo can't break grounding. Use case: operators running self-hosted Firecrawl with relaxed rate limits + a dedicated LLM gateway can raise the limit for faster wall-clock on long posts (12+ claims); operators on free-tier shared infrastructure can lower it to avoid bumping into rate caps. The constant `contentGroundConcurrency` becomes a function `contentGroundConcurrency()` re-evaluated on every handler entry — restart not required after updating the env. Eighteen new sub-tests cover the default, valid overrides at the boundaries (1, 4, 8, 16, 32), out-of-range fallback (0, -1, 33, 1000, 100000), non-numeric fallback (typos like "fourrr", "4.5"), and whitespace trimming (" 4 " → 4). 1120 builtin tests pass with race detector clean; existing 45 content.ground tests pass unchanged (back-compat). Reference doc gains a "Tunable Phase 2 concurrency" section explaining when to raise vs lower the limit.
 

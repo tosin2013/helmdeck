@@ -257,14 +257,24 @@ func TestHyperframesAttachAudio_HappyPath_MP3(t *testing.T) {
 	if !foundAudio {
 		t.Errorf("audio file %q missing from output tarball", "assets/"+out.AudioFilename)
 	}
-	if !strings.Contains(indexContent, `<audio src="assets/`+out.AudioFilename+`"`) {
-		t.Errorf("index.html missing <audio> element: %s", indexContent)
+	if !strings.Contains(indexContent, `<audio id="aroll-audio-`) {
+		t.Errorf("index.html <audio> missing id attribute (upstream lint flags media without id as silent in renders): %s", indexContent)
+	}
+	if !strings.Contains(indexContent, `src="assets/`+out.AudioFilename+`"`) {
+		t.Errorf("index.html missing <audio src> pointing at audio file: %s", indexContent)
 	}
 	if !strings.Contains(indexContent, `data-duration="96.339592"`) {
 		t.Errorf("root div data-duration not rewritten to 96.339592: %s", indexContent)
 	}
 	if !strings.Contains(indexContent, `data-track-index="9"`) {
 		t.Errorf("audio data-track-index missing: %s", indexContent)
+	}
+	// Stable id contract: the audio id must mirror the content-addressed
+	// filename stem so the same audio bytes always produce the same id.
+	// Upstream `hyperframes lint` flags missing id as render-silent.
+	expectedID := strings.TrimSuffix(out.AudioFilename, ".mp3")
+	if !strings.Contains(indexContent, `id="`+expectedID+`"`) {
+		t.Errorf("audio id mismatch: expected id=%q (stem of content-addressed filename), got: %s", expectedID, indexContent)
 	}
 }
 

@@ -798,6 +798,17 @@ func main() {
 		logger.Warn("register hyperframes.attach_audio pack failed", "err", err)
 	}
 
+	// hyperframes.lint — pre-render diagnostic that wraps upstream
+	// `hyperframes lint --json`. Catches render-killing issues
+	// (audio missing id → silent in renders, manual __timelines
+	// registration that conflicts with the runtime auto-discovery,
+	// Google Fonts imports that fail in sandboxed renders) BEFORE
+	// burning the render budget. Soft-surface by default; pass
+	// strict:true to gate downstream packs on a clean lint result.
+	if err := packReg.Register(builtin.HyperframesLint()); err != nil {
+		logger.Warn("register hyperframes.lint pack failed", "err", err)
+	}
+
 	// Operator-supplied command packs (T811 MVP). Drop executables
 	// into $HELMDECK_COMMAND_PACKS_DIR and the control plane
 	// registers each as `cmd.<basename>`. Schemas are passthrough

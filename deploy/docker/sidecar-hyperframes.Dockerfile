@@ -26,7 +26,7 @@ USER root
 # us in the upstream-rename incident this ADR was written to prevent.
 # Dependabot proposes patch bumps as PRs that exercise the full build
 # (the sentinel below is the second line of defense).
-ARG HYPERFRAMES_VERSION=0.6.97
+ARG HYPERFRAMES_VERSION=0.6.110
 
 # Layer 1 — Node 22.
 #

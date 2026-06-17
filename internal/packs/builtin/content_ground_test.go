@@ -12,12 +12,50 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/session"
 )
+
+// testPerClaimMemory is a minimal MemoryInterface for testing
+// content.ground's per-claim cache (issue #523). The real
+// memoryAdapter is unexported and bound to engine.Execute; tests that
+// call the handler directly need an in-process double. Goroutine-safe
+// because content.ground writes to it from the bounded errgroup.
+type testPerClaimMemory struct {
+	mu sync.Mutex
+	m  map[string][]byte
+}
+
+func newTestPerClaimMemory() *testPerClaimMemory {
+	return &testPerClaimMemory{m: map[string][]byte{}}
+}
+
+func (t *testPerClaimMemory) Namespace() string { return "test-caller" }
+func (t *testPerClaimMemory) Store(key string, value []byte, _ ...memory.PutOption) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	cp := make([]byte, len(value))
+	copy(cp, value)
+	t.m[key] = cp
+	return nil
+}
+func (t *testPerClaimMemory) Recall(key string) (*memory.Entry, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	v, ok := t.m[key]
+	if !ok {
+		return nil, memory.ErrNotFound
+	}
+	return &memory.Entry{Key: key, Value: v}, nil
+}
+func (t *testPerClaimMemory) List(_ string) ([]memory.Entry, error)         { return nil, nil }
+func (t *testPerClaimMemory) Delete(key string) error                       { t.mu.Lock(); defer t.mu.Unlock(); delete(t.m, key); return nil }
+func (t *testPerClaimMemory) Context() (*packs.SessionContext, error)       { return nil, nil }
 
 // execScript stubs ec.Exec with a queue of canned results and
 // records every request the handler made. Since ec.Exec already
@@ -46,6 +84,14 @@ func (e *execScript) fn(ctx context.Context, req session.ExecRequest) (session.E
 
 func runContentGround(t *testing.T, disp *scriptedDispatcherWT, exec *execScript, firecrawl *httptest.Server, input string) (json.RawMessage, error) {
 	t.Helper()
+	return runContentGroundWithMemory(t, disp, exec, firecrawl, input, nil)
+}
+
+// runContentGroundWithMemory wires a MemoryInterface into the
+// ExecutionContext so per-claim cache tests can share a cache across
+// multiple calls. Pass nil mem for the standard no-cache flow.
+func runContentGroundWithMemory(t *testing.T, disp *scriptedDispatcherWT, exec *execScript, firecrawl *httptest.Server, input string, mem packs.MemoryInterface) (json.RawMessage, error) {
+	t.Helper()
 	if firecrawl != nil {
 		t.Setenv("HELMDECK_FIRECRAWL_ENABLED", "true")
 		t.Setenv("HELMDECK_FIRECRAWL_URL", firecrawl.URL)
@@ -58,7 +104,8 @@ func runContentGround(t *testing.T, disp *scriptedDispatcherWT, exec *execScript
 			ID:     "sess-content",
 			Status: session.StatusRunning,
 		},
-		Exec: exec.fn,
+		Exec:   exec.fn,
+		Memory: mem,
 	}
 	return pack.Handler(context.Background(), ec)
 }
@@ -1084,5 +1131,256 @@ func TestContentGround_UnknownIntentFallsBack(t *testing.T) {
 	size := resolveContentGroundSize(&in)
 	if size.applied != "intent:thorough" {
 		t.Errorf("applied = %q, want intent:thorough", size.applied)
+	}
+}
+
+// --- Per-claim cache (issue #523) -----------------------------------------
+
+// TestContentGround_PerClaimCache_TypoFixWorkflow exercises the canonical
+// scenario from issue #523: the user runs content.ground, mutates ONE
+// claim (and surrounding prose), runs again, and expects the unchanged
+// claims to skip Firecrawl + verify entirely. The engine-level cache
+// (ADR 047) keyed on sha256(input bytes) is a miss on any edit; the
+// per-claim cache keyed on sha256(claim_text, search_query) survives
+// unrelated edits.
+func TestContentGround_PerClaimCache_TypoFixWorkflow(t *testing.T) {
+	mem := newTestPerClaimMemory()
+
+	// Three claims. Same extractor JSON is replayed on each run (the
+	// claim_text values stay stable across both runs since the
+	// EXTRACTOR is what produces them; the test scenario mutates the
+	// markdown around a claim, not the claim text). Each run also
+	// needs one verify reply per UNCACHED claim — three on run 1, one
+	// on run 2.
+	extractorJSON := `{"claims":[
+		{"text":"Quantum computers use qubits.","query":"quantum qubits"},
+		{"text":"They are very fast.","query":"quantum speed"},
+		{"text":"Decoherence is a challenge.","query":"quantum decoherence"}
+	]}`
+	verifyReply := `{"pick":0,"snippet":"matched"}`
+
+	// Run 1: extractor + 3 verify calls.
+	disp := &scriptedDispatcherWT{replies: []string{
+		extractorJSON, verifyReply, verifyReply, verifyReply,
+	}}
+
+	var firecrawlCalls atomic.Int32
+	fc := stubFirecrawlFromHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		firecrawlCalls.Add(1)
+		var body struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		// Return distinct URL per query so each claim gets a usable pick.
+		writeSearchResult(w, firecrawlSearchItem{
+			URL:      "https://source.example/" + body.Query,
+			Title:    "Result for " + body.Query,
+			Markdown: "supporting evidence",
+		})
+	})
+
+	// Surrounding prose with a typo. Run 1's title says "Computres"
+	// (typo); run 2 fixes it to "Computers". The three claim
+	// sentences below the title stay byte-identical, so all three
+	// claims locate via findClaimSpan in both runs — and the cache
+	// keys (claim_text, query) match across runs.
+	markdown1 := "# Quantum Computres: A Primer\n\nQuantum computers use qubits. They are very fast.\nDecoherence is a challenge.\n"
+	exec := &execScript{} // text mode — no exec calls
+	raw1, err := runContentGroundWithMemory(t, disp, exec, fc,
+		fmt.Sprintf(`{"text":%q,"model":"openrouter/auto"}`, markdown1),
+		mem)
+	if err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	var out1 struct {
+		ClaimsCached   int `json:"claims_cached"`
+		FirecrawlCalls int `json:"firecrawl_calls"`
+		ClaimsGrounded int `json:"claims_grounded"`
+	}
+	_ = json.Unmarshal(raw1, &out1)
+	if out1.ClaimsCached != 0 {
+		t.Errorf("run 1 claims_cached = %d, want 0 (cold cache)", out1.ClaimsCached)
+	}
+	if out1.FirecrawlCalls != 3 {
+		t.Errorf("run 1 firecrawl_calls = %d, want 3", out1.FirecrawlCalls)
+	}
+	if out1.ClaimsGrounded != 3 {
+		t.Errorf("run 1 claims_grounded = %d, want 3", out1.ClaimsGrounded)
+	}
+	if got := firecrawlCalls.Load(); got != 3 {
+		t.Errorf("run 1 firecrawl HTTP hits = %d, want 3", got)
+	}
+
+	// Run 2: typo fix in the title only. The three claim sentences
+	// are byte-identical to run 1, so all three claims locate AND hit
+	// the per-claim cache. The engine-level cache (sha256 of input
+	// bytes) WOULD miss here — input bytes differ — but the per-claim
+	// cache is content-derived.
+	firecrawlCalls.Store(0)
+	disp2 := &scriptedDispatcherWT{replies: []string{extractorJSON}}
+	markdown2 := "# Quantum Computers: A Primer\n\nQuantum computers use qubits. They are very fast.\nDecoherence is a challenge.\n" // typo fix: Computres → Computers
+
+	raw2, err := runContentGroundWithMemory(t, disp2, exec, fc,
+		fmt.Sprintf(`{"text":%q,"model":"openrouter/auto"}`, markdown2),
+		mem)
+	if err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	var out2 struct {
+		ClaimsCached   int `json:"claims_cached"`
+		FirecrawlCalls int `json:"firecrawl_calls"`
+		ClaimsGrounded int `json:"claims_grounded"`
+	}
+	_ = json.Unmarshal(raw2, &out2)
+	if out2.ClaimsCached != 3 {
+		t.Errorf("run 2 claims_cached = %d, want 3 (all hit)", out2.ClaimsCached)
+	}
+	if out2.FirecrawlCalls != 0 {
+		t.Errorf("run 2 firecrawl_calls = %d, want 0 (all cached)", out2.FirecrawlCalls)
+	}
+	if out2.ClaimsGrounded != 3 {
+		t.Errorf("run 2 claims_grounded = %d, want 3", out2.ClaimsGrounded)
+	}
+	if got := firecrawlCalls.Load(); got != 0 {
+		t.Errorf("run 2 firecrawl HTTP hits = %d, want 0 (cache served)", got)
+	}
+	// Dispatcher should have fired ONCE (extractor) — no verify calls
+	// because every claim was cached.
+	if disp2.calls != 1 {
+		t.Errorf("run 2 dispatcher calls = %d, want 1 (extractor only, no verify)", disp2.calls)
+	}
+}
+
+// TestContentGround_PerClaimCache_MutateOneClaim — mutating ONE claim's
+// text (but leaving the other two stable) yields 2 hits + 1 miss. The
+// changed claim runs through Firecrawl + verify; the unchanged ones
+// short-circuit on the cache. The acceptance criteria's main test.
+func TestContentGround_PerClaimCache_MutateOneClaim(t *testing.T) {
+	mem := newTestPerClaimMemory()
+
+	// Run 1: extract 3 claims + verify each.
+	extractor1 := `{"claims":[
+		{"text":"Quantum computers use qubits.","query":"quantum qubits"},
+		{"text":"They are very fast.","query":"quantum speed"},
+		{"text":"Decoherence is a challenge.","query":"quantum decoherence"}
+	]}`
+	verifyReply := `{"pick":0,"snippet":"matched"}`
+	disp1 := &scriptedDispatcherWT{replies: []string{
+		extractor1, verifyReply, verifyReply, verifyReply,
+	}}
+	var fcCalls atomic.Int32
+	fc := stubFirecrawlFromHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		fcCalls.Add(1)
+		var body struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeSearchResult(w, firecrawlSearchItem{
+			URL:      "https://source.example/" + body.Query,
+			Markdown: "evidence",
+		})
+	})
+
+	markdown1 := "Quantum computers use qubits. They are very fast.\nDecoherence is a challenge.\n"
+	exec := &execScript{}
+	if _, err := runContentGroundWithMemory(t, disp1, exec, fc,
+		fmt.Sprintf(`{"text":%q,"model":"openrouter/auto"}`, markdown1), mem); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+
+	// Run 2: extractor returns ONE NEW claim ("Quantum supremacy was
+	// achieved.") and two unchanged. The new claim needs a fresh
+	// Firecrawl + verify; the 2 unchanged claims hit the cache.
+	fcCalls.Store(0)
+	extractor2 := `{"claims":[
+		{"text":"Quantum computers use qubits.","query":"quantum qubits"},
+		{"text":"Quantum supremacy was achieved.","query":"quantum supremacy"},
+		{"text":"Decoherence is a challenge.","query":"quantum decoherence"}
+	]}`
+	// Only ONE verify reply because only the new claim runs through verify.
+	disp2 := &scriptedDispatcherWT{replies: []string{extractor2, verifyReply}}
+	markdown2 := "Quantum computers use qubits. Quantum supremacy was achieved.\nDecoherence is a challenge.\n"
+	raw2, err := runContentGroundWithMemory(t, disp2, exec, fc,
+		fmt.Sprintf(`{"text":%q,"model":"openrouter/auto"}`, markdown2), mem)
+	if err != nil {
+		t.Fatalf("mutate-one run: %v", err)
+	}
+
+	var out struct {
+		ClaimsCached   int `json:"claims_cached"`
+		FirecrawlCalls int `json:"firecrawl_calls"`
+		ClaimsGrounded int `json:"claims_grounded"`
+	}
+	_ = json.Unmarshal(raw2, &out)
+	if out.ClaimsCached != 2 {
+		t.Errorf("claims_cached = %d, want 2 (unchanged claims)", out.ClaimsCached)
+	}
+	if out.FirecrawlCalls != 1 {
+		t.Errorf("firecrawl_calls = %d, want 1 (just the new claim)", out.FirecrawlCalls)
+	}
+	if got := fcCalls.Load(); got != 1 {
+		t.Errorf("firecrawl HTTP hits = %d, want 1", got)
+	}
+	if out.ClaimsGrounded != 3 {
+		t.Errorf("claims_grounded = %d, want 3", out.ClaimsGrounded)
+	}
+	// disp2 fired twice: extractor + one verify (for the new claim).
+	if disp2.calls != 2 {
+		t.Errorf("dispatcher calls = %d, want 2 (extractor + 1 verify)", disp2.calls)
+	}
+}
+
+// TestContentGround_PerClaimCache_NoMemoryNilSafe — when no Memory is
+// wired on ExecutionContext (engine without WithMemoryStore), the cache
+// path is a no-op. Phase 2 runs as before; firecrawl_calls counter
+// reflects every result.
+func TestContentGround_PerClaimCache_NoMemoryNilSafe(t *testing.T) {
+	disp := &scriptedDispatcherWT{replies: []string{
+		`{"claims":[{"text":"A claim.","query":"a"}]}`,
+		`{"pick":0,"snippet":"matched"}`,
+	}}
+	fc := stubFirecrawlFromHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeSearchResult(w, firecrawlSearchItem{URL: "https://x", Markdown: "y"})
+	})
+	exec := &execScript{}
+	raw, err := runContentGround(t, disp, exec, fc,
+		`{"text":"A claim.","model":"openrouter/auto"}`)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var out struct {
+		ClaimsCached   int `json:"claims_cached"`
+		FirecrawlCalls int `json:"firecrawl_calls"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.ClaimsCached != 0 {
+		t.Errorf("claims_cached = %d, want 0 (no memory)", out.ClaimsCached)
+	}
+	if out.FirecrawlCalls != 1 {
+		t.Errorf("firecrawl_calls = %d, want 1", out.FirecrawlCalls)
+	}
+}
+
+// TestContentGround_PerClaimCache_KeyStability — same (text, query) →
+// same key. Sanity check.
+func TestContentGround_PerClaimCache_KeyStability(t *testing.T) {
+	k1 := perClaimCacheKey("Quantum computers use qubits.", "quantum qubits")
+	k2 := perClaimCacheKey("Quantum computers use qubits.", "quantum qubits")
+	if k1 != k2 {
+		t.Errorf("same inputs → different keys: %q vs %q", k1, k2)
+	}
+	// Different query → different key.
+	k3 := perClaimCacheKey("Quantum computers use qubits.", "different query")
+	if k1 == k3 {
+		t.Errorf("different query produced same key")
+	}
+	// Different text → different key.
+	k4 := perClaimCacheKey("Different claim.", "quantum qubits")
+	if k1 == k4 {
+		t.Errorf("different text produced same key")
+	}
+	// Key uses the cg:claim: prefix for namespace clarity.
+	if !strings.HasPrefix(k1, "cg:claim:") {
+		t.Errorf("key %q missing cg:claim: prefix", k1)
 	}
 }

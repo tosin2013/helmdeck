@@ -161,17 +161,49 @@ Rules:
   - Skip headings, code blocks, and list bullets — ground only prose sentences.
   - If no claim meets the bar, return {"claims": []}.`
 
-	// contentGroundConcurrency caps how many claims we Firecrawl-
-	// search + LLM-verify in parallel. 4 is a balance:
+	// defaultContentGroundConcurrency caps how many claims we Firecrawl-
+	// search + LLM-verify in parallel by default. 4 is a balance:
 	//   - Below 4, the wall-clock win shrinks (a 12-claim post still
 	//     takes ~3 sequential batches of the verify LLM call).
 	//   - Above 4, free-tier Firecrawl rate limits kick in (~10
 	//     concurrent /v1/search calls) and the LLM gateway starts
 	//     queueing.
-	// Operators can revisit if they're running self-hosted Firecrawl
-	// with a higher limit; the constant is the lever.
-	contentGroundConcurrency = 4
+	// Operators running self-hosted Firecrawl with a higher rate
+	// limit, or routing through a higher-throughput LLM gateway, can
+	// override this via the HELMDECK_CONTENT_GROUND_CONCURRENCY env
+	// var (clamped to [1, 32]). Out-of-range or non-numeric values
+	// silently fall back to this default. Issue #524.
+	defaultContentGroundConcurrency = 4
+	// contentGroundConcurrencyMin / Max bound the env-var override so
+	// an operator footgun (HELMDECK_CONTENT_GROUND_CONCURRENCY=10000)
+	// can't overwhelm Firecrawl or the LLM gateway. 32 is a generous
+	// cap — above that you're almost certainly fighting downstream
+	// rate limits regardless.
+	contentGroundConcurrencyMin = 1
+	contentGroundConcurrencyMax = 32
+	// contentGroundConcurrencyEnv is the operator-facing env var name.
+	contentGroundConcurrencyEnv = "HELMDECK_CONTENT_GROUND_CONCURRENCY"
 )
+
+// contentGroundConcurrency resolves the per-call concurrency limit
+// (env var override or default). Re-evaluated on every handler entry
+// so a deployment can change the env via a hot reload without
+// restarting the control plane — same pattern as
+// HELMDECK_FIRECRAWL_URL handling elsewhere in this file.
+func contentGroundConcurrency() int {
+	v := strings.TrimSpace(os.Getenv(contentGroundConcurrencyEnv))
+	if v == "" {
+		return defaultContentGroundConcurrency
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return defaultContentGroundConcurrency
+	}
+	if n < contentGroundConcurrencyMin || n > contentGroundConcurrencyMax {
+		return defaultContentGroundConcurrency
+	}
+	return n
+}
 
 // contentGroundIntentTable maps each intent name to the max_claims
 // value it should produce. Mirrors researchDeepIntentTable's shape.
@@ -676,10 +708,11 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 				"hits", claimsCached, "misses", len(pending)-claimsCached)
 		}
 		if len(pending)-claimsCached > 0 {
+			concurrencyLimit := contentGroundConcurrency()
 			ec.Report(20, fmt.Sprintf("grounding %d claims concurrently (limit=%d, %d cached)",
-				len(pending)-claimsCached, contentGroundConcurrency, claimsCached))
+				len(pending)-claimsCached, concurrencyLimit, claimsCached))
 			grp, gctx := errgroup.WithContext(ctx)
-			grp.SetLimit(contentGroundConcurrency)
+			grp.SetLimit(concurrencyLimit)
 			for i, p := range pending {
 				if !needsGoroutine[i] {
 					continue

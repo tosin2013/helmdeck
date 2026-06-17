@@ -1384,3 +1384,64 @@ func TestContentGround_PerClaimCache_KeyStability(t *testing.T) {
 		t.Errorf("key %q missing cg:claim: prefix", k1)
 	}
 }
+
+// --- Tunable concurrency (issue #524) -------------------------------------
+
+// TestContentGround_Concurrency_Default — env var unset returns the
+// historical 4 default.
+func TestContentGround_Concurrency_Default(t *testing.T) {
+	t.Setenv(contentGroundConcurrencyEnv, "")
+	if got := contentGroundConcurrency(); got != defaultContentGroundConcurrency {
+		t.Errorf("default = %d, want %d", got, defaultContentGroundConcurrency)
+	}
+}
+
+// TestContentGround_Concurrency_EnvOverride — valid env var wins.
+func TestContentGround_Concurrency_EnvOverride(t *testing.T) {
+	for _, n := range []int{1, 4, 8, 16, 32} {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			t.Setenv(contentGroundConcurrencyEnv, fmt.Sprintf("%d", n))
+			if got := contentGroundConcurrency(); got != n {
+				t.Errorf("env=%d concurrency = %d, want %d", n, got, n)
+			}
+		})
+	}
+}
+
+// TestContentGround_Concurrency_OutOfRangeFallsBack — values outside
+// [1, 32] (including 0 and negative) silently fall back to the default.
+// We intentionally do NOT error so an operator typo doesn't break
+// every grounding run.
+func TestContentGround_Concurrency_OutOfRangeFallsBack(t *testing.T) {
+	for _, v := range []string{"0", "-1", "33", "1000", "100000"} {
+		t.Run("v="+v, func(t *testing.T) {
+			t.Setenv(contentGroundConcurrencyEnv, v)
+			if got := contentGroundConcurrency(); got != defaultContentGroundConcurrency {
+				t.Errorf("env=%s concurrency = %d, want %d (fallback)", v, got, defaultContentGroundConcurrency)
+			}
+		})
+	}
+}
+
+// TestContentGround_Concurrency_NonNumericFallsBack — operators with a
+// typo'd env value (e.g. "fourrr") get the default, not a panic or zero.
+// Whitespace IS trimmed before parsing — " 4 " → 4 → honored.
+func TestContentGround_Concurrency_NonNumericFallsBack(t *testing.T) {
+	cases := []struct {
+		v    string
+		want int
+	}{
+		{"abc", defaultContentGroundConcurrency},
+		{"fourrr", defaultContentGroundConcurrency},
+		{"4.5", defaultContentGroundConcurrency},
+		{" 4 ", 4}, // trimmed; numeric; in range → honored
+	}
+	for _, tc := range cases {
+		t.Run("v="+tc.v, func(t *testing.T) {
+			t.Setenv(contentGroundConcurrencyEnv, tc.v)
+			if got := contentGroundConcurrency(); got != tc.want {
+				t.Errorf("env=%q concurrency = %d, want %d", tc.v, got, tc.want)
+			}
+		})
+	}
+}

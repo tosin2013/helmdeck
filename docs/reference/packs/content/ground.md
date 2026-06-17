@@ -99,6 +99,22 @@ The per-claim cache stores even empty picks (claims for which no source was foun
 
 **None.** LLM provider key resolved through the *AI Providers* panel.
 
+## Operator env var: tunable Phase 2 concurrency
+
+`HELMDECK_CONTENT_GROUND_CONCURRENCY` overrides the per-call cap on how many claims the pack Firecrawl-searches + LLM-verifies in parallel (issue [#524](https://github.com/tosin2013/helmdeck/issues/524)). Default `4`, range `[1, 32]`. Out-of-range or non-numeric values silently fall back to the default (no panic, no error — an operator typo can't break grounding).
+
+| When to lower | When to raise |
+|---|---|
+| Free-tier Firecrawl (~10 concurrent `/v1/search` ceiling); shared LLM gateway with strict TPM limits; cost-sensitive | Self-hosted Firecrawl with relaxed rate limits; dedicated LLM gateway; want faster wall-clock on long posts (12+ claims) |
+
+Set on the control-plane container:
+
+```bash
+HELMDECK_CONTENT_GROUND_CONCURRENCY=8
+```
+
+Re-read on every handler entry — restart not required after updating the env.
+
 ## Use it from your agent (OpenClaw chat-UI worked example)
 
 **Prompt** (sent in OpenClaw chat UI / `openclaw-cli agent`):

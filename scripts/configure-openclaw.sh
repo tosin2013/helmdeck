@@ -163,8 +163,26 @@ if [[ "$PROVIDER" != "openclaw" && "$PROVIDER" != "" ]]; then
 	#   - openrouter:default [openrouter/api_key]
 	# So the provider line is `- <provider>:<profile-id> [<provider>/<auth-method>]`.
 	# Grep for "^- <provider>(:| )" to match the profile entry across older + newer formats.
-	if ! docker compose -f "$OPENCLAW_COMPOSE_FILE" \
-			run --rm -T openclaw-cli models auth list 2>/dev/null \
+	#
+	# Two-step capture-then-grep instead of a single pipeline. Direct
+	# `... | grep -q ...` is SIGPIPE-vulnerable under `set -o pipefail`:
+	# grep -q exits immediately after the first match, which closes
+	# its stdin and SIGPIPEs the upstream `docker exec` (rc=141 = 128
+	# + signal 13). pipefail then propagates that 141 as the pipeline
+	# exit, the `if !` inverts it, and we hit the "missing auth" die
+	# branch on a deployment that's actually authenticated correctly.
+	# Capturing stdout into a variable first lets the docker exec
+	# finish cleanly; the in-memory grep against $auth_list never
+	# closes its stdin early.
+	#
+	# Also: use `docker exec` against the running gateway rather than
+	# `docker compose run --rm openclaw-cli`. The compose-run path
+	# spawns a fresh container (slower, noisier, and exits non-zero
+	# under `2>/dev/null` for unrelated reasons). The running gateway
+	# has the auth state OpenClaw actually uses; the docker-exec
+	# pattern is already used elsewhere in this script.
+	auth_list="$(docker exec "$OPENCLAW_CONTAINER" openclaw models auth list 2>/dev/null || true)"
+	if ! printf '%s\n' "$auth_list" \
 			| grep -qiE "^[-* ]+${PROVIDER}([:[:space:]]|$)"; then
 		# Check the shell-env path before we hard-fail. If it's in
 		# use the auth-list probe will always come back empty —

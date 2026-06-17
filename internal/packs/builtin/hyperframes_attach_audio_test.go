@@ -494,3 +494,112 @@ func TestUpdateRootDataDuration_DataDurationAfterCompositionID(t *testing.T) {
 		t.Errorf("data-duration not rewritten: %s", out)
 	}
 }
+
+// --- Child composition stretching (issue #521 follow-up) ----------------
+
+// TestUpdateRootDataDuration_StretchesMatchingChildComposition — the
+// empirical repro from the v0.29.2 retest. Root and one child
+// composition both had data-duration="15"; my regex extended root to
+// 97.9s but the child stayed at 15s, blanking the canvas after 15s.
+// The fix: any data-composition-id-bearing div whose duration MATCHED
+// the root's original should be stretched alongside the root.
+func TestUpdateRootDataDuration_StretchesMatchingChildComposition(t *testing.T) {
+	html := `<div id="root" data-composition-id="main" data-start="0" data-duration="15"><div id="dt-comp" data-composition-id="decision-tree" data-composition-src="compositions/decision_tree.html" data-start="0" data-duration="15"></div></div>`
+	out, ok := updateRootDataDuration(html, 97.906939)
+	if !ok {
+		t.Fatal("expected update to succeed")
+	}
+	if !strings.Contains(out, `data-composition-id="main" data-start="0" data-duration="97.906939"`) {
+		t.Errorf("root not rewritten: %s", out)
+	}
+	if !strings.Contains(out, `data-composition-id="decision-tree"`) || !strings.Contains(out, `data-composition-src="compositions/decision_tree.html" data-start="0" data-duration="97.906939"`) {
+		t.Errorf("child composition not stretched to match root: %s", out)
+	}
+	// The original "15" should NOT survive anywhere on a div with
+	// data-composition-id (we rewrote both).
+	if strings.Contains(out, `data-duration="15"`) {
+		t.Errorf("data-duration=\"15\" should be fully gone after rewrite: %s", out)
+	}
+}
+
+// TestUpdateRootDataDuration_LeavesDivergentChildAlone — operator-
+// deliberate divergence is preserved. If a child composition has a
+// duration that DOESN'T match the root's original, the child was
+// intentionally set differently and shouldn't be stretched.
+func TestUpdateRootDataDuration_LeavesDivergentChildAlone(t *testing.T) {
+	// Root duration=30, child duration=5 (intentional 5-sec intro).
+	html := `<div id="root" data-composition-id="main" data-duration="30"><div data-composition-id="intro" data-composition-src="intro.html" data-duration="5"></div></div>`
+	out, ok := updateRootDataDuration(html, 90)
+	if !ok {
+		t.Fatal("expected update to succeed")
+	}
+	// Root rewritten 30 → 90.
+	if !strings.Contains(out, `data-composition-id="main" data-duration="90"`) {
+		t.Errorf("root not rewritten to 90: %s", out)
+	}
+	// Child stays at 5 (different from root's original 30).
+	if !strings.Contains(out, `data-composition-id="intro" data-composition-src="intro.html" data-duration="5"`) {
+		t.Errorf("child with divergent duration should be preserved: %s", out)
+	}
+}
+
+// TestUpdateRootDataDuration_DecisionTreeScaffoldShape — end-to-end
+// against the exact HTML shape from the v0.29.2 retest's failing run
+// (run_6f6cb0ea40a94dd1). Confirms the empirical bug is fixed and
+// guards against regression as the upstream scaffold conventions
+// evolve.
+func TestUpdateRootDataDuration_DecisionTreeScaffoldShape(t *testing.T) {
+	html := `<!doctype html><html><body>
+<div
+  id="root"
+  data-composition-id="main"
+  data-start="0"
+  data-duration="15"
+  data-width="1920"
+  data-height="1080"
+>
+  <div
+    id="decision-tree-comp"
+    data-composition-id="decision-tree"
+    data-composition-src="compositions/decision_tree.html"
+    data-start="0"
+    data-duration="15"
+    data-track-index="0"
+    data-width="1920"
+    data-height="1080"
+  ></div>
+</div>
+</body></html>`
+	out, ok := updateRootDataDuration(html, 97.906939)
+	if !ok {
+		t.Fatal("expected update to succeed against decision-tree scaffold shape")
+	}
+	// Both data-duration="15" occurrences should have been replaced.
+	count15 := strings.Count(out, `data-duration="15"`)
+	if count15 != 0 {
+		t.Errorf("data-duration=\"15\" still present (%d times) — child composition not stretched:\n%s", count15, out)
+	}
+	count97 := strings.Count(out, `data-duration="97.906939"`)
+	if count97 != 2 {
+		t.Errorf("expected 2 occurrences of data-duration=\"97.906939\" (root + child), got %d:\n%s", count97, out)
+	}
+}
+
+// TestUpdateRootDataDuration_StillSkipsChildClips — regression guard
+// for the original "don't touch class=clip" semantics. A class=clip
+// element whose data-duration HAPPENS to equal root's must still be
+// left alone (no data-composition-id anchor).
+func TestUpdateRootDataDuration_StillSkipsChildClips(t *testing.T) {
+	html := `<div id="root" data-composition-id="main" data-duration="15"><div class="clip" data-duration="15"></div></div>`
+	out, ok := updateRootDataDuration(html, 60)
+	if !ok {
+		t.Fatal("expected update to succeed")
+	}
+	if !strings.Contains(out, `data-composition-id="main" data-duration="60"`) {
+		t.Errorf("root not rewritten: %s", out)
+	}
+	// class="clip" lacks data-composition-id, so it MUST keep data-duration=15.
+	if !strings.Contains(out, `<div class="clip" data-duration="15">`) {
+		t.Errorf("class=\"clip\" data-duration must not be rewritten: %s", out)
+	}
+}

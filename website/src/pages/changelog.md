@@ -16,6 +16,9 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Fixed
+- `hyperframes.attach_audio` now stretches **child compositions** whose `data-duration` matched the root's original, closing the v0.29.2 follow-up bug where the decision-tree scaffold rendered as a blank canvas for 83 of 98 seconds. Empirical repro from `run_6f6cb0ea40a94dd1`: a ~98-second narrated video, audio attached correctly, but visuals went white at 15s and stayed white through the rest. Root cause: the decision-tree scaffold's `index.html` has both a root composition (`data-composition-id="main"`, `data-duration="15"`) AND a child composition (`<div data-composition-id="decision-tree" data-composition-src="compositions/decision_tree.html" data-duration="15">`). The v0.29.2 attach_audio rewrote root's duration to 97.9 but left the child at 15 — so the renderer played 0-15s of decision-tree animation followed by 83 seconds of inactive (blank) canvas. The fix extends `updateRootDataDuration` to ALSO rewrite any `<div>` with a `data-composition-id` attribute whose `data-duration` equals the root's original. Conservative heuristic: only stretch children that were span-aligned with the root. Operator-deliberate divergences (e.g. a 5-second intro composition under a 30-second root) are preserved — when a child's data-duration differs from root's original, it's left alone. `class="clip"` data-durations are still untouched (no `data-composition-id` anchor on clip elements). Four new sub-tests cover the empirical decision-tree shape, the stretches-matching-children behavior, the leaves-divergent-children-alone behavior, and the regression guard for class="clip" semantics. Existing 15 attach_audio tests pass unchanged. 1124 builtin / 1770 across consumers pass with race detector clean.
+
 ## [0.29.2] - 2026-06-17
 
 **Theme**: "Silent-video fix + tunable Firecrawl/LLM concurrency."

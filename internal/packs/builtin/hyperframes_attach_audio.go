@@ -357,27 +357,63 @@ var hyperframesAttachAudioRootDataDurationRE = regexp.MustCompile(
 )
 
 // updateRootDataDuration rewrites the root composition div's
-// data-duration attribute to durationSeconds. Returns (newHTML, true)
-// when a rewrite happened, or (indexHTML, false) when the root div
-// didn't have a data-duration attribute (which would be unusual for a
-// well-formed scaffold but we'd rather no-op than fail loud since the
-// audio is already attached).
+// data-duration attribute AND any child composition div whose
+// data-duration matches the root's ORIGINAL value (issue #521 follow-
+// up surfaced in v0.29.2's empirical retest: extending root from 15s
+// to 97.9s left the child `<div data-composition-id="decision-tree"
+// data-composition-src="..." data-duration="15">` at 15s, and the
+// renderer played 15s of animation followed by 83s of blank canvas).
+//
+// Conservative heuristic — only stretch children whose duration
+// MATCHED the root's. Operator-deliberate divergences (e.g. a 5-second
+// intro composition under a 30-second root) are preserved. Anchored
+// on data-composition-id so class="clip" data-durations are
+// untouched.
+//
+// Returns (newHTML, true) when at least one data-duration was
+// rewritten, or (indexHTML, false) when the root div didn't have a
+// data-duration attribute.
 func updateRootDataDuration(indexHTML string, durationSeconds float64) (string, bool) {
-	// Format duration as the upstream %g format (matches how
-	// hyperframes_compose.go writes it). Strip trailing .0 for
-	// integer seconds.
+	// Step 1: discover the root's current data-duration. We need
+	// this value to decide which CHILD compositions to stretch
+	// (those whose duration equals the root's original).
+	rootMatch := hyperframesAttachAudioRootDataDurationRE.FindStringSubmatch(indexHTML)
+	if rootMatch == nil {
+		return indexHTML, false
+	}
+	var originalDur string
+	switch {
+	case rootMatch[2] != "":
+		originalDur = rootMatch[2] // alt 1: data-duration before composition-id
+	case rootMatch[6] != "":
+		originalDur = rootMatch[6] // alt 2: data-duration after composition-id
+	default:
+		return indexHTML, false
+	}
+
+	// Step 2: build a regex that rewrites data-duration on ANY div
+	// with a data-composition-id (the root OR a child) whose value
+	// equals originalDur. The data-composition-id anchor is what
+	// distinguishes "composition divs" from class="clip" descendants
+	// (which never have data-composition-id and whose data-duration
+	// is the clip's individual timing, not the composition span).
 	durStr := strconv.FormatFloat(durationSeconds, 'g', -1, 64)
+	quoted := regexp.QuoteMeta(originalDur)
+	compositionRE := regexp.MustCompile(
+		`(?s)(<div\s[^>]*?data-duration\s*=\s*")` + quoted + `("[^>]*?data-composition-id\s*=\s*"[^"]+"[^>]*>)` +
+			`|` +
+			`(?s)(<div\s[^>]*?data-composition-id\s*=\s*"[^"]+"[^>]*?data-duration\s*=\s*")` + quoted + `("[^>]*>)`,
+	)
 	updated := false
-	newHTML := hyperframesAttachAudioRootDataDurationRE.ReplaceAllStringFunc(indexHTML, func(match string) string {
-		sub := hyperframesAttachAudioRootDataDurationRE.FindStringSubmatch(match)
+	newHTML := compositionRE.ReplaceAllStringFunc(indexHTML, func(match string) string {
+		sub := compositionRE.FindStringSubmatch(match)
 		updated = true
-		// The regex has two alternations; pick whichever group fired.
-		// Alternation 1: groups 1-4 (data-duration BEFORE composition-id)
-		// Alternation 2: groups 5-8 (data-duration AFTER composition-id)
+		// Alternation 1: groups 1-2 (data-duration BEFORE composition-id)
+		// Alternation 2: groups 3-4 (data-duration AFTER composition-id)
 		if sub[1] != "" {
-			return sub[1] + durStr + sub[3] + sub[4]
+			return sub[1] + durStr + sub[2]
 		}
-		return sub[5] + durStr + sub[7] + sub[8]
+		return sub[3] + durStr + sub[4]
 	})
 	return newHTML, updated
 }

@@ -257,7 +257,7 @@ func Builtins() []*Pipeline {
 		// interpolation, so Tier C produces visually-rich output
 		// reliably.
 		pipe("builtin.scaffolded-narrated-video", "Describe → narrated video (scaffolded)",
-			"Describe a video; pick an upstream HyperFrames example (swiss-grid, decision-tree, code-snippet-dark-modern, kinetic-type, nyt-graph, tiktok-follow, etc. — 140+ in the catalog); generate podcast narration (podcast.generate), scaffold the project from the chosen example WITH the narration audio embedded (hyperframes.scaffold gets audio_url so upstream's `hyperframes init --audio` sets the composition duration to match the audio length), interpolate visible text + caption transcript to fit the topic (hyperframes.interpolate), and render the final MP4 (hyperframes.render). Tier-C-friendly: the LLM only does content interpolation, not HTML authoring — visual polish comes from the upstream example. Required input description, example. Optional inputs duration_target_min? (narration target in minutes; default 1 = 60s social-first; max 12 for long-form), resolution? (1080p/4k), aspect_ratio? (16:9/9:16/1:1). Silent without an elevenlabs-key. For an A-roll image, chain image.generate + hyperframes.attach_asset between interpolate and render. For freeform HTML control (Tier A authoring from scratch), use builtin.prompt-narrated-video instead.",
+			"Describe a video; pick an upstream HyperFrames example (swiss-grid, decision-tree, code-snippet-dark-modern, kinetic-type, nyt-graph, tiktok-follow, etc. — 140+ in the catalog); generate podcast narration (podcast.generate), scaffold the project from the chosen example (hyperframes.scaffold), interpolate visible text + caption transcript to fit the topic (hyperframes.interpolate), splice the narration audio into the project tarball with data-duration rewrite (hyperframes.attach_audio — issue #521 fix that closes the silent-video failure mode where upstream `hyperframes init --audio` is ignored by some examples), and render the final MP4 (hyperframes.render). Tier-C-friendly: the LLM only does content interpolation, not HTML authoring — visual polish comes from the upstream example. Required input description, example. Optional inputs duration_target_min? (narration target in minutes; default 1 = 60s social-first; max 12 for long-form), resolution? (1080p/4k), aspect_ratio? (16:9/9:16/1:1). Silent without an elevenlabs-key. For an A-roll image, chain image.generate + hyperframes.attach_asset between interpolate and attach_audio. For freeform HTML control (Tier A authoring from scratch), use builtin.prompt-narrated-video instead.",
 			// duration_target_min defaults to 60s (1 minute) for social-
 			// first output. podcast.generate's own default is 8 min —
 			// callers who want long-form pass duration_target_min: 12
@@ -268,30 +268,37 @@ func Builtins() []*Pipeline {
 			// To get the 60s social default, the operator must pass
 			// duration_target_min: 1 explicitly.
 			step("podcast", "podcast.generate", `{"source_text":"${{ inputs.description }}","model":"openrouter/auto","speakers":`+defaultSpeakers+`,"allow_silent_output":true,"duration_target_min":"${{ inputs.duration_target_min }}"}`),
-			// audio_url threads from podcast.generate's output so the
-			// scaffold gets `hyperframes init --audio=<staged-audio>`.
-			// Upstream embeds the audio element and sets data-duration
-			// to the audio length — otherwise the scaffold uses the
-			// example's intrinsic (~10s) default and the rendered video
-			// is silent at scaffold-default duration.
-			step("scaffold", "hyperframes.scaffold", `{"example":"${{ inputs.example }}","resolution":"${{ inputs.resolution }}","aspect_ratio":"${{ inputs.aspect_ratio }}","audio_url":"${{ steps.podcast.output.audio_url }}"}`),
+			// scaffold runs WITHOUT audio_url — issue #521 found that
+			// upstream `hyperframes init --audio=<path>` is silently
+			// ignored by at least the `decision-tree` example (and
+			// possibly others), so threading audio through the
+			// scaffold is unreliable. The attach_audio step below is
+			// the deterministic path: pure-Go tarball transform that
+			// embeds an <audio> element into the root composition
+			// div + rewrites data-duration to the audio length.
+			step("scaffold", "hyperframes.scaffold", `{"example":"${{ inputs.example }}","resolution":"${{ inputs.resolution }}","aspect_ratio":"${{ inputs.aspect_ratio }}"}`),
 			// duration_s threads from podcast.generate so the caption
 			// transcript regenerates at the right length for the audio.
 			step("interpolate", "hyperframes.interpolate", `{"project_artifact_key":"${{ steps.scaffold.output.project_artifact_key }}","description":"${{ inputs.description }}","model":"openrouter/auto","duration_seconds":"${{ steps.podcast.output.duration_s }}"}`),
-			step("render", "hyperframes.render", `{"project_artifact_key":"${{ steps.interpolate.output.project_artifact_key }}","resolution":"${{ inputs.resolution }}","aspect_ratio":"${{ inputs.aspect_ratio }}"}`),
+			// attach_audio splices the narration into the project tarball
+			// AFTER interpolate (so the root div's data-duration that
+			// interpolate may have already set gets rewritten to match
+			// the actual audio length). Issue #521 fix.
+			step("attach_audio", "hyperframes.attach_audio", `{"project_artifact_key":"${{ steps.interpolate.output.project_artifact_key }}","audio_artifact_key":"${{ steps.podcast.output.audio_artifact_key }}","duration_seconds":"${{ steps.podcast.output.duration_s }}"}`),
+			step("render", "hyperframes.render", `{"project_artifact_key":"${{ steps.attach_audio.output.project_artifact_key }}","resolution":"${{ inputs.resolution }}","aspect_ratio":"${{ inputs.aspect_ratio }}"}`),
 		).withMeta(PipelineMetadata{
 			Accepts:        []string{"description", "example"},
 			Produces:       []string{"mp4", "narrated_video", "scaffolded_video"},
 			IntentKeywords: []string{"scaffolded narrated video", "narrated video using a hyperframes example", "make a video using swiss-grid", "make a video using decision-tree", "tier C narrated video", "polished narrated video"},
 			TypicalUse:     "When the user wants a narrated MP4 with polished visuals borrowed from upstream's example catalog (vs. authoring HTML from scratch). Tier-C-friendly because the LLM only interpolates content into a known-good scaffold.",
 			Limitations: []string{
-				"no A-roll image/video — chain image.generate + hyperframes.attach_asset between interpolate and render if you need one",
+				"no A-roll image/video — chain image.generate + hyperframes.attach_asset between interpolate and attach_audio if you need one",
 				"requires ElevenLabs key for narration (falls back to silent video via podcast.generate's allow_silent_output)",
 				"example name must be in upstream's registry — see the hyperframes.scaffold reference doc for the catalog (or pass an invalid name to surface the full list in the error)",
 				"caption transcript timing is heuristic (~150 wpm cadence); not whisper-aligned to actual audio",
 				"duration_target_min defaults to podcast.generate's intrinsic 8-minute target when unset; pass duration_target_min: 1 for a 60-second social-first video or duration_target_min: 12 for the long-form cap",
 			},
-			Supersedes: []string{"hyperframes.scaffold", "hyperframes.interpolate", "podcast.generate", "hyperframes.render"},
+			Supersedes: []string{"hyperframes.scaffold", "hyperframes.interpolate", "hyperframes.attach_audio", "podcast.generate", "hyperframes.render"},
 		}),
 
 		// ── Coding (beta) — ADR 046 ─────────────────────────────────

@@ -73,6 +73,24 @@ Two input modes — supply **either** `text` (in-memory) **or** `clone_path` + `
 | `max_claims_applied` | `number` | The cap actually used (after precedence + clamping). |
 | `length_intent_applied` | `string` | Where the cap came from — `intent:summary` / `intent:thorough` / `intent:exhaustive` / `explicit` / `default`. |
 | `truncated` | `boolean` | `true` when EITHER the claim extractor LLM hit `finish_reason=length` (the claim list may be incomplete) OR the rewrite step truncated (the citation-only fallback ships instead). Re-run with smaller `length_intent` or larger `max_completion_tokens`. |
+| `claims_cached` | `number` | Per-claim cache hits (issue [#523](https://github.com/tosin2013/helmdeck/issues/523)). Cached claims skip BOTH the Firecrawl `/v1/search` call AND the verify LLM call entirely. Operators see "fixed a typo, re-ran, 4 of 5 claims served from cache" telemetry. Zero when no engine `MemoryStore` is wired. |
+| `firecrawl_calls` | `number` | Actual Firecrawl `/v1/search` calls fired in this run (excludes cache hits). Distinguishes "0 of 5 claims hit Firecrawl on re-run after a typo fix" from "all 5 claims hit Firecrawl on the cold path." |
+
+### Two-layer cache (engine + per-claim)
+
+content.ground runs under two cache layers:
+
+| Layer | Key | TTL | Hits | Misses |
+|---|---|---|---|---|
+| **Engine `MemoryConfig`** (ADR 047, PR #522) | sha256(caller + input bytes) | 24h | Identical re-run (same markdown, same options) replays the entire pack output | Any byte-level change to the markdown |
+| **Handler-internal per-claim** ([#523](https://github.com/tosin2013/helmdeck/issues/523), this release) | sha256(claim_text + "\0" + search_query) | 7 days | Each claim whose text + query is unchanged across edits replays its Firecrawl + verify result | Claim text or query changed between runs |
+
+The engine cache is the fastest path (no handler execution); the per-claim cache is the second-fastest. Together they cover the two common workflows:
+
+- **Idempotent re-run** (same input): engine cache hits → pack output replays in ~milliseconds
+- **Typo fix and re-cite** (different input bytes, same claim set): engine cache misses, per-claim cache hits → only the LLM extractor runs; every claim skips Firecrawl + verify
+
+The per-claim cache stores even empty picks (claims for which no source was found). Failed Firecrawl searches (transport errors) are NOT cached — a transient outage shouldn't poison the cache for 7 days.
 | `inspect` | `boolean` | Inspect-mode only — always `true` in the inspect response. |
 | `suggested_max_claims` | `number` | Inspect-mode only — what the pack would pick. |
 | `reason` | `string` | Inspect-mode only — human-readable explanation. |

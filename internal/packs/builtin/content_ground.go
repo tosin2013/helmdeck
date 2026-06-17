@@ -88,6 +88,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/tosin2013/helmdeck/internal/gateway"
+	"github.com/tosin2013/helmdeck/internal/memory"
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/vision"
 )
@@ -95,6 +96,19 @@ import (
 const (
 	defaultContentGroundClaims = 5
 	maxContentGroundClaims     = 8
+
+	// Per-claim cache (issue #523). Lives alongside the engine-level
+	// Memory cache declared on the pack. The engine cache keys on
+	// sha256(input bytes) — a typo fix elsewhere in the markdown
+	// invalidates every cached result. The per-claim cache keys on
+	// sha256(claim_text + "\x00" + search_query): claims whose text
+	// + query didn't change between edits still hit, even when other
+	// parts of the markdown changed. TTL is longer (7 days vs the
+	// engine's 24h) because the cache key is content-derived; the
+	// authoritative source for a specific claim doesn't change on a
+	// 24h cadence.
+	perClaimCacheTTL     = 7 * 24 * time.Hour
+	perClaimCacheKeyPfx  = "cg:claim:"
 
 	// JIT length-sizing constants (issue #532 / convention #525).
 	// content.ground is **cost-cap shaped** like research.deep —
@@ -203,6 +217,25 @@ func resolveContentGroundSize(in *contentGroundInput) contentGroundSize {
 	return contentGroundSize{maxClaims: defaultContentGroundClaims, applied: "default"}
 }
 
+// cachedClaimResult is the persisted shape for a verified claim's
+// Firecrawl pick + verifier snippet (issue #523). Stored in the per-
+// caller memory namespace under perClaimCacheKey so re-runs across
+// markdown edits skip the Firecrawl + verifier LLM call when the
+// (claim_text, search_query) pair is unchanged.
+type cachedClaimResult struct {
+	Pick    *firecrawlSearchItem `json:"pick"`
+	Snippet string               `json:"snippet"`
+}
+
+// perClaimCacheKey hashes the (claim_text, search_query) pair into a
+// stable per-claim cache key. The null separator prevents
+// concatenation collisions ("ab" + "" vs "a" + "b"); content.ground
+// has no expected claim text containing literal NUL bytes.
+func perClaimCacheKey(claimText, query string) string {
+	h := sha256.Sum256([]byte(claimText + "\x00" + query))
+	return perClaimCacheKeyPfx + hex.EncodeToString(h[:])
+}
+
 // ContentGround constructs the pack.
 func ContentGround(d vision.Dispatcher) *packs.Pack {
 	return &packs.Pack{
@@ -272,6 +305,9 @@ func ContentGround(d vision.Dispatcher) *packs.Pack {
 				"max_claims_applied":    "number",
 				"length_intent_applied": "string",
 				"truncated":             "boolean",
+				// Per-claim cache telemetry (issue #523).
+				"claims_cached":   "number",
+				"firecrawl_calls": "number",
 				// Inspect mode only.
 				"inspect":              "boolean",
 				"suggested_max_claims": "number",
@@ -518,6 +554,10 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 				"max_claims_applied":    maxClaims,
 				"length_intent_applied": size.applied,
 				"truncated":             extractorTruncated,
+				// Per-claim cache telemetry (issue #523) — zero on the
+				// no-claims-found path; emitted for consistency.
+				"claims_cached":   0,
+				"firecrawl_calls": 0,
 			})
 		}
 		_ = rawModel // retained for future audit logging; not surfaced today
@@ -586,21 +626,64 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 			pending = append(pending, pendingClaim{idx: i, text: c.Text, query: c.Query})
 		}
 
-		// Phase 2 — concurrent Firecrawl + verify.
+		// Phase 2 — per-claim cache lookup + concurrent Firecrawl + verify
+		// on the misses. Issue #523: the engine-level cache keys on
+		// sha256(input bytes), so a typo fix elsewhere invalidates every
+		// claim's cached result. This handler-internal cache keys on
+		// sha256(claim_text, search_query) — claims whose text + query
+		// didn't change between edits still hit, skipping their Firecrawl
+		// /v1/search call AND their verifier LLM call.
 		type claimResult struct {
-			idx       int
-			text      string
-			pick      *firecrawlSearchItem
-			snippet   string
-			searchErr error
+			idx        int
+			text       string
+			pick       *firecrawlSearchItem
+			snippet    string
+			searchErr  error
+			cachedHit  bool // true when populated from per-claim cache
 		}
 		results := make([]claimResult, len(pending))
-		if len(pending) > 0 {
-			ec.Report(20, fmt.Sprintf("grounding %d claims concurrently (limit=%d)",
-				len(pending), contentGroundConcurrency))
+		// claimsCached counts per-claim cache hits across the batch (used
+		// by Phase 3 telemetry to distinguish cache hits from real
+		// Firecrawl calls). Engine-level Memory cache hits short-
+		// circuit BEFORE the handler runs and never reach this counter.
+		claimsCached := 0
+		needsGoroutine := make([]bool, len(pending))
+		for i, p := range pending {
+			needsGoroutine[i] = true
+			if ec.Memory == nil {
+				continue
+			}
+			entry, err := ec.Memory.Recall(perClaimCacheKey(p.text, p.query))
+			if err != nil || entry == nil {
+				continue
+			}
+			var cached cachedClaimResult
+			if json.Unmarshal(entry.Value, &cached) != nil {
+				continue
+			}
+			results[i] = claimResult{
+				idx:       p.idx,
+				text:      p.text,
+				pick:      cached.Pick,
+				snippet:   cached.Snippet,
+				cachedHit: true,
+			}
+			needsGoroutine[i] = false
+			claimsCached++
+		}
+		if claimsCached > 0 && ec.Logger != nil {
+			ec.Logger.Info("content.ground per-claim cache",
+				"hits", claimsCached, "misses", len(pending)-claimsCached)
+		}
+		if len(pending)-claimsCached > 0 {
+			ec.Report(20, fmt.Sprintf("grounding %d claims concurrently (limit=%d, %d cached)",
+				len(pending)-claimsCached, contentGroundConcurrency, claimsCached))
 			grp, gctx := errgroup.WithContext(ctx)
 			grp.SetLimit(contentGroundConcurrency)
 			for i, p := range pending {
+				if !needsGoroutine[i] {
+					continue
+				}
 				i, p := i, p // capture
 				grp.Go(func() error {
 					r := claimResult{idx: p.idx, text: p.text}
@@ -618,6 +701,21 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 					}
 					r.pick, r.snippet = verifyBestSource(gctx, d, in.Model, p.text, fc.Data)
 					results[i] = r
+					// Store the successful (or empty-pick) result in
+					// the per-claim cache. Failed searches are NOT
+					// cached — a transient Firecrawl outage shouldn't
+					// poison the cache for 7 days. Empty picks (no
+					// matching source found) ARE cached so a repeat
+					// run for the same claim doesn't re-burn the
+					// verify LLM call on the same null result.
+					if ec.Memory != nil && r.searchErr == nil {
+						buf, mErr := json.Marshal(cachedClaimResult{Pick: r.pick, Snippet: r.snippet})
+						if mErr == nil {
+							_ = ec.Memory.Store(perClaimCacheKey(p.text, p.query), buf,
+								memory.WithCategory("cache"),
+								memory.WithTTL(perClaimCacheTTL))
+						}
+					}
 					return nil
 				})
 			}
@@ -630,7 +728,13 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 		// original-claim-order modulo the already-skipped entries.
 		ec.Report(85, "patching grounded claims")
 		for _, r := range results {
-			firecrawlCalls++
+			// Only count real Firecrawl calls (cache hits are
+			// free). Keeps the firecrawlErrors == firecrawlCalls
+			// "every call failed" hard-fail check correct when most
+			// of the batch was served from cache.
+			if !r.cachedHit {
+				firecrawlCalls++
+			}
 			if r.searchErr != nil {
 				firecrawlErrors++
 				if ec.Logger != nil {
@@ -758,6 +862,17 @@ func contentGroundHandler(d vision.Dispatcher) packs.HandlerFunc {
 			"max_claims_applied":    maxClaims,
 			"length_intent_applied": size.applied,
 			"truncated":             extractorTruncated || rewriteTruncated,
+			// Per-claim cache telemetry (issue #523). claims_cached
+			// counts claims served from the handler-internal cache;
+			// firecrawl_calls counts real Firecrawl calls (misses).
+			// Operators see "0/5 claims hit Firecrawl on re-run after
+			// fixing a typo" telemetry. Engine-level Memory cache hits
+			// short-circuit BEFORE the handler runs so they appear as
+			// zero claims considered (a different shape — the whole
+			// pack output replays from cache rather than this handler
+			// rerunning with cached intermediate results).
+			"claims_cached":   claimsCached,
+			"firecrawl_calls": firecrawlCalls,
 		}
 		if artifactKey != "" {
 			out["artifact_key"] = artifactKey

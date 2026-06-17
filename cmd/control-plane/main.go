@@ -788,6 +788,16 @@ func main() {
 		logger.Warn("register hyperframes.attach_asset pack failed", "err", err)
 	}
 
+	// hyperframes.attach_audio — issue #521 fix. Closes the silent-
+	// video failure mode where upstream `hyperframes init --audio` is
+	// ignored by some examples (decision-tree empirically; possibly
+	// others). Same shape as attach_asset — pure-Go tarball transform,
+	// no dispatcher, just the artifact store — but operates on the
+	// root composition div instead of a named A-roll slot.
+	if err := packReg.Register(builtin.HyperframesAttachAudio()); err != nil {
+		logger.Warn("register hyperframes.attach_audio pack failed", "err", err)
+	}
+
 	// Operator-supplied command packs (T811 MVP). Drop executables
 	// into $HELMDECK_COMMAND_PACKS_DIR and the control plane
 	// registers each as `cmd.<basename>`. Schemas are passthrough

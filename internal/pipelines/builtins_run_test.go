@@ -70,7 +70,7 @@ var builtinPackStubs = map[string]stubSpec{
 	"slides.render":  {output: `{"format":"pdf","artifact_key":"%KEY%","size":1024}`, artifact: true, artName: "deck.pdf", contentType: "application/pdf", content: []byte("%PDF-1.4 stub")},
 	"slides.narrate": {output: `{"video_artifact_key":"%KEY%","total_duration_s":5}`, artifact: true, artName: "deck.mp4", contentType: "video/mp4", content: []byte("\x00\x00\x00\x18ftypmp42 stub")},
 	// audio_url + duration_s feed builtin.prompt-narrated-video's compose step.
-	"podcast.generate":   {output: `{"audio_url":"https://example.com/a.mp3","duration_s":60,"artifact_key":"%KEY%"}`, artifact: true, artName: "podcast.mp3", contentType: "audio/mpeg", content: []byte("ID3 stub")},
+	"podcast.generate":   {output: `{"audio_url":"https://example.com/a.mp3","duration_s":60,"audio_artifact_key":"%KEY%","artifact_key":"%KEY%"}`, artifact: true, artName: "podcast.mp3", contentType: "audio/mpeg", content: []byte("ID3 stub")},
 	"blog.publish":       {output: `{"artifact_key":"%KEY%","format":"markdown"}`, artifact: true, artName: "post.md", contentType: "text/markdown", content: []byte("# Post")},
 	"hyperframes.render": {output: `{"artifact_key":"%KEY%","format":"mp4"}`, artifact: true, artName: "video.mp4", contentType: "video/mp4", content: []byte("\x00\x00\x00\x18ftypmp42 stub")},
 	// hyperframes.scaffold + hyperframes.interpolate produce project_artifact_key
@@ -82,6 +82,12 @@ var builtinPackStubs = map[string]stubSpec{
 	// stub already handles the artifact-key roundtrip.
 	"hyperframes.scaffold":    {output: `{"project_artifact_key":"%KEY%","example_used":"swiss-grid","cli_preset_used":"landscape","width":1920,"height":1080,"editable_slots":{"compositions":[]}}`, artifact: true, artName: "scaffold.tar.gz", contentType: "application/gzip", content: []byte("\x1f\x8b\x08\x00stub")},
 	"hyperframes.interpolate": {output: `{"project_artifact_key":"%KEY%","original_project_artifact_key":"prev","files_rewritten":[],"model_used":"openrouter/auto"}`, artifact: true, artName: "interpolated.tar.gz", contentType: "application/gzip", content: []byte("\x1f\x8b\x08\x00stub")},
+	// hyperframes.attach_audio sits between interpolate and render in
+	// builtin.scaffolded-narrated-video to embed the narration audio
+	// into the project tarball (issue #521 fix). Stub emits a new
+	// project_artifact_key like the real pack would so render
+	// consumes it cleanly.
+	"hyperframes.attach_audio": {output: `{"project_artifact_key":"%KEY%","original_project_artifact_key":"prev","audio_filename":"aroll-audio-stub.mp3","audio_size":1024,"duration_seconds_used":60,"root_duration_updated":true,"track_index_used":9,"volume_used":1}`, artifact: true, artName: "with-audio.tar.gz", contentType: "application/gzip", content: []byte("\x1f\x8b\x08\x00stub")},
 	// Coding pipelines (ADR 046). github.get_issue feeds title+body into
 	// swe.solve; swe.solve is the terminal artifact producer (trajectory
 	// JSON) for the four builtin.{issue-to-pr,repo-solve-*} pipelines.

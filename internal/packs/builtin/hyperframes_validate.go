@@ -212,12 +212,13 @@ func hyperframesValidateHandler() packs.HandlerFunc {
 }
 
 func firstValidateErrorSummary(errors []hyperframesValidateConsoleEntry) string {
-	for _, e := range errors {
-		txt := e.Text
-		if len(txt) > 200 {
-			txt = txt[:200] + "..."
-		}
-		return fmt.Sprintf("[%s] %s", e.Level, txt)
+	if len(errors) == 0 {
+		return "<no console error visible>"
 	}
-	return "<no console error visible>"
+	e := errors[0]
+	txt := e.Text
+	if len(txt) > 200 {
+		txt = txt[:200] + "..."
+	}
+	return fmt.Sprintf("[%s] %s", e.Level, txt)
 }

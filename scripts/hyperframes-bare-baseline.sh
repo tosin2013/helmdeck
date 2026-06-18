@@ -292,12 +292,62 @@ def rewrite_div(m):
 src = re.sub(r'<div[^>]*data-composition-id\s*=\s*"[^"]+"[^>]*>', rewrite_div, src)
 # Inject audio as first child of the (now-rewritten) root div
 audio_tag = (f'<audio src="$AUDIO_FILE_IN_PROJECT" data-start="0" '
-             f'data-duration="$AUDIO_SECONDS" data-volume="1" '
+             f'id="aroll-audio" data-duration="$AUDIO_SECONDS" data-volume="1" '
              f'data-track-index="9"></audio>')
 src = re.sub(r'(<div[^>]*data-composition-id\s*=\s*"main"[^>]*>)',
              r'\1' + audio_tag, src, count=1)
 idx.write_text(src, encoding="utf-8")
 print("[baseline] index.html rewritten")
+PYEOF
+
+#---------------------------------------------------------------------
+# Step 4a — mute scaffold-supplied audio + video sources
+#
+# Many curated scaffolds embed their own media — kinetic-type ships
+# `compositions/main-graphics.html` with an external S3 <video> that
+# has its own audio track. Without muting, that audio plays on top of
+# the narration we just injected, producing the "two-audios-overlap"
+# symptom. Since this script's purpose is "scaffold + narration →
+# rendered video," we auto-mute every pre-existing <video> and zero
+# the volume of every pre-existing <audio> except the one we just
+# injected (matched by id="aroll-audio").
+#---------------------------------------------------------------------
+
+echo "[baseline] muting scaffold-supplied media (auto)"
+python3 - <<PYEOF
+import pathlib, re
+proj = pathlib.Path("$PROJDIR")
+muted = 0
+zeroed = 0
+for html in list(proj.glob("*.html")) + list(proj.glob("compositions/*.html")):
+    src = html.read_text(encoding="utf-8")
+    orig = src
+    # Add `muted` to <video> tags that lack it.
+    def mute_video(m):
+        global muted
+        tag = m.group(0)
+        if re.search(r'\\bmuted\\b', tag):
+            return tag
+        muted += 1
+        return tag[:-1] + " muted>"
+    src = re.sub(r'<video\\b[^>]*>', mute_video, src)
+    # Zero the data-volume on any <audio> NOT carrying id="aroll-audio".
+    # (Our just-injected element has id="aroll-audio".)
+    def zero_audio(m):
+        global zeroed
+        tag = m.group(0)
+        if 'id="aroll-audio"' in tag:
+            return tag
+        if 'data-volume' in tag:
+            new = re.sub(r'data-volume\\s*=\\s*"[^"]*"', 'data-volume="0"', tag)
+        else:
+            new = tag[:-1] + ' data-volume="0">'
+        zeroed += 1
+        return new
+    src = re.sub(r'<audio\\b[^>]*>', zero_audio, src)
+    if src != orig:
+        html.write_text(src, encoding="utf-8")
+print(f"[baseline] muted {muted} <video>, zeroed {zeroed} <audio>")
 PYEOF
 
 #---------------------------------------------------------------------
@@ -320,7 +370,7 @@ if [[ "$LINT" == "true" ]]; then
     -v "$WORKDIR:/work" \
     -w /work/project \
     "$IMAGE" \
-    -lc "hyperframes lint --json 2>/dev/null | sed -n '/^{/,$p'" 2>/dev/null || echo '{}')
+    -lc 'hyperframes lint --json 2>/dev/null | awk "/^{/{found=1} found"' 2>/dev/null || echo '{}')
   echo "$LINT_JSON" > "$WORKDIR/lint.json"
   LINT_ERRORS=$(python3 -c "import json,sys; d=json.loads(open('$WORKDIR/lint.json').read() or '{}'); print(d.get('errorCount',0))")
   LINT_WARNINGS=$(python3 -c "import json,sys; d=json.loads(open('$WORKDIR/lint.json').read() or '{}'); print(d.get('warningCount',0))")

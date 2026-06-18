@@ -809,6 +809,29 @@ func main() {
 		logger.Warn("register hyperframes.lint pack failed", "err", err)
 	}
 
+	// hyperframes.inspect — runtime-layout pre-render diagnostic.
+	// Loads the project in headless Chrome, samples the DOM at N
+	// timestamps, reports text/container overflow and transition-
+	// seam overlaps. Where lint catches STATIC source issues, this
+	// catches RUNTIME layout issues that only manifest when the
+	// composition is actually executing. Pair with lint + validate
+	// for full pre-render coverage.
+	if err := packReg.Register(builtin.HyperframesInspect()); err != nil {
+		logger.Warn("register hyperframes.inspect pack failed", "err", err)
+	}
+
+	// hyperframes.validate — runtime-error pre-render diagnostic.
+	// Loads the project in headless Chrome and reports DevTools
+	// console errors (CORS failures, missing assets, JS exceptions)
+	// plus optional WCAG AA contrast audit across timeline samples.
+	// Catches the failures that lint can't see (script throws on
+	// load → blank canvas) and inspect doesn't surface (CORS-blocked
+	// video → blank media). Final third of the pre-render validation
+	// suite alongside lint + inspect.
+	if err := packReg.Register(builtin.HyperframesValidate()); err != nil {
+		logger.Warn("register hyperframes.validate pack failed", "err", err)
+	}
+
 	// Operator-supplied command packs (T811 MVP). Drop executables
 	// into $HELMDECK_COMMAND_PACKS_DIR and the control plane
 	// registers each as `cmd.<basename>`. Schemas are passthrough

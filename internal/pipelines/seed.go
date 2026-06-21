@@ -301,6 +301,37 @@ func Builtins() []*Pipeline {
 			Supersedes: []string{"hyperframes.scaffold", "hyperframes.interpolate", "hyperframes.attach_audio", "podcast.generate", "hyperframes.render"},
 		}),
 
+		// builtin.byo-audio-narrated-video — bring-your-own-audio
+		// counterpart to builtin.prompt-narrated-video. Skips
+		// podcast.generate (the audio already exists in the artifact
+		// store from artifact.put or a prior pack call) and goes
+		// straight to compose with the existing audio. The LLM
+		// authors visuals timed to the audio's length + topic; the
+		// three pre-render validation gates catch render-killing
+		// issues before render burns. Duration_seconds is REQUIRED
+		// and is the 12-min cap enforcement point —
+		// hyperframes.compose rejects duration_seconds > 720s.
+		pipe("builtin.byo-audio-narrated-video", "Existing audio + describe → narrated video",
+			"Bring-your-own-audio narrated video. Pass an audio_artifact_key (audio already in the helmdeck artifact store from artifact.put or a prior pack call) plus a description of the topic plus the audio's duration_seconds, and the pipeline composes visuals matching both the topic and the audio length, runs the three pre-render validation gates (hyperframes.lint → inspect → validate, all strict), and renders the final MP4. Skip podcast.generate vs builtin.prompt-narrated-video because the audio is already in the store. Caps at 12 minutes — pass duration_seconds > 720 and hyperframes.compose rejects with CodeInvalidInput. Optional inputs aspect_ratio? (16:9 default / 9:16 / 1:1) and resolution? (1080p / 4k). The validation gates are strict so any of these issues abort BEFORE the render runs: missing media id (would render silent audio), Google Fonts import (silent in sandbox), CSS-vs-GSAP transform conflict, text overflow at a tween boundary, CORS-blocked external assets. For describe-only (no existing audio) use builtin.prompt-narrated-video which calls podcast.generate first.",
+			step("compose", "hyperframes.compose", `{"description":"${{ inputs.description }}","model":"openrouter/auto","aspect_ratio":"${{ inputs.aspect_ratio }}","audio_artifact_key":"${{ inputs.audio_artifact_key }}","duration_seconds":"${{ inputs.duration_seconds }}"}`),
+			step("lint", "hyperframes.lint", `{"composition_html":"${{ steps.compose.output.composition_html }}","strict":true}`),
+			step("inspect", "hyperframes.inspect", `{"composition_html":"${{ steps.compose.output.composition_html }}","at_transitions":true,"strict":true}`),
+			step("validate", "hyperframes.validate", `{"composition_html":"${{ steps.compose.output.composition_html }}","strict":true}`),
+			step("render", "hyperframes.render", `{"composition_html":"${{ steps.compose.output.composition_html }}","resolution":"${{ inputs.resolution }}","aspect_ratio":"${{ inputs.aspect_ratio }}"}`),
+		).withMeta(PipelineMetadata{
+			Accepts:        []string{"audio_artifact_key", "description", "duration_seconds"},
+			Produces:       []string{"mp4", "narrated_video"},
+			IntentKeywords: []string{"narrate this audio as a video", "make video from existing audio", "byo audio narrated video", "audio I uploaded into a video", "video from my mp3"},
+			TypicalUse:     "When the user has an existing audio file (uploaded to helmdeck's artifact store via artifact.put or produced by a prior pack call) and wants a narrated MP4. Skips podcast.generate; goes straight to compose. The validation gate before render means render budget isn't burned on a composition that would render silently or to a blank canvas.",
+			Limitations: []string{
+				"audio capped at 12 minutes (720s) — hyperframes.compose rejects duration_seconds > 720 as CodeInvalidInput",
+				"duration_seconds REQUIRED — pass the audio's actual length so compose times the visuals correctly",
+				"validation gates are strict by default — any error-severity finding aborts the pipeline before render (intentional; lint/inspect/validate findings are operator-fixable)",
+				"composition is LLM-authored from scratch (Tier A); for tier-C operators who want a curated example scaffold instead, use builtin.scaffolded-narrated-video (but it ignores existing audio and regenerates via podcast.generate)",
+			},
+			Supersedes: []string{"hyperframes.compose", "hyperframes.lint", "hyperframes.inspect", "hyperframes.validate", "hyperframes.render"},
+		}),
+
 		// ── Coding (beta) — ADR 046 ─────────────────────────────────
 		// Each name ends with " (beta)" so the UI renders a beta Badge;
 		// each description starts with "[beta]" so MCP-listing agents

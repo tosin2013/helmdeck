@@ -220,8 +220,15 @@ func hyperframesAttachAudioHandler(ctx context.Context, ec *packs.ExecutionConte
 	// Content-addressed filename — same bytes → same name → dedup
 	// if the operator chains the same narration twice.
 	h := sha256.Sum256(audioBytes)
-	audioFilename := "aroll-audio-" + hex.EncodeToString(h[:6]) + ext
+	contentHash := hex.EncodeToString(h[:6])
+	audioFilename := "aroll-audio-" + contentHash + ext
 	audioPath := "assets/" + audioFilename
+	// Element id must be stable + unique. Upstream `hyperframes lint`
+	// flags media without `id` as a hard error: the renderer requires
+	// id to discover media elements, otherwise the audio is SILENT in
+	// the rendered MP4. The id mirrors the content-addressed filename
+	// stem so the same audio → same id, same dedup behavior.
+	audioElementID := "aroll-audio-" + contentHash
 
 	// 2. Download the project tarball.
 	ec.Report(30, "downloading project tarball")
@@ -259,8 +266,8 @@ func hyperframesAttachAudioHandler(ctx context.Context, ec *packs.ExecutionConte
 	}
 	indexContent := string(files[indexIdx].Data)
 	audioElement := fmt.Sprintf(
-		`<audio src="%s" data-start="0" data-duration="%g" data-volume="%g" data-track-index="%d"></audio>`,
-		audioPath, in.DurationSeconds, volume, trackIndex)
+		`<audio id="%s" src="%s" data-start="0" data-duration="%g" data-volume="%g" data-track-index="%d"></audio>`,
+		audioElementID, audioPath, in.DurationSeconds, volume, trackIndex)
 	newIndex, spliced := spliceAudioIntoRoot(indexContent, audioElement)
 	if !spliced {
 		return nil, &packs.PackError{Code: packs.CodeInvalidInput,

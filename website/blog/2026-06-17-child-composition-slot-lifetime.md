@@ -3,7 +3,7 @@ slug: child-composition-slot-lifetime
 title: "Render ≠ preview: what we learned shipping a hyperframes integration"
 authors: [tosin]
 tags: [friction, field-report]
-description: A v0.29.2 pipeline produced 15 seconds of animation followed by 83 seconds of blank canvas. We assumed it was a slot-lifetime bug, filed upstream issues, shipped a fix, and tagged a release — then discovered that even upstream's own decision-tree example doesn't render at all (2 distinct frames over 15 seconds). The actual story: hyperframes has a known, documented "render ≠ preview" bug class, and the registry's own decision-tree trips over it. Upstream's own `hyperframes lint` was telling us this the whole time. We wrapped it as a helmdeck pack so the next agent catches it before burning the render budget.
+description: "A v0.29.2 pipeline produced 15 seconds of animation followed by 83 seconds of blank canvas. We assumed it was a slot-lifetime bug, filed upstream issues, shipped a fix, and tagged a release — then discovered that even upstream's own decision-tree example doesn't render at all (2 distinct frames over 15 seconds). The actual story: hyperframes has a known, documented 'render ≠ preview' bug class, and the registry's own decision-tree trips over it. Upstream's own `hyperframes lint` was telling us this the whole time. We wrapped it as a helmdeck pack so the next agent catches it before burning the render budget."
 image: /img/social-card.png
 date: 2026-06-17
 draft: false

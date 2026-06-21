@@ -1,4 +1,4 @@
-import { Archive, Download, Eye, Image, Trash2 } from 'lucide-react';
+import { Archive, Copy, Download, Eye, Image, Trash2, Upload as UploadIcon } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import {
@@ -50,6 +50,62 @@ export function ArtifactsPage() {
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Operator upload state. Drag-drop OR file input both pipe into the
+  // same handler; isDragging just drives the visual highlight on the
+  // drop zone. uploadedKey is the most-recent success — surfaced with
+  // a copy button so the operator can paste it into a pipeline call
+  // (e.g. builtin.byo-audio-narrated-video's audio_artifact_key input).
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadedKey, setUploadedKey] = useState<string | null>(null);
+  const [uploadedFilename, setUploadedFilename] = useState<string | null>(null);
+  const [keyCopied, setKeyCopied] = useState(false);
+
+  async function handleUpload(file: File) {
+    setUploading(true);
+    setUploadError(null);
+    setUploadedKey(null);
+    setKeyCopied(false);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const resp = await authFetch('/api/v1/artifacts/upload', {
+        method: 'POST',
+        body: form,
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(
+          (body as { message?: string }).message ?? `HTTP ${resp.status}`,
+        );
+      }
+      const out = (await resp.json()) as {
+        artifact_key: string;
+        filename: string;
+      };
+      setUploadedKey(out.artifact_key);
+      setUploadedFilename(out.filename);
+      await refetch();
+    } catch (e) {
+      setUploadError((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function copyKey() {
+    if (!uploadedKey) return;
+    try {
+      await navigator.clipboard.writeText(uploadedKey);
+      setKeyCopied(true);
+      setTimeout(() => setKeyCopied(false), 2000);
+    } catch {
+      // clipboard API may be unavailable on http:// origins — fall
+      // back to leaving the key visible for manual copy.
+    }
+  }
+
   async function handleDelete(key: string) {
     if (!window.confirm(`Delete artifact?\n\n${key}\n\nThis cannot be undone.`)) {
       return;
@@ -98,6 +154,98 @@ export function ArtifactsPage() {
           </Button>
         </div>
       </div>
+
+      {/* Upload card — operator drops a file, gets an artifact_key
+          they can paste into pipeline calls (e.g. the BYO-audio
+          pipeline's audio_artifact_key input). */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Upload an artifact</CardTitle>
+          <CardDescription>
+            Drag a file here or click to choose. Returns an
+            <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">
+              artifact_key
+            </code>
+            you can paste into pipeline inputs — e.g.
+            <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">
+              audio_artifact_key
+            </code>
+            on
+            <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">
+              builtin.byo-audio-narrated-video
+            </code>
+            . 100 MiB cap.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDragging(true);
+            }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDragging(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) void handleUpload(file);
+            }}
+            className={`flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed p-6 text-sm transition-colors ${
+              isDragging
+                ? 'border-primary bg-primary/5'
+                : 'border-muted-foreground/25 bg-muted/30'
+            } ${uploading ? 'opacity-60' : ''}`}
+          >
+            <UploadIcon className="h-6 w-6 text-muted-foreground" />
+            <p className="text-muted-foreground">
+              {uploading
+                ? 'Uploading…'
+                : 'Drag a file here, or click below to choose'}
+            </p>
+            <label className="cursor-pointer">
+              <input
+                type="file"
+                className="hidden"
+                disabled={uploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void handleUpload(file);
+                  e.target.value = ''; // allow re-selecting the same file
+                }}
+              />
+              <span className="text-primary underline-offset-2 hover:underline">
+                choose file…
+              </span>
+            </label>
+          </div>
+          {uploadError && (
+            <p className="text-sm text-destructive">{uploadError}</p>
+          )}
+          {uploadedKey && (
+            <div className="space-y-1 rounded-md border border-green-500/30 bg-green-500/5 p-3 text-sm">
+              <p className="font-medium text-green-700 dark:text-green-300">
+                Uploaded {uploadedFilename ?? 'file'}
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-xs">
+                  {uploadedKey}
+                </code>
+                <Button size="sm" variant="outline" onClick={() => void copyKey()}>
+                  <Copy className="mr-1 h-3 w-3" />
+                  {keyCopied ? 'Copied' : 'Copy'}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Paste this value into a pipeline call's
+                <code className="mx-1 rounded bg-muted px-1 py-0.5">
+                  audio_artifact_key
+                </code>
+                (or matching) input.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {deleteError && (
         <Card>

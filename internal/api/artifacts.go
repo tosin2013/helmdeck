@@ -10,7 +10,10 @@ package api
 // produced.
 
 import (
+	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -166,4 +169,116 @@ func registerArtifactRoutes(mux *http.ServeMux, deps Deps) {
 			"count":     len(items),
 		})
 	})
+
+	// POST /api/v1/artifacts/upload — operator-facing upload surface.
+	// Accepts multipart/form-data with a `file` field; persists the
+	// bytes under the "operator-uploads" namespace and returns the
+	// generated artifact key. The operator pastes the key into BYO-
+	// audio pipeline calls (e.g. builtin.byo-audio-narrated-video's
+	// audio_artifact_key input). Cap matches the largest media a
+	// helmdeck pack typically handles — hyperframes.attach_audio's
+	// 50 MiB audio cap is the load-bearing reference. We allow up to
+	// 100 MiB here to cover the rare large-MP4 or long-form audio
+	// case; oversize uploads return 413.
+	mux.HandleFunc("POST /api/v1/artifacts/upload", func(w http.ResponseWriter, r *http.Request) {
+		// 100 MiB cap. ParseMultipartForm reads UP TO this limit into
+		// memory, then spills to /tmp. With a small control-plane
+		// container, the spill-to-disk behavior is correct for
+		// large media.
+		const maxBytes = 100 << 20 // 100 MiB
+		r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+		if err := r.ParseMultipartForm(32 << 20); err != nil { // 32 MiB in-memory
+			writeError(w, http.StatusBadRequest, "parse_failed",
+				"could not parse multipart form: "+err.Error())
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "missing_file",
+				"form field `file` is required")
+			return
+		}
+		defer file.Close()
+		if header.Size > maxBytes {
+			writeError(w, http.StatusRequestEntityTooLarge, "file_too_large",
+				"file exceeds 100 MiB cap")
+			return
+		}
+		content, err := io.ReadAll(file)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "read_failed",
+				"could not read upload body: "+err.Error())
+			return
+		}
+		// Content-type detection: prefer client's declared
+		// Content-Type, then fall back to mime.TypeByExtension on the
+		// filename, then to http.DetectContentType on the first 512
+		// bytes. The pack that consumes the artifact (e.g.
+		// hyperframes.compose for audio) reads this to enforce its
+		// own type whitelist; we just need to fill it correctly.
+		contentType := header.Header.Get("Content-Type")
+		if contentType == "" {
+			if ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(header.Filename), ".")); ext != "" {
+				if mimeType := mime.TypeByExtension("." + ext); mimeType != "" {
+					contentType = mimeType
+				}
+			}
+		}
+		if contentType == "" && len(content) > 0 {
+			head := content
+			if len(head) > 512 {
+				head = head[:512]
+			}
+			contentType = http.DetectContentType(head)
+		}
+		filename := sanitizeUploadFilename(header.Filename)
+		art, err := store.Put(r.Context(), "operator-uploads", filename, content, contentType)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "put_failed",
+				"could not persist artifact: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"artifact_key": art.Key,
+			"url":          "/api/v1/artifacts/download/" + art.Key,
+			"size":         art.Size,
+			"content_type": art.ContentType,
+			"filename":     filename,
+		})
+	})
+}
+
+// sanitizeUploadFilename strips path separators and non-printable
+// characters from a multipart upload's filename. The resulting name
+// becomes part of the artifact key, so we keep it short, safe to
+// embed in S3 keys, and informative enough for an operator to
+// recognize their upload in the artifact list.
+//
+// We deliberately keep spaces (operators upload "My Audio.mp3"
+// regularly) — the S3 store URL-encodes the key on PUT.
+func sanitizeUploadFilename(raw string) string {
+	// http.MultipartReader can hand us paths from a browser that
+	// includes a directory prefix on some platforms.
+	name := filepath.Base(raw)
+	if name == "" || name == "." || name == "/" {
+		return "upload"
+	}
+	// Strip control characters; preserve everything else.
+	var b strings.Builder
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	cleaned := strings.TrimSpace(b.String())
+	if cleaned == "" {
+		return "upload"
+	}
+	// Cap at 200 chars so the resulting key (pack/uuid-filename) fits
+	// comfortably in any S3-key cap.
+	if len(cleaned) > 200 {
+		cleaned = cleaned[:200]
+	}
+	return cleaned
 }

@@ -123,6 +123,20 @@ func registerArtifactRoutes(mux *http.ServeMux, deps Deps) {
 					all = append(all, arts...)
 				}
 			}
+			// Special non-pack namespaces. The upload endpoint persists
+			// under "operator-uploads/", which isn't a registered pack,
+			// so the pack-registry iteration above skips it. Without
+			// this list operator-uploaded MP3s never surface in the
+			// Management UI's Artifacts table — even though they ARE
+			// in the store and are usable as audio_artifact_key inputs
+			// to pipelines.
+			for _, ns := range []string{"operator-uploads"} {
+				arts, err := store.ListForPack(r.Context(), ns)
+				if err != nil {
+					continue
+				}
+				all = append(all, arts...)
+			}
 		}
 
 		// Sort newest-first (reverse order of append, since the

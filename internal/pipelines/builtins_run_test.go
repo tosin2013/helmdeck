@@ -88,6 +88,14 @@ var builtinPackStubs = map[string]stubSpec{
 	// project_artifact_key like the real pack would so render
 	// consumes it cleanly.
 	"hyperframes.attach_audio": {output: `{"project_artifact_key":"%KEY%","original_project_artifact_key":"prev","audio_filename":"aroll-audio-stub.mp3","audio_size":1024,"duration_seconds_used":60,"root_duration_updated":true,"track_index_used":9,"volume_used":1}`, artifact: true, artName: "with-audio.tar.gz", contentType: "application/gzip", content: []byte("\x1f\x8b\x08\x00stub")},
+	// Pre-render validation suite (PR #550) — lint/inspect/validate
+	// each return a structured findings report. The pipeline stubs
+	// return clean reports (no errors) so strict-mode pipelines pass
+	// the gates and reach the render step. Real packs would surface
+	// findings here; tests only exercise the wiring shape.
+	"hyperframes.lint":     {output: `{"lint":{"ok":true,"error_count":0,"warning_count":0,"info_count":0,"files_scanned":1,"findings":[]}}`},
+	"hyperframes.inspect":  {output: `{"inspect":{"ok":true,"duration":60,"error_count":0,"warning_count":0,"info_count":0,"issue_count":0,"total_issue_count":0,"truncated":false,"sample_count":9,"issues":[]}}`},
+	"hyperframes.validate": {output: `{"validate":{"ok":true,"error_count":0,"warning_count":0,"contrast_sample_count":0,"contrast_failure_count":0,"errors":[],"warnings":[],"contrast":[]}}`},
 	// Coding pipelines (ADR 046). github.get_issue feeds title+body into
 	// swe.solve; swe.solve is the terminal artifact producer (trajectory
 	// JSON) for the four builtin.{issue-to-pr,repo-solve-*} pipelines.

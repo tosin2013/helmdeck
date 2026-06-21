@@ -221,7 +221,15 @@ type hyperframesComposeInput struct {
 	Resolution      string  `json:"resolution"`
 	DurationSeconds float64 `json:"duration_seconds"`
 	AudioURL        string  `json:"audio_url"`
-	Style           string  `json:"style"`
+	// AudioArtifactKey is an alternative to AudioURL: pass an existing
+	// artifact key (typically uploaded via artifact.put or produced by
+	// a prior pack) and the handler resolves it to a presigned URL via
+	// the artifact store. Use this for bring-your-own-audio pipelines
+	// where the audio already exists in the artifact store and the
+	// pipeline shouldn't have to call artifact.get just to extract the
+	// URL. Mutually exclusive with audio_url.
+	AudioArtifactKey string `json:"audio_artifact_key"`
+	Style            string `json:"style"`
 	MaxTokens       int     `json:"max_tokens"`
 	// MetadataModelRaw is a string-ptr-shaped opt-in/opt-out for video
 	// engagement metadata generation (title, hook, hashtags, etc.).
@@ -283,8 +291,9 @@ func HyperframesCompose(d vision.Dispatcher) *packs.Pack {
 				"model":            "string",
 				"aspect_ratio":     "string",
 				"resolution":       "string",
-				"duration_seconds": "number",
-				"audio_url":        "string",
+				"duration_seconds":   "number",
+				"audio_url":          "string",
+				"audio_artifact_key": "string",
 				"style":            "string",
 				"max_tokens":       "number",
 				// metadata_model: string-ptr-shaped opt-in for engagement
@@ -342,6 +351,37 @@ func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 		}
 		if strings.TrimSpace(in.Description) == "" {
 			return nil, &packs.PackError{Code: packs.CodeInvalidInput, Message: "description is required"}
+		}
+		// Bring-your-own-audio: resolve audio_artifact_key → audio_url
+		// via the artifact store BEFORE the rest of the handler runs.
+		// This keeps every downstream code path identical between the
+		// podcast.generate-chained case (audio_url passed directly) and
+		// the BYO case (audio already in the artifact store from a prior
+		// pack call or operator upload). Mutually exclusive — passing
+		// both is caller_fixable.
+		hasURL := strings.TrimSpace(in.AudioURL) != ""
+		hasKey := strings.TrimSpace(in.AudioArtifactKey) != ""
+		if hasURL && hasKey {
+			return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+				Message: "audio_url and audio_artifact_key are mutually exclusive — pass exactly one (or neither for a silent composition)"}
+		}
+		if hasKey {
+			if ec.Artifacts == nil {
+				return nil, &packs.PackError{Code: packs.CodeArtifactFailed,
+					Message: "audio_artifact_key requires an artifact store wired into the execution context"}
+			}
+			_, art, err := ec.Artifacts.Get(ctx, in.AudioArtifactKey)
+			if err != nil {
+				return nil, &packs.PackError{Code: packs.CodeInvalidInput,
+					Message: fmt.Sprintf("audio_artifact_key %q not found in artifact store: %v",
+						in.AudioArtifactKey, err), Cause: err}
+			}
+			if strings.TrimSpace(art.URL) == "" {
+				return nil, &packs.PackError{Code: packs.CodeArtifactFailed,
+					Message: fmt.Sprintf("audio_artifact_key %q resolved to empty URL (artifact store does not expose presigned URLs?)",
+						in.AudioArtifactKey)}
+			}
+			in.AudioURL = art.URL
 		}
 		// JIT inspect short-circuit (issue #529). Runs before the
 		// dispatcher / model-required checks so gateway-less and

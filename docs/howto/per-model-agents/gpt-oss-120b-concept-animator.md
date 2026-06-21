@@ -221,6 +221,79 @@ When the chain succeeds, report:
 Do not include any URL the operator did not see in a tool result.
 ````
 
+## Variant — bring-your-own audio (v0.29.5+)
+
+When Maya has an existing audio file — a recorded interview, a stitched-together podcast clip, an ElevenLabs render she did out-of-band — the recipe above is the wrong shape: `podcast.generate` re-generates audio from a prompt rather than re-using the audio she already trusts. Two changes that landed in v0.29.4 and v0.29.5 make a BYO-audio variant tractable:
+
+- v0.29.4's [`builtin.byo-audio-narrated-video`](../../reference/packs/hyperframes/compose.md) pipeline takes an `audio_artifact_key` instead of generating audio, and chains the [pre-render validation suite](../../explanation/authoring-render-deterministic-compositions.md) ([`hyperframes.lint`](../../reference/packs/hyperframes/lint.md) → [`inspect`](../../reference/packs/hyperframes/inspect.md) → [`validate`](../../reference/packs/hyperframes/validate.md)) before render so blank-canvas or silent-audio failures abort cheaply.
+- v0.29.5's new [`POST /api/v1/artifacts/upload`](https://github.com/tosin2013/helmdeck/pull/556) endpoint + drag-drop card on the Management UI's Artifacts page closes the "how do I get my MP3 into the artifact store?" UX gap. Maya opens the UI, drags her file, copies the returned `audio_artifact_key`, and hands it to the agent.
+
+### Operator step (out-of-band, not in chat)
+
+1. Open Management UI → Artifacts
+2. Drag the audio file onto the upload card (100 MiB cap; covers long-form audio + large pre-rendered media)
+3. Click **Copy** on the resulting `artifact_key` (it'll look like `operator-uploads/abc123-narration.mp3`)
+4. Note the audio's duration in seconds — `ffprobe -v error -show_entries format=duration -of csv=p=0 file.mp3`. The cap is 720s; bigger audio is rejected at pack-input validation as `CodeInvalidInput`.
+
+### AGENTS.md addendum for the BYO variant
+
+The base AGENTS.md template stays the same; add this CONSTRAINTS section override for runs where the operator passes an artifact key:
+
+```markdown
+# CONSTRAINTS — BYO audio variant
+
+- The operator will provide:
+  - `audio_artifact_key` (starts with `operator-uploads/`)
+  - `description` (topic context for composition authoring)
+  - `duration_seconds` (the audio's actual length in seconds)
+- Call ONE pack: `helmdeck__pipeline-run` with pipeline_id=`builtin.byo-audio-narrated-video`.
+- Pass through every required input verbatim — do NOT regenerate the audio, do NOT call `podcast.generate`.
+- The pipeline runs lint → inspect → validate → render internally with strict mode on; any validation failure surfaces as a typed `CodeArtifactFailed` error. **DO NOT** swallow it and retry the same composition — surface the finding to the operator with the code (e.g. `media_missing_id`, `text_box_overflow`) and the suggested fix from the pack output. The validation suite is the publish gate; bypassing it ships broken video.
+
+# SUCCESS CRITERIA (Invalidation Rules — applied strictly)
+
+- INVALID if `helmdeck__pipeline-run` is not the only pack called for this request.
+- INVALID if `audio_artifact_key`, `description`, or `duration_seconds` is missing from the pipeline input.
+- INVALID if the agent regenerates audio via `podcast.generate` when an `audio_artifact_key` was supplied.
+- INVALID if the agent claims the render succeeded without surfacing the pipeline's returned `video_artifact_key` (or `mp4_artifact_key`) verbatim.
+```
+
+### Test prompt for the BYO variant
+
+```text
+@Maya I uploaded a 4-minute MP3 about Antigravity CLI game-building.
+The artifact key is operator-uploads/abc123-antigravity.mp3 and the
+duration is 234 seconds. Generate a narrated 16:9 animated video
+explaining the build process to match the audio.
+```
+
+Expected single pack call:
+
+```json
+{
+  "tool": "helmdeck__pipeline-run",
+  "input": {
+    "pipeline_id": "builtin.byo-audio-narrated-video",
+    "inputs": {
+      "audio_artifact_key": "operator-uploads/abc123-antigravity.mp3",
+      "description": "Antigravity CLI game-building",
+      "duration_seconds": 234,
+      "aspect_ratio": "16:9"
+    }
+  }
+}
+```
+
+### Why this is shorter than the from-scratch chain
+
+The from-scratch path is 5 tool calls (`podcast.generate` → `hyperframes.compose` → `hyperframes.render` → `av.validate` → `artifact.verify_manifest`). The BYO variant is 1 tool call because the pipeline composes the chain internally AND inlines the pre-render validation gates that close the most common silent-failure modes. Fewer tool calls means a Tier C model has fewer opportunities to drift. The pipeline IS the audit-callback; we don't need to assemble it call-by-call.
+
+### When NOT to use the BYO variant
+
+- The operator wants a fresh narration generated from a prompt (use the from-scratch path)
+- The audio is shorter than 5 seconds or longer than 720 seconds (pack rejects; check duration upfront)
+- The operator has only a description and no audio file at all (use the from-scratch path)
+
 ## Step 4 — Test prompt
 
 After bootstrapping the agent, run this prompt to verify the workflow fires end-to-end:
@@ -298,6 +371,8 @@ The final two calls (`av.validate` + `artifact.verify_manifest`) are the load-be
 
 - Per-model profile: [`models/openai-gpt-oss-120b-free.yaml`](https://github.com/tosin2013/helmdeck/blob/main/models/openai-gpt-oss-120b-free.yaml)
 - Companion recipe: [`gpt-oss-120b-slide-narrator.md`](./gpt-oss-120b-slide-narrator.md) — same model, single-pipeline call instead of multi-pack chain
+- BYO-variant prerequisites: [Management UI Artifacts upload](https://github.com/tosin2013/helmdeck/pull/556), [`builtin.byo-audio-narrated-video`](../../reference/packs/hyperframes/compose.md), [pre-render validation suite](../../explanation/authoring-render-deterministic-compositions.md) ([`lint`](../../reference/packs/hyperframes/lint.md) / [`inspect`](../../reference/packs/hyperframes/inspect.md) / [`validate`](../../reference/packs/hyperframes/validate.md))
+- Render-deterministic authoring guidance (load this skill in the agent's context for any composition-authoring agent): [`skills/helmdeck-hyperframes-authoring/SKILL.md`](https://github.com/tosin2013/helmdeck/blob/main/skills/helmdeck-hyperframes-authoring/SKILL.md)
 - Tracking issue: [#496](https://github.com/tosin2013/helmdeck/issues/496)
 - Pack references: [`hyperframes.compose`](../../reference/packs/hyperframes/compose.md), [`hyperframes.render`](../../reference/packs/hyperframes/render.md), [`podcast.generate`](../../reference/packs/podcast/generate.md)
 - ADR-052 (`av.validate` Phase 3 default-on integration): [`docs/adrs/052-av-output-validation-post-step.md`](../../adrs/052-av-output-validation-post-step.md)

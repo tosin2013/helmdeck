@@ -219,7 +219,7 @@ Framing the pipeline-selection logic as part of the invalidation rules — not a
 ## Related
 
 - Per-model profile: [`models/openai-gpt-oss-120b-free.yaml`](https://github.com/tosin2013/helmdeck/blob/main/models/openai-gpt-oss-120b-free.yaml)
-- Companion recipe: [`gpt-oss-120b-concept-animator.md`](./gpt-oss-120b-concept-animator.md) — same model, 3-call pack chain instead of single pipeline call
+- Companion recipe: [`gpt-oss-120b-concept-animator.md`](./gpt-oss-120b-concept-animator.md) — same model, 3-call pack chain instead of single pipeline call; **see also the BYO-audio variant** in that recipe for operator-uploaded MP3 → narrated video via `builtin.byo-audio-narrated-video` (v0.29.4+) and the Management UI Artifacts upload card (v0.29.5+)
 - Tracking issue: [#496](https://github.com/tosin2013/helmdeck/issues/496)
 - Pipeline references: `builtin.research-narrate` / `builtin.grounded-narrate` / `builtin.repo-presentation` are defined in `internal/pipelines/seed.go:Builtins()`. See [`docs/reference/prompt-templates/pipelines.md`](../../reference/prompt-templates/pipelines.md) for the documented prompt templates.
 - Pack references: [`slides.outline`](../../reference/packs/slides/outline.md), [`slides.narrate`](../../reference/packs/slides/narrate.md) (these are what the pipelines wrap)

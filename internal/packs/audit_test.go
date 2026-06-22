@@ -111,6 +111,68 @@ func TestAuditPerCallerIsolated(t *testing.T) {
 	}
 }
 
+// TestAuditFindings_ErrorPathStillCapturesFindings — regression for
+// the empirical 2026-06-22 BYO bug: hyperframes.lint in strict mode
+// returns BOTH the findings JSON AND a CodeArtifactFailed PackError.
+// The engine's pre-fix code read result.Output (nil on the error
+// short-circuit) so the findings never landed in the audit row.
+// Post-fix: handlerOutput captured RIGHT AFTER safeInvoke survives
+// the error, audit closure passes it to extractFindings, audit row
+// carries Findings.
+//
+// Load-bearing for #570 — without this, the findings-memory loop
+// never closes on Tier C runs because lint-strict failures DON'T
+// produce audit-row findings.
+func TestAuditFindings_ErrorPathStillCapturesFindings(t *testing.T) {
+	store := memory.NewInMemoryStore()
+	eng := quietEngine(WithMemoryStore(store))
+	pack := &Pack{
+		Name: "lint.like", Version: "v1",
+		Handler: func(ctx context.Context, ec *ExecutionContext) (json.RawMessage, error) {
+			// Simulate the hyperframes.lint strict-mode pattern:
+			// return findings JSON in the output AND a PackError.
+			output := json.RawMessage(`{"lint":{"ok":false,"error_count":1,"findings":[
+				{"code":"missing_local_asset","severity":"error","file":"/tmp/x/index.html"},
+				{"code":"gsap_studio_edit_blocked","severity":"warning"}
+			]}}`)
+			return output, &PackError{Code: CodeArtifactFailed,
+				Message: "1 error-severity finding(s) in strict mode"}
+		},
+	}
+	ctx := WithCaller(context.Background(), "alice")
+	_, err := eng.Execute(ctx, pack, json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatalf("expected handler error to surface; got nil")
+	}
+
+	// Read the audit row alice wrote. Must contain the findings even
+	// though the handler errored.
+	entries, _ := store.List(context.Background(), "alice", AuditKeyPrefixPack)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit row, got %d", len(entries))
+	}
+	var audit PackAudit
+	if err := json.Unmarshal(entries[0].Value, &audit); err != nil {
+		t.Fatalf("audit decode: %v", err)
+	}
+	if audit.Outcome != string(CodeArtifactFailed) {
+		t.Errorf("outcome = %q, want %q (the typed PackError code)",
+			audit.Outcome, CodeArtifactFailed)
+	}
+	if len(audit.Findings) != 2 {
+		t.Fatalf("expected 2 findings extracted on error path; got %d (PRE-FIX BEHAVIOR: this was 0): %+v",
+			len(audit.Findings), audit.Findings)
+	}
+	if audit.Findings[0].Code != "missing_local_asset" {
+		t.Errorf("first finding code = %q, want missing_local_asset",
+			audit.Findings[0].Code)
+	}
+	if audit.Findings[1].Code != "gsap_studio_edit_blocked" {
+		t.Errorf("second finding code = %q, want gsap_studio_edit_blocked",
+			audit.Findings[1].Code)
+	}
+}
+
 // TestAuditWithoutMemoryIsNoop proves Execute runs unchanged when no
 // memory store is wired (PR #2 must not regress memory-disabled
 // deployments).

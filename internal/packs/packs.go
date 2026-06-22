@@ -528,6 +528,17 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 	start := e.now()
 	logger := e.logger.With("pack", pack.Name, "version", pack.Version)
 
+	// handlerOutput captures the pack handler's raw output for the
+	// audit closure. We assign it RIGHT AFTER safeInvoke returns so
+	// the value survives even when the handler also returns an error
+	// (which short-circuits result back to nil). Empirical surface
+	// 2026-06-22: hyperframes.lint in strict mode returns BOTH the
+	// findings JSON AND a CodeArtifactFailed error. Without this
+	// capture, the audit closure read result.Output (nil on error),
+	// missed all the findings, and broke the v0.29.9 findings-memory
+	// loop. Issue #570 / fix from BYO empirical iteration.
+	var handlerOutput json.RawMessage
+
 	// T510: every pack execution gets one OTel span. Cheap when OTel
 	// is disabled (helmdeck telemetry no-op tracer); free attribute
 	// data when enabled. The deferred closure inspects the named
@@ -560,13 +571,15 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 		// ADR 047 PR #2: audit hook. Writes one row per Execute call
 		// under the caller's bare namespace (cross-session learning).
 		// Nil-store-safe inside writePackAudit; never fails the call.
-		// Output is nil-safe when result is nil (handler errored) —
-		// the findings extractor handles len(output)==0 gracefully.
-		var output json.RawMessage
-		if result != nil {
-			output = result.Output
-		}
-		e.writePackAudit(ctx, pack, input, output, outcome, e.now().Sub(start))
+		// We pass handlerOutput (captured right after safeInvoke) so
+		// findings extraction works even when the handler errored —
+		// e.g. hyperframes.lint in strict mode returns BOTH the
+		// findings JSON AND a CodeArtifactFailed PackError. Reading
+		// result.Output would lose those findings (result is nil on
+		// the error short-circuit). Reading handlerOutput instead
+		// preserves them. The findings extractor handles
+		// len(handlerOutput)==0 gracefully.
+		e.writePackAudit(ctx, pack, input, handlerOutput, outcome, e.now().Sub(start))
 	}()
 
 	// Step 1: input schema. Validation runs against the raw bytes so a
@@ -752,6 +765,11 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 	// reported as CodeHandlerFailed with a fixed message because the
 	// stack itself is not safe to surface to a remote agent.
 	output, err := safeInvoke(ctx, ec, pack.Handler)
+	// Capture handler output BEFORE the error short-circuit so the
+	// audit closure can read it even on the error path. See the
+	// handlerOutput declaration at the top of Execute for the full
+	// rationale (#570 BYO-empirical fix).
+	handlerOutput = output
 	if err != nil {
 		// T206: every handler error funnels through Classify so the
 		// returned code is always one of the closed-set ADR 008 values.

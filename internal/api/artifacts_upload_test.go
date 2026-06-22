@@ -179,6 +179,58 @@ func TestArtifactUpload_NoStore_Returns503(t *testing.T) {
 	}
 }
 
+// --- operator-uploads visibility in default list ------------------------
+// Regression test for the bug where an MP3 uploaded via the new endpoint
+// was correctly persisted but invisible in the Management UI's Artifacts
+// table because GET /api/v1/artifacts iterates the pack registry only —
+// operator-uploads isn't a registered pack name.
+
+func TestArtifactList_NoFilter_IncludesOperatorUploads(t *testing.T) {
+	store := packs.NewMemoryArtifactStore()
+	// Seed both a real-pack artifact AND an operator-uploads one.
+	regArt, err := store.Put(context.Background(), "image.generate", "logo.png",
+		[]byte("img"), "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadArt, err := store.Put(context.Background(), "operator-uploads", "narration.mp3",
+		[]byte("mp3"), "audio/mpeg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newArtifactRouter(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/artifacts", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Artifacts []struct {
+			Key  string `json:"key"`
+			Pack string `json:"pack"`
+		} `json:"artifacts"`
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	// Without the fix: count=0 (no registry wired in newArtifactRouter,
+	// so the pack-loop yields nothing AND operator-uploads is skipped).
+	// With the fix: count=1 (operator-uploads surfaces via the non-pack
+	// namespace list).
+	keys := map[string]bool{}
+	for _, a := range resp.Artifacts {
+		keys[a.Key] = true
+	}
+	if !keys[uploadArt.Key] {
+		t.Errorf("operator-uploads artifact %q missing from default list; got: %+v",
+			uploadArt.Key, resp.Artifacts)
+	}
+	_ = regArt // surfaced when a registry is wired; we test the no-registry path here
+}
+
 // --- filename sanitization ------------------------------------------------
 
 func TestSanitizeUploadFilename(t *testing.T) {

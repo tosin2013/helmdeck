@@ -36,7 +36,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Build the Management UI bundle FIRST so the embedded
       # web/dist/ in the image matches the asset hashes referenced
@@ -121,7 +121,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -173,7 +173,7 @@ jobs:
       contents: read
       id-token: write   # required for OIDC token exchange with npm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: '20'
@@ -204,7 +204,7 @@ jobs:
       contents: read
       id-token: write   # required for OIDC token exchange with npm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: '20'

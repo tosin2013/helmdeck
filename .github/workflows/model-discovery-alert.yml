@@ -38,7 +38,7 @@ jobs:
     # to report) or when it didn't even start (no artifacts to read).
     if: ${{ github.event.workflow_run.conclusion != 'cancelled' && github.event.workflow_run.conclusion != 'skipped' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download per-model reports from the discovery run
         uses: actions/download-artifact@v8

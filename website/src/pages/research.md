@@ -119,6 +119,47 @@ The full ADR series lives at **[/adrs](/adrs)**.
 
 ---
 
+## Collaboration and external replication
+
+The research is open and the project welcomes external contributors. The
+license is Apache 2.0; the findings are openly published; the methodology
+is documented in the linked posts and ADRs. Three kinds of contributions
+are especially valuable right now:
+
+1. **Independent replication** of any finding above — against different
+   model classes, different providers, different harnesses. Replications
+   that *fail* are as useful as ones that succeed; both calibrate the
+   claims.
+2. **New use cases for the architectural patterns**, particularly
+   findings-memory and the audit-callback pattern. Both generalize beyond
+   their original demos; we want to know where else they hold.
+3. **Adversarial verification** — counterexamples, edge cases, alternative
+   framings that refute or refine a finding. The strongest published
+   claims are the ones that have survived skeptical inspection.
+
+If you're working on adjacent problems — weak-model reliability, LLM-agent
+hallucination, prompt-layer empirical reinforcement, structured-output
+robustness — reach out. The research compounds when other people are
+running it too.
+
+**How to engage:**
+
+- Open a GitHub issue at [tosin2013/helmdeck](https://github.com/tosin2013/helmdeck/issues/new)
+  with `research` in the title. Describe the experiment, replication,
+  counterexample, or use case you have in mind.
+- Comment directly on the relevant blog post (each post links from the
+  index above).
+- For longer-form proposals or collaborations, open a GitHub Discussion
+  on the repo (preferred over private email — the conversation benefits
+  others reading later).
+
+This is not a "report a bug" channel. Bugs go through the standard issue
+tracker. This is for research-shaped contributions: experiment proposals,
+replications, write-ups, counterexamples, or pointers to adjacent work
+worth citing.
+
+---
+
 ## Citing this work
 
 If you cite a finding, prefer the blog post URL (durable) or the ADR URL

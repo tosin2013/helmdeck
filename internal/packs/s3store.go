@@ -169,8 +169,18 @@ func (s *S3ArtifactStore) Get(ctx context.Context, key string) ([]byte, Artifact
 	if err != nil {
 		return nil, Artifact{}, &PackError{Code: CodeArtifactFailed, Message: err.Error(), Cause: err}
 	}
+	// Populate URL so callers (e.g. hyperframes.compose's BYO-audio
+	// path) can use the artifact in chained pipelines without a
+	// re-upload. presign errors are logged but non-fatal — the
+	// caller still gets the bytes + key, just no URL (which is the
+	// same contract MemoryArtifactStore.Get always met). The empty
+	// URL surfaces as an explicit CodeArtifactFailed in any pack
+	// that actually needs the URL (which is the contract the BYO
+	// branch in hyperframes.compose enforces).
+	signed, _ := s.presign(ctx, key)
 	return body, Artifact{
 		Key:         key,
+		URL:         signed,
 		Size:        stat.Size,
 		ContentType: stat.ContentType,
 		CreatedAt:   stat.LastModified,

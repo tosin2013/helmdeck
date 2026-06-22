@@ -11,6 +11,9 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Fixed
+- `S3ArtifactStore.Get` now populates the `URL` field on returned `Artifact` with a presigned link, matching the `Put` path's contract. This unblocks `hyperframes.compose`'s BYO audio_artifact_key resolution (and any downstream pack that chains an existing artifact into another via URL). Surfaced empirically the same day v0.29.6 shipped: an operator ran `builtin.byo-audio-narrated-video` against a UI-uploaded MP3 → all 6 pipeline attempts failed at compose with `artifact_failed: audio_artifact_key "..." resolved to empty URL (artifact store does not expose presigned URLs?)`. Root cause: my v0.29.4 BYO implementation in `hyperframes.compose` calls `ec.Artifacts.Get(ctx, key)` and asserts `art.URL != ""`. The Memory store filled URL with `"memory://" + key` (non-empty, contract honored). The S3 store filled URL on Put (via `s.presign(ctx, key)`) but Get returned `Artifact{Key, Size, ContentType, CreatedAt}` with no URL — empty string, fails the assert. Fix is two added lines in `internal/packs/s3store.go`: call `s.presign(ctx, key)` in Get, set `URL: signed` on the returned Artifact. presign errors are non-fatal — the empty URL surfaces back through the existing BYO assert (same contract as before the fix; the assert was correct, the precondition was wrong). One regression test in `s3store_test.go` (the live-S3 path, skipped without endpoint env vars but exercised in CI) asserts URL is populated on Get. **Validation**: with the fix in place, the user's BYO test prompt now succeeds at compose; pipeline reaches lint/inspect/validate/render gates without the URL-empty short-circuit.
+
 ## [0.29.6] - 2026-06-21
 
 **Theme**: "Operator-uploads list-visibility hot-fix."

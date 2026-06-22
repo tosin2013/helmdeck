@@ -211,6 +211,164 @@ func TestDelete(t *testing.T) {
 	}
 }
 
+// TestDeletePrefix — bulk-clear by prefix without decrypting. Covers
+// both backends; the SQLite path is load-bearing for the routing-memory
+// "Clear all history" UI button when the master key has rotated and
+// existing ciphertexts are no longer decryptable (a list-then-delete
+// approach would block at the list step).
+func TestDeletePrefix(t *testing.T) {
+	ctx := context.Background()
+	for name, s := range stores(t) {
+		t.Run(name, func(t *testing.T) {
+			_, _ = s.Put(ctx, "ns", "pack/github.list_issues/aaa", []byte("1"))
+			_, _ = s.Put(ctx, "ns", "pack/github.list_issues/bbb", []byte("2"))
+			_, _ = s.Put(ctx, "ns", "pack/swe.solve/notes", []byte("3"))
+			_, _ = s.Put(ctx, "ns", "pipeline/issue-to-pr/run-1", []byte("4"))
+			_, _ = s.Put(ctx, "ns-other", "pack/should/survive", []byte("5"))
+
+			// Prefix "pack/github.list_issues/" matches 2 entries.
+			n, err := s.DeletePrefix(ctx, "ns", "pack/github.list_issues/")
+			if err != nil {
+				t.Fatalf("DeletePrefix: %v", err)
+			}
+			if n != 2 {
+				t.Errorf("expected 2 deletes, got %d", n)
+			}
+
+			// The matching pair is gone; siblings survive.
+			if _, err := s.Get(ctx, "ns", "pack/github.list_issues/aaa"); err != ErrNotFound {
+				t.Errorf("expected ErrNotFound for deleted key, got %v", err)
+			}
+			if _, err := s.Get(ctx, "ns", "pack/swe.solve/notes"); err != nil {
+				t.Errorf("sibling pack should survive: %v", err)
+			}
+			if _, err := s.Get(ctx, "ns-other", "pack/should/survive"); err != nil {
+				t.Errorf("other namespace should survive: %v", err)
+			}
+
+			// Empty prefix clears the rest of the namespace.
+			n, err = s.DeletePrefix(ctx, "ns", "")
+			if err != nil {
+				t.Fatalf("DeletePrefix empty: %v", err)
+			}
+			if n != 2 {
+				t.Errorf("expected 2 remaining deletes (swe.solve + pipeline), got %d", n)
+			}
+
+			// Cross-namespace isolation: ns-other still intact.
+			if _, err := s.Get(ctx, "ns-other", "pack/should/survive"); err != nil {
+				t.Errorf("ns-other should survive empty-prefix clear of ns: %v", err)
+			}
+
+			// Idempotency: re-running on an empty namespace returns 0.
+			n, err = s.DeletePrefix(ctx, "ns", "")
+			if err != nil {
+				t.Fatalf("DeletePrefix on empty namespace: %v", err)
+			}
+			if n != 0 {
+				t.Errorf("expected 0 on empty namespace, got %d", n)
+			}
+		})
+	}
+}
+
+// TestDeletePrefix_WildcardsTreatedLiterally — SQLite's LIKE uses %
+// and _ as wildcards. A caller's prefix containing those characters
+// MUST NOT match other keys. Critical because the routing-memory
+// audit-key vocabulary is operator-extensible and we can't constrain
+// what's in the prefix.
+func TestDeletePrefix_WildcardsTreatedLiterally(t *testing.T) {
+	ctx := context.Background()
+	for name, s := range stores(t) {
+		t.Run(name, func(t *testing.T) {
+			_, _ = s.Put(ctx, "ns", "pack/100%off", []byte("literal"))
+			_, _ = s.Put(ctx, "ns", "pack/100xoff", []byte("should-survive"))
+			_, _ = s.Put(ctx, "ns", "pack/100_off", []byte("literal underscore"))
+			_, _ = s.Put(ctx, "ns", "pack/100Xoff", []byte("should-survive"))
+
+			n, err := s.DeletePrefix(ctx, "ns", "pack/100%")
+			if err != nil {
+				t.Fatalf("DeletePrefix: %v", err)
+			}
+			if n != 1 {
+				t.Errorf("'%%' should be literal — expected 1 delete, got %d", n)
+			}
+			if _, err := s.Get(ctx, "ns", "pack/100xoff"); err != nil {
+				t.Errorf("wildcard match leaked — pack/100xoff should survive: %v", err)
+			}
+
+			n, err = s.DeletePrefix(ctx, "ns", "pack/100_")
+			if err != nil {
+				t.Fatalf("DeletePrefix _: %v", err)
+			}
+			if n != 1 {
+				t.Errorf("'_' should be literal — expected 1 delete, got %d", n)
+			}
+			if _, err := s.Get(ctx, "ns", "pack/100Xoff"); err != nil {
+				t.Errorf("wildcard match leaked — pack/100Xoff should survive: %v", err)
+			}
+		})
+	}
+}
+
+// TestDeletePrefix_SkipsDecryption — load-bearing for the
+// "memory: decrypt: cipher: message authentication failed" UI recovery
+// path. SQLite-backed only: simulates the operator-visible scenario
+// where the master key has rotated between writes and reads. Confirms
+// DeletePrefix succeeds even when List would fail.
+func TestDeletePrefix_SkipsDecryption_SQLite(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	// Write with one key (the "old" key).
+	oldKey := make([]byte, 32)
+	for i := range oldKey {
+		oldKey[i] = byte(i)
+	}
+	oldStore, err := NewSQLiteStore(db, oldKey)
+	if err != nil {
+		t.Fatalf("oldStore: %v", err)
+	}
+	_, _ = oldStore.Put(ctx, "ns", "pack/old-key/a", []byte("v1"))
+	_, _ = oldStore.Put(ctx, "ns", "pack/old-key/b", []byte("v2"))
+
+	// Re-open with a DIFFERENT key (simulates a restart with a new
+	// ephemeral master). Same DB, different cipher.
+	newKey := make([]byte, 32)
+	for i := range newKey {
+		newKey[i] = byte(i + 1) // different from oldKey
+	}
+	newStore, err := NewSQLiteStore(db, newKey)
+	if err != nil {
+		t.Fatalf("newStore: %v", err)
+	}
+
+	// List under the new key MUST fail (this is the operator-visible
+	// symptom — "memory: decrypt: cipher: message authentication failed").
+	if _, err := newStore.List(ctx, "ns", "pack/old-key/"); err == nil {
+		t.Errorf("expected list to fail under rotated key, but it succeeded")
+	}
+
+	// DeletePrefix MUST succeed and clear the orphaned rows even
+	// though they can't be decrypted.
+	n, err := newStore.DeletePrefix(ctx, "ns", "pack/old-key/")
+	if err != nil {
+		t.Fatalf("DeletePrefix under rotated key: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("expected 2 orphans cleared, got %d", n)
+	}
+
+	// After clear, List works again (no rows → nothing to decrypt).
+	got, err := newStore.List(ctx, "ns", "pack/old-key/")
+	if err != nil {
+		t.Errorf("list after clear should succeed: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty list after clear, got %d entries", len(got))
+	}
+}
+
 func TestListPrefix(t *testing.T) {
 	ctx := context.Background()
 	for name, s := range stores(t) {

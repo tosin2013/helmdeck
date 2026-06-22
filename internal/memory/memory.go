@@ -65,6 +65,15 @@ type MemoryStore interface {
 	Get(ctx context.Context, ns, key string) (Entry, error)
 	List(ctx context.Context, ns, prefix string) ([]Entry, error)
 	Delete(ctx context.Context, ns, key string) error
+	// DeletePrefix removes EVERY entry in (ns) whose key starts with
+	// prefix. Returns the deleted row count. The key difference from
+	// List + per-key Delete is that DeletePrefix never decrypts —
+	// the SQL DELETE works on raw rows. This lets `forget` clear
+	// orphaned entries left by ephemeral-key rotation (memory-key
+	// changed between writes and reads → decrypt fails on every
+	// list-then-delete pass → forget gets stuck). An empty prefix
+	// matches every key in the namespace.
+	DeletePrefix(ctx context.Context, ns, prefix string) (int, error)
 	ListAll(ctx context.Context) ([]Entry, error)
 	DeleteExpired(ctx context.Context) (int, error)
 }
@@ -204,6 +213,27 @@ func (s *InMemoryStore) Delete(ctx context.Context, ns, key string) error {
 	defer s.mu.Unlock()
 	delete(s.entries, mapKey(ns, key))
 	return nil
+}
+
+func (s *InMemoryStore) DeletePrefix(ctx context.Context, ns, prefix string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nsPrefix := mapKey(ns, prefix)
+	deleted := 0
+	for mk := range s.entries {
+		// mapKey is ns + "\x00" + key, so checking HasPrefix(mk, nsPrefix)
+		// correctly limits matching to keys IN the given namespace
+		// whose key portion starts with prefix.
+		if hasPrefix(mk, nsPrefix) {
+			delete(s.entries, mk)
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+func hasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
 
 func (s *InMemoryStore) ListAll(ctx context.Context) ([]Entry, error) {

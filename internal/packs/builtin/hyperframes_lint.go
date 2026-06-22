@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/session"
@@ -52,6 +53,20 @@ func HyperframesLint() *packs.Pack {
 		Description: "Pre-render validation for hyperframes scaffold projects. Wraps upstream `hyperframes lint --json` to catch render-killing issues — missing media id (audio silent in renders), Google Fonts imports (silent in sandboxed renders), manual __timelines registrations that conflict with the runtime's auto-discovery, composition self-attribute selectors that leak across embedded instances. Findings are typed (code/severity/message/fixHint/snippet/file). By default returns success even with errors — findings ARE the output. Pass `strict:true` to surface error-severity findings as a typed CodeArtifactFailed for CI / publish-gate use. Pairs with `hyperframes.render` (run lint first, then render only if clean) and slots into `builtin.scaffolded-narrated-video` between `attach_audio` and `render`.",
 		NeedsSession: true,
 		Async:        false,
+		// Pin to the hyperframes sidecar image so the `hyperframes lint`
+		// CLI is on PATH. Same convention as hyperframes.render
+		// (HELMDECK_SIDECAR_HYPERFRAMES env override). Without this
+		// pin, the session executor spawns into the default base
+		// sidecar which doesn't have the hyperframes CLI installed,
+		// and the exec returns exit 127 ("command not found") with no
+		// JSON output for the handler to parse. Lint is fast — ~1s
+		// for a single file — so 5 min is a generous cap.
+		SessionSpec: session.Spec{
+			Image:       hyperframesSidecarImage(),
+			MemoryLimit: "1g",
+			Timeout:     5 * time.Minute,
+			CPUProfile:  session.ProfileIO,
+		},
 		InputSchema: packs.BasicSchema{
 			Properties: map[string]string{
 				// Same input shape as hyperframes.render — pass exactly

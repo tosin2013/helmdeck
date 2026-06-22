@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/session"
@@ -45,6 +46,18 @@ func HyperframesInspect() *packs.Pack {
 		Description: "Runtime-layout pre-render diagnostic for hyperframes scaffold projects. Wraps upstream `hyperframes inspect --json` to catch text/container overflow, element collapse, and transition-seam overlaps by loading the project in headless Chrome and sampling the DOM at N timestamps (default 9 midpoint samples). Pair with `hyperframes.lint` (catches static issues from source) and `hyperframes.validate` (catches console errors + WCAG contrast). Set `at_transitions:true` to sample every tween start/end boundary — catches transient overlaps that only fire at transition seams. Soft-surface by default; pass `strict:true` to gate downstream packs on a clean inspection result.",
 		NeedsSession: true,
 		Async:        false,
+		// Pin to the hyperframes sidecar image — `hyperframes inspect`
+		// loads the composition in headless Chrome, which is bundled
+		// with the hyperframes CLI in helmdeck-sidecar-hyperframes.
+		// Inspect samples N timestamps in headless Chrome so it's
+		// heavier than lint but lighter than render — 10 min is the
+		// safe cap for a 720s composition with at_transitions sampling.
+		SessionSpec: session.Spec{
+			Image:       hyperframesSidecarImage(),
+			MemoryLimit: "2g",
+			Timeout:     10 * time.Minute,
+			CPUProfile:  session.ProfileCompute,
+		},
 		InputSchema: packs.BasicSchema{
 			Properties: map[string]string{
 				// Same input shape as lint + render.

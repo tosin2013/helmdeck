@@ -11,6 +11,14 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+## [0.29.6] - 2026-06-21
+
+**Theme**: "Operator-uploads list-visibility hot-fix."
+
+Same-day hot-fix to v0.29.5's drag-drop upload card. The upload bytes layer was fine (artifact persisted + downloadable + usable by pipelines), but the Management UI's Artifacts page table didn't surface operator-uploaded files because the default list endpoint iterates the pack registry only. v0.29.6 ships the targeted fix: after the pack-registry loop, also iterate special non-pack namespaces (currently `operator-uploads`) and append their artifacts to the result. Operators can now see their uploads in the Artifacts table immediately after dropping a file. Back-compat-safe; no API surface change, no pipeline shape change. Single-PR release pattern matching the v0.13.1 same-day-hotfix discipline (see the 2026-05-13 v0.12.1 blog post for the rationale).
+
+**Operator upgrade**: clean — single backend code change. After tag push, pull `ghcr.io/tosin2013/helmdeck:0.29.6`, restart control-plane. The sidecar-hyperframes image is unchanged from v0.29.5 — no need to pull or restart anything else. The fix is purely in the artifact-list HTTP handler; existing operator-uploads keys from v0.29.5 (which were correctly persisted, just invisibly) immediately become listable in the UI.
+
 ### Fixed
 - `GET /api/v1/artifacts` (the Management UI's Artifacts list endpoint) now surfaces `operator-uploads/*` artifacts in the default listing. Bug surfaced empirically the same day v0.29.5 shipped: an operator uploaded an MP3 via the new drag-drop card (PR #556), the upload succeeded (the `operator-uploads/<hash>-<filename>` key was returned + the bytes were correctly stored — verified via `GET /api/v1/artifacts/download/<key>` returning 200 + 2.65 MB), but the artifact didn't appear in the Artifacts page table. Root cause: the default list (no `?pack=` filter) iterates the **pack registry** and queries `store.ListForPack(packName)` for each registered pack. `operator-uploads` isn't a registered pack — it's a special namespace introduced by the upload endpoint. So the iteration skipped it entirely. Fix: after the pack-registry loop, also iterate a hardcoded list of special non-pack namespaces (currently just `operator-uploads`) and append their artifacts to the result. The artifacts were always in the store + listable via `?pack=operator-uploads` filter; this just makes them visible in the default view. One regression test covers the no-registry-wired path (which would have caught the bug in CI if we'd added it on the original PR #556).
 

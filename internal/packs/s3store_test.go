@@ -79,4 +79,12 @@ func TestS3ArtifactStoreLive(t *testing.T) {
 	if string(body) != "hello world" || meta.Size != 11 {
 		t.Errorf("body=%q meta=%+v", body, meta)
 	}
+	// Regression for the BYO-audio failure surfaced in production:
+	// Get used to return an Artifact with empty URL, which broke
+	// hyperframes.compose's audio_artifact_key resolution path
+	// (CodeArtifactFailed: resolved to empty URL). Post-fix, Get
+	// matches Put — both populate URL with a presigned link.
+	if meta.URL == "" {
+		t.Errorf("Get returned empty URL; hyperframes.compose BYO path will fail. meta=%+v", meta)
+	}
 }

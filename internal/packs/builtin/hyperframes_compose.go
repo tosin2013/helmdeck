@@ -480,6 +480,15 @@ func hyperframesComposeHandler(d vision.Dispatcher) packs.HandlerFunc {
 			styleNote = " Visual style: " + s + "."
 		}
 		system := composeSystemPromptFor(in.Model, preset.Width, preset.Height, duration, audioNote, styleNote)
+		// Findings-memory prefix (#570 slice 4). When the caller has
+		// accumulated lint/inspect/validate findings from prior runs,
+		// append a "FINDINGS FROM YOUR PRIOR RUNS" section to the
+		// system prompt so the LLM sees concrete antipattern counts
+		// alongside the abstract authoring rules. Empty findings →
+		// empty prefix → zero token cost for new callers.
+		if prefix := buildFindingsPrefix(ec); prefix != "" {
+			system += prefix
+		}
 
 		ec.Report(10, fmt.Sprintf("composing a %dx%d video", preset.Width, preset.Height))
 		mt := maxTokens
@@ -1102,4 +1111,70 @@ func generateComposeEngagement(
 	// know which schema to apply.
 	out["format"] = band
 	return out, nil
+}
+
+// composeFindingsTopN caps how many common findings the compose
+// prompt prefix includes. 10 is roomy enough to surface the most
+// frequent failure modes (we saw 3 in a single empirical lint run)
+// without flooding the model's instruction budget. Plus a hard
+// upper bound on the prefix's token cost.
+const composeFindingsTopN = 10
+
+// buildFindingsPrefix reads the caller's pack_history audit rows via
+// ec.Memory (namespace-scoped to the caller subject), aggregates
+// common findings, and formats them as a system-prompt suffix to
+// remind the LLM what concrete antipatterns it's produced in prior
+// runs. Empty when memory is unavailable, when the caller has no
+// history, or when no audit row carried any findings. Issue #570
+// slice 4.
+//
+// Why a SUFFIX rather than prepending to the user message: the
+// findings are RULES (per-caller learned constraints), conceptually
+// the same kind of thing the existing system prompt encodes. Keeping
+// them in the system message preserves the per-conversation behavior
+// where the gateway / OpenRouter can cache the system half across
+// requests. The user message stays caller's verbatim description.
+//
+// Token budget: ~30 tokens per finding (code + count + severity +
+// boilerplate). At composeFindingsTopN=10, the prefix tops out at
+// ~300 tokens — negligible against the multi-thousand-token compose
+// prompt.
+func buildFindingsPrefix(ec *packs.ExecutionContext) string {
+	if ec == nil || ec.Memory == nil {
+		return ""
+	}
+	entries, err := ec.Memory.List(packs.AuditKeyPrefixPack)
+	if err != nil || len(entries) == 0 {
+		return ""
+	}
+	audits := make([]packs.PackAudit, 0, len(entries))
+	for _, e := range entries {
+		var a packs.PackAudit
+		if err := json.Unmarshal(e.Value, &a); err != nil {
+			continue
+		}
+		audits = append(audits, a)
+	}
+	defaults := packs.ProjectDefaults(audits, nil)
+	if len(defaults.CommonFindings) == 0 {
+		return ""
+	}
+	top := defaults.CommonFindings
+	if len(top) > composeFindingsTopN {
+		top = top[:composeFindingsTopN]
+	}
+	var b strings.Builder
+	b.WriteString("\n\nFINDINGS FROM YOUR PRIOR RUNS — concrete antipatterns you have produced before. Each is documented in your authoring rules; the count tells you how often you have ignored that rule. Treat each as a hard constraint for THIS run:\n")
+	for _, f := range top {
+		sev := f.Severity
+		if sev == "" {
+			sev = "warning"
+		}
+		// Format: "- <code> (seen N times, severity=...): refer to the
+		// authoring rules for the fix." Concise — the rules themselves
+		// already define the remediation.
+		fmt.Fprintf(&b, "- %s (seen %d time(s), severity=%s)\n", f.Code, f.OccurrenceCount, sev)
+	}
+	b.WriteString("Do not produce HTML, CSS, or JS that would trigger any of the codes above.\n")
+	return b.String()
 }

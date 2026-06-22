@@ -11,6 +11,9 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Fixed
+- `hyperframes.{lint,inspect,validate}` packs (v0.29.4 pre-render validation suite) now pin `SessionSpec.Image` to `hyperframesSidecarImage()`, matching `hyperframes.render`'s pattern. Surfaced empirically the same day v0.29.7 shipped: a `builtin.byo-audio-narrated-video` run failed at the lint step with `handler_failed: hyperframes lint emitted no JSON (exit 127)`. Exit code 127 is bash for "command not found" — the lint pack was being spawned into the **default base sidecar** (helmdeck-sidecar:latest) which doesn't have the `hyperframes` CLI on PATH. The render pack pins the right image via `Image: hyperframesSidecarImage()` in its `SessionSpec`; my v0.29.4 lint/inspect/validate packs set `NeedsSession: true` but forgot the image pin, so the session executor used its default. Fix: add the same `SessionSpec.Image = hyperframesSidecarImage()` pin to all three packs, plus sensible MemoryLimit/Timeout/CPUProfile defaults per pack's compute shape (lint: 1g/5min/IO; inspect: 2g/10min/Compute since it loads in headless Chrome with at_transitions sampling; validate: 2g/5min/Compute since it boots Chrome + DevTools console). Operator-visible effect: the `builtin.byo-audio-narrated-video` pipeline now actually completes the lint→inspect→validate gates instead of exit-127-failing at lint. Both the `HELMDECK_SIDECAR_HYPERFRAMES` env override + the default pinned image are honored, matching render's behavior.
+
 ## [0.29.7] - 2026-06-22
 
 **Theme**: "BYO empirical-test recovery — two same-day-surfaced production blockers fixed."

@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tosin2013/helmdeck/internal/packs"
 	"github.com/tosin2013/helmdeck/internal/session"
@@ -44,6 +45,16 @@ func HyperframesValidate() *packs.Pack {
 		Description: "Runtime-error pre-render diagnostic for hyperframes scaffold projects. Wraps upstream `hyperframes validate --json` — loads the composition in headless Chrome and reports DevTools console errors (CORS failures, missing assets, JS exceptions) plus (by default) WCAG AA contrast issues across sampled timestamps. Catches the failure modes that lint can't see (static-source-only) and inspect doesn't surface (layout-only): a composition script that throws on load, a CORS-blocked video URL that produces a blank media element, an external font fetch the sandbox blocks. Soft-surface by default; pass `strict:true` to gate downstream packs on a clean validation. Final third of the pre-render validation suite alongside `hyperframes.lint` (static) and `hyperframes.inspect` (layout).",
 		NeedsSession: true,
 		Async:        false,
+		// Pin to the hyperframes sidecar image — `hyperframes validate`
+		// loads the composition in headless Chrome to capture console
+		// errors and run the WCAG contrast audit. Same image as
+		// render/lint/inspect — bundles the CLI + headless Chrome.
+		SessionSpec: session.Spec{
+			Image:       hyperframesSidecarImage(),
+			MemoryLimit: "2g",
+			Timeout:     5 * time.Minute,
+			CPUProfile:  session.ProfileCompute,
+		},
 		InputSchema: packs.BasicSchema{
 			Properties: map[string]string{
 				"project_artifact_key": "string",

@@ -70,9 +70,36 @@ interface MemoryDefaultsResponse {
 // Backed by GET /api/v1/memory/defaults and POST /api/v1/memory/forget
 // (internal/api/memory.go). Same data, different transport, as the
 // MCP resource helmdeck://my-defaults (ADR 047 PR #2/4).
+interface CallerEntry {
+  namespace: string;
+  count: number;
+}
+
+interface CallersResponse {
+  callers: CallerEntry[];
+}
+
 export function MemoryPage() {
+  // Caller selector (#569). Admin operators can switch to inspect what
+  // another caller (typically an agent like openclaw-configure) has
+  // been doing. Non-admins get back just their own caller from the
+  // endpoint, so the dropdown shows only one entry and switching is a
+  // no-op (defense in depth — the /defaults endpoint also blocks the
+  // override server-side).
+  const { data: callersData } = useApi<CallersResponse>(
+    ['memory-callers'],
+    '/api/v1/memory/callers',
+  );
+  const callers = callersData?.callers ?? [];
+  const [selectedCaller, setSelectedCaller] = useState<string>('');
+  const defaultsURL = selectedCaller
+    ? `/api/v1/memory/defaults?caller=${encodeURIComponent(selectedCaller)}`
+    : '/api/v1/memory/defaults';
   const { data, isLoading, error, refetch, isFetching } =
-    useApi<MemoryDefaultsResponse>(['memory-defaults'], '/api/v1/memory/defaults');
+    useApi<MemoryDefaultsResponse>(
+      ['memory-defaults', selectedCaller || 'self'],
+      defaultsURL,
+    );
   const fetchWithAuth = useAuthFetch();
   const qc = useQueryClient();
   const [busyScope, setBusyScope] = useState<string | null>(null);
@@ -112,7 +139,24 @@ export function MemoryPage() {
             after 30 days; this page lets you clear sooner. ADR 047.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {callers.length > 1 && (
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>View caller:</span>
+              <select
+                value={selectedCaller}
+                onChange={(e) => setSelectedCaller(e.target.value)}
+                className="rounded-md border bg-background px-2 py-1.5 text-sm"
+              >
+                <option value="">(self)</option>
+                {callers.map((c) => (
+                  <option key={c.namespace} value={c.namespace}>
+                    {c.namespace} ({c.count})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <Button
             variant="outline"
             onClick={() => refetch()}

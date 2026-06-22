@@ -60,11 +60,24 @@ type Entry struct {
 // call. List filters by key prefix within a namespace. ListAll and
 // DeleteExpired are the janitor surface (cross-namespace), mirroring
 // ArtifactStore's ListAll + Delete.
+// NamespaceCount is one row in MemoryStore.ListNamespaces — a caller
+// subject plus the count of memory rows that caller has written.
+type NamespaceCount struct {
+	Namespace string `json:"namespace"`
+	Count     int    `json:"count"`
+}
+
 type MemoryStore interface {
 	Put(ctx context.Context, ns, key string, value []byte, opts ...PutOption) (Entry, error)
 	Get(ctx context.Context, ns, key string) (Entry, error)
 	List(ctx context.Context, ns, prefix string) ([]Entry, error)
 	Delete(ctx context.Context, ns, key string) error
+	// ListNamespaces returns every namespace currently present in the
+	// store plus the row count per namespace. Used by the Routing
+	// Memory caller-selector UI so admins can see which caller has
+	// activity to inspect. NamespaceCount entries are sorted by row
+	// count descending — the busiest caller floats to the top.
+	ListNamespaces(ctx context.Context) ([]NamespaceCount, error)
 	// DeletePrefix removes EVERY entry in (ns) whose key starts with
 	// prefix. Returns the deleted row count. The key difference from
 	// List + per-key Delete is that DeletePrefix never decrypts —
@@ -213,6 +226,46 @@ func (s *InMemoryStore) Delete(ctx context.Context, ns, key string) error {
 	defer s.mu.Unlock()
 	delete(s.entries, mapKey(ns, key))
 	return nil
+}
+
+func (s *InMemoryStore) ListNamespaces(ctx context.Context) ([]NamespaceCount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	counts := map[string]int{}
+	for mk := range s.entries {
+		// mapKey is ns + "\x00" + key — split on the first NUL.
+		idx := -1
+		for i, r := range mk {
+			if r == '\x00' {
+				idx = i
+				break
+			}
+		}
+		if idx > 0 {
+			counts[mk[:idx]]++
+		}
+	}
+	out := make([]NamespaceCount, 0, len(counts))
+	for ns, c := range counts {
+		out = append(out, NamespaceCount{Namespace: ns, Count: c})
+	}
+	// Sort by Count descending, then Namespace ascending for stable
+	// ordering when counts tie.
+	sortNamespaceCounts(out)
+	return out, nil
+}
+
+func sortNamespaceCounts(s []NamespaceCount) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0; j-- {
+			if s[j].Count > s[j-1].Count ||
+				(s[j].Count == s[j-1].Count && s[j].Namespace < s[j-1].Namespace) {
+				s[j], s[j-1] = s[j-1], s[j]
+				continue
+			}
+			break
+		}
+	}
 }
 
 func (s *InMemoryStore) DeletePrefix(ctx context.Context, ns, prefix string) (int, error) {

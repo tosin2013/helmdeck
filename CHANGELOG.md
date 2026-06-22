@@ -11,6 +11,9 @@ and the hard exit gates for each — see
 
 ## [Unreleased]
 
+### Fixed
+- Findings extraction on the **error path**: pack handlers that return BOTH a structured output AND a `PackError` (e.g. `hyperframes.lint` in strict mode — its standard contract returns the findings JSON + `CodeArtifactFailed`) now correctly land findings in the audit row. Surfaced empirically minutes after v0.29.9 deployed: re-ran the BYO pipeline, lint failed with `artifact_failed`, the lint sidecar artifact contained findings, but `/api/v1/memory/defaults` showed `common_findings: 0`. Root cause: `Engine.Execute`'s post-handler short-circuit `if err != nil { return nil, wrap(err) }` returns `nil` as the result, and the audit deferred-closure was reading `result.Output` — so the output blob that the handler had written got dropped before findings extraction ran. **The error path is exactly where we WANT findings recorded** (the lint pack's strict-mode contract is "emit findings + error"). Fix: declare `var handlerOutput json.RawMessage` at the top of `Execute`, assign it right after `safeInvoke` returns (BEFORE the error short-circuit), pass it to `writePackAudit` from the closure. One regression test simulates the lint-strict pattern (return findings JSON + `CodeArtifactFailed`) and asserts the audit row's `Findings` field carries the 2 codes — pre-fix this was 0, post-fix it's 2. 1672 tests pass across packs + api + memory + packs/builtin. Closes the empirical gap surfaced by the first post-v0.29.9 BYO run; without this, the findings-memory loop **never closes** on Tier C runs because validation packs in strict mode always error.
+
 ## [0.29.9] - 2026-06-22
 
 **Theme**: "Empirical-reinforcement loop closes + admin observability."

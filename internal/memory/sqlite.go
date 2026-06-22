@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -164,6 +165,38 @@ func (s *SQLiteStore) Delete(ctx context.Context, ns, key string) error {
 		return fmt.Errorf("memory: delete: %w", err)
 	}
 	return nil
+}
+
+// DeletePrefix removes every row in (ns) whose key starts with prefix.
+// Never decrypts — the SQL DELETE operates on raw rows. This is the
+// load-bearing escape hatch when the memory key has rotated and the
+// existing ciphertexts are no longer decryptable: list-then-delete
+// gets stuck at the list step, but DeletePrefix succeeds because it
+// never touches ciphertext.
+//
+// An empty prefix matches every key in the namespace. Pattern uses
+// SQLite's LIKE with a literal-prefix + '%' wildcard, escaping '%'
+// and '_' (LIKE's wildcards) in the caller's prefix so a key
+// containing '%' isn't treated as a wildcard match.
+func (s *SQLiteStore) DeletePrefix(ctx context.Context, ns, prefix string) (int, error) {
+	// Escape LIKE wildcards in the prefix so a literal '%' or '_' in
+	// the caller's prefix matches itself, not "anything". '\' is the
+	// ESCAPE clause character below.
+	esc := func(p string) string {
+		p = strings.ReplaceAll(p, `\`, `\\`)
+		p = strings.ReplaceAll(p, "%", `\%`)
+		p = strings.ReplaceAll(p, "_", `\_`)
+		return p
+	}
+	pattern := esc(prefix) + "%"
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM memory_entries WHERE namespace = ? AND key LIKE ? ESCAPE '\'`,
+		ns, pattern)
+	if err != nil {
+		return 0, fmt.Errorf("memory: delete prefix: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 func (s *SQLiteStore) ListAll(ctx context.Context) ([]Entry, error) {

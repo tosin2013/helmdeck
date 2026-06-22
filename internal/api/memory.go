@@ -143,20 +143,20 @@ func registerMemoryRoutes(mux *http.ServeMux, deps Deps) {
 			writeJSON(w, http.StatusOK, memoryForgetResponse{Scope: scope, Deleted: 0})
 			return
 		}
+		// Use DeletePrefix instead of list-then-delete. Critical when
+		// the memory key has rotated (ephemeral master across
+		// restarts) — listing decrypts every row, so a single
+		// undecryptable orphan blocks forget from clearing anything.
+		// DeletePrefix never reads ciphertext; it just DELETEs by
+		// prefix at the SQL layer.
 		deleted := 0
 		for _, p := range prefixes {
-			entries, lerr := store.List(r.Context(), caller, p)
-			if lerr != nil {
-				writeError(w, http.StatusInternalServerError, "internal", "list: "+lerr.Error())
+			n, derr := store.DeletePrefix(r.Context(), caller, p)
+			if derr != nil {
+				writeError(w, http.StatusInternalServerError, "internal", "delete prefix: "+derr.Error())
 				return
 			}
-			for _, e := range entries {
-				if derr := store.Delete(r.Context(), caller, e.Key); derr != nil {
-					writeError(w, http.StatusInternalServerError, "internal", "delete: "+derr.Error())
-					return
-				}
-				deleted++
-			}
+			deleted += n
 		}
 		writeJSON(w, http.StatusOK, memoryForgetResponse{Scope: scope, Deleted: deleted})
 	})

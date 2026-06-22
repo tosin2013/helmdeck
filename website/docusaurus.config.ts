@@ -100,6 +100,7 @@ const config: Config = {
             bump('/explanation/why-helmdeck', 0.85, 'monthly');        // long-form positioning page
             bump('/integrations', 0.8, 'weekly');                      // index
             bump('/blog', 0.8, 'weekly');                              // blog index
+            bump('/research', 0.85, 'monthly');                        // research index — citeable from grants
             bump('/tutorials/install-cli', 0.8, 'monthly');
             bump('/tutorials/install-ui-walkthrough', 0.8, 'monthly');
             bump('/integrations/pack-demo-playbook', 0.8, 'monthly');
@@ -226,6 +227,7 @@ const config: Config = {
         {to: '/cookbook/intent-to-prompt', label: 'Cookbook',   position: 'left'},
         {type: 'docSidebar', sidebarId: 'explanation', label: 'Explanation', position: 'left'},
         {to: '/blog', label: 'Blog', position: 'left'},
+        {to: '/research', label: 'Research', position: 'left'},
         {to: '/changelog', label: 'Changelog', position: 'left'},
         {
           href: 'https://github.com/tosin2013/helmdeck',
@@ -251,6 +253,7 @@ const config: Config = {
           title: 'Project',
           items: [
             {label: 'Blog', to: '/blog'},
+            {label: 'Research', to: '/research'},
             {label: 'Changelog', to: '/changelog'},
             {label: 'Architecture Decisions', to: '/adrs'},
             {label: 'Tasks', to: '/TASKS'},

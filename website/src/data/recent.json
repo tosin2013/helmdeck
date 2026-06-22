@@ -3,6 +3,17 @@
   "count": 8,
   "posts": [
     {
+      "slug": "child-composition-slot-lifetime",
+      "title": "Render ≠ preview: what we learned shipping a hyperframes integration",
+      "description": "A v0.29.2 pipeline produced 15 seconds of animation followed by 83 seconds of blank canvas. We assumed it was a slot-lifetime bug, filed upstream issues, shipped a fix, and tagged a release — then discovered that even upstream's own decision-tree example doesn't render at all (2 distinct frames over 15 seconds). The actual story: hyperframes has a known, documented 'render ≠ preview' bug class, and the registry's own decision-tree trips over it. Upstream's own `hyperframes lint` was telling us this the whole time. We wrapped it as a helmdeck pack so the next agent catches it before burning the render budget.",
+      "date": "2026-06-17",
+      "tags": [
+        "friction",
+        "field-report"
+      ],
+      "permalink": "/blog/child-composition-slot-lifetime"
+    },
+    {
       "slug": "upstream-spec-drift",
       "title": "When agent-instruction docs drift from upstream spec",
       "description": "I wrote a best-practices guide for helmdeck's HyperFrames integration. A maintainer asked one question — 'where's this sourced from?' — and the answer turned out to be 'I made it up.' Here's what we did about it, and the broader lesson for anyone writing agent reference docs.",
@@ -90,18 +101,6 @@
         "agent-architecture"
       ],
       "permalink": "/blog/cookbook-recipes-beat-tutorials"
-    },
-    {
-      "slug": "validation-arc-caught-its-own-first-bug",
-      "title": "We shipped a 4-phase reliability arc. The first bug it caught was itself.",
-      "description": "A four-phase validation arc shipped across PRs #428–#433. The first time we ran it production-shaped, it caught a Dockerfile/runtime image mismatch that had been silently masking changes for months. Plus what a 120B free-tier model did to our planner.",
-      "date": "2026-06-05",
-      "tags": [
-        "friction",
-        "agent-architecture",
-        "weak-models"
-      ],
-      "permalink": "/blog/validation-arc-caught-its-own-first-bug"
     }
   ]
 }

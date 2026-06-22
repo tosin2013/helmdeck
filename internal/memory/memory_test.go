@@ -211,6 +211,59 @@ func TestDelete(t *testing.T) {
 	}
 }
 
+// TestListNamespaces — caller-selector data source for the Routing
+// Memory UI (issue #569). Returns distinct namespaces + row counts,
+// sorted busiest-first.
+func TestListNamespaces(t *testing.T) {
+	ctx := context.Background()
+	for name, s := range stores(t) {
+		t.Run(name, func(t *testing.T) {
+			// 3 entries under "admin"
+			_, _ = s.Put(ctx, "admin", "a/1", []byte("v"))
+			_, _ = s.Put(ctx, "admin", "a/2", []byte("v"))
+			_, _ = s.Put(ctx, "admin", "a/3", []byte("v"))
+			// 5 entries under "openclaw"
+			for i := 0; i < 5; i++ {
+				_, _ = s.Put(ctx, "openclaw", "x/"+string(rune('a'+i)), []byte("v"))
+			}
+			// 1 entry under "calibrate"
+			_, _ = s.Put(ctx, "calibrate", "k", []byte("v"))
+
+			got, err := s.ListNamespaces(ctx)
+			if err != nil {
+				t.Fatalf("ListNamespaces: %v", err)
+			}
+			if len(got) != 3 {
+				t.Fatalf("expected 3 namespaces, got %d: %+v", len(got), got)
+			}
+			// Busiest first — openclaw (5), admin (3), calibrate (1).
+			if got[0].Namespace != "openclaw" || got[0].Count != 5 {
+				t.Errorf("expected openclaw=5 first, got %+v", got[0])
+			}
+			if got[1].Namespace != "admin" || got[1].Count != 3 {
+				t.Errorf("expected admin=3 second, got %+v", got[1])
+			}
+			if got[2].Namespace != "calibrate" || got[2].Count != 1 {
+				t.Errorf("expected calibrate=1 third, got %+v", got[2])
+			}
+
+			// Empty store returns empty list (or nil — either is fine
+			// for the UI's empty-state branch). Verified via DeletePrefix
+			// to drain all three namespaces.
+			for _, ns := range []string{"admin", "openclaw", "calibrate"} {
+				_, _ = s.DeletePrefix(ctx, ns, "")
+			}
+			got, err = s.ListNamespaces(ctx)
+			if err != nil {
+				t.Fatalf("ListNamespaces empty: %v", err)
+			}
+			if len(got) != 0 {
+				t.Errorf("expected empty after drain, got %+v", got)
+			}
+		})
+	}
+}
+
 // TestDeletePrefix — bulk-clear by prefix without decrypting. Covers
 // both backends; the SQLite path is load-bearing for the routing-memory
 // "Clear all history" UI button when the master key has rotated and

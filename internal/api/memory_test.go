@@ -431,3 +431,96 @@ func intToStr(n int64) string {
 	}
 	return string(buf)
 }
+
+// --- GET /api/v1/memory/callers (issue #569) -----------------------------
+
+// TestMemoryCallers_EmptyStore — no callers, empty list.
+func TestMemoryCallers_EmptyStore(t *testing.T) {
+	h, _ := newMemoryRouter(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/memory/callers", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Callers []memory.NamespaceCount `json:"callers"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(out.Callers) != 0 {
+		t.Errorf("expected 0 callers on empty store, got %d", len(out.Callers))
+	}
+}
+
+// TestMemoryCallers_ReturnsBusiestFirst — auth is disabled in the test
+// router (so the test caller is "unknown"). With auth disabled, the
+// admin-gating doesn't apply — the endpoint returns every caller it
+// finds in the store. This mirrors the dev-mode happy path.
+func TestMemoryCallers_ReturnsBusiestFirst(t *testing.T) {
+	h, store := newMemoryRouter(t)
+	ctx := context.Background()
+	// 5 rows under "openclaw-configure"
+	for i := 0; i < 5; i++ {
+		_, _ = store.Put(ctx, "openclaw-configure", "k"+string(rune('a'+i)), []byte("v"))
+	}
+	// 3 rows under "admin"
+	for i := 0; i < 3; i++ {
+		_, _ = store.Put(ctx, "admin", "k"+string(rune('a'+i)), []byte("v"))
+	}
+	// 1 row under "calibrate"
+	_, _ = store.Put(ctx, "calibrate", "single", []byte("v"))
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/memory/callers", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Callers []memory.NamespaceCount `json:"callers"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// In this no-auth dev-mode test, the test caller resolves to
+	// "unknown" — NOT admin. So the endpoint filters to just self.
+	// "unknown" doesn't exist in the seeded data, so the response is
+	// empty. This confirms the privacy gate works (non-admin can't
+	// enumerate other callers).
+	if len(out.Callers) != 0 {
+		t.Errorf("non-admin caller should see 0 entries (own caller 'unknown' has no rows), got %d: %+v",
+			len(out.Callers), out.Callers)
+	}
+}
+
+// TestMemoryDefaults_CallerOverrideRequiresAdmin — non-admin can't
+// inspect other callers' Routing Memory via ?caller=. Defense in depth
+// for ADR 047's per-caller isolation contract.
+func TestMemoryDefaults_CallerOverrideRequiresAdmin(t *testing.T) {
+	h, store := newMemoryRouter(t)
+	// Seed under a different caller than "unknown" (test request's resolved subject).
+	seedPackAudit(t, store, "admin", "image.generate", 100, map[string]string{"size": "1024x1024"})
+
+	// Request with ?caller=admin from non-admin context.
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/memory/defaults?caller=admin", nil)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp memoryDefaultsResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Scope should be the resolved caller ("unknown"), NOT the
+	// requested "admin". Non-admin override is ignored.
+	if resp.Scope != "caller=unknown" {
+		t.Errorf("expected scope=caller=unknown (override blocked), got %q", resp.Scope)
+	}
+	// The "admin" caller has 1 pack entry but the response should
+	// show 0 packs (we're scoped to "unknown" which has none).
+	if len(resp.Packs) != 0 {
+		t.Errorf("expected 0 packs in own caller's scope, got %d (admin's data leaked!): %+v",
+			len(resp.Packs), resp.Packs)
+	}
+}

@@ -167,6 +167,31 @@ func (s *SQLiteStore) Delete(ctx context.Context, ns, key string) error {
 	return nil
 }
 
+// ListNamespaces returns every namespace currently in the table plus
+// its row count. Sorted busiest-first so the Routing Memory UI's
+// caller-selector defaults to the heaviest activity. Never decrypts —
+// reads only the indexed `namespace` column.
+func (s *SQLiteStore) ListNamespaces(ctx context.Context) ([]NamespaceCount, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT namespace, COUNT(*) AS c
+		   FROM memory_entries
+		  GROUP BY namespace
+		  ORDER BY c DESC, namespace ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("memory: list namespaces: %w", err)
+	}
+	defer rows.Close()
+	var out []NamespaceCount
+	for rows.Next() {
+		var n NamespaceCount
+		if err := rows.Scan(&n.Namespace, &n.Count); err != nil {
+			return nil, fmt.Errorf("memory: scan namespace: %w", err)
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // DeletePrefix removes every row in (ns) whose key starts with prefix.
 // Never decrypts — the SQL DELETE operates on raw rows. This is the
 // load-bearing escape hatch when the memory key has rotated and the

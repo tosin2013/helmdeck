@@ -86,6 +86,17 @@ type memoryStoreResponse struct {
 func registerMemoryRoutes(mux *http.ServeMux, deps Deps) {
 	mux.HandleFunc("GET /api/v1/memory/defaults", func(w http.ResponseWriter, r *http.Request) {
 		caller := callerSubject(r)
+		// Admin override: ?caller=<name> lets a holder of the admin
+		// scope inspect another caller's Routing Memory. Non-admin
+		// callers see their own scope regardless of the query param —
+		// defense in depth for the per-caller isolation contract
+		// (ADR 047) so a Tier-C operator can't browse the admin's
+		// learned defaults by guessing the query string.
+		if override := strings.TrimSpace(r.URL.Query().Get("caller")); override != "" && override != caller {
+			if c := auth.FromContext(r.Context()); c != nil && c.Has(auth.ScopeAdmin) {
+				caller = override
+			}
+		}
 		store := memoryStoreFromDeps(deps)
 		resp := memoryDefaultsResponse{
 			Scope:     "caller=" + caller,
@@ -159,6 +170,44 @@ func registerMemoryRoutes(mux *http.ServeMux, deps Deps) {
 			deleted += n
 		}
 		writeJSON(w, http.StatusOK, memoryForgetResponse{Scope: scope, Deleted: deleted})
+	})
+
+	// GET /api/v1/memory/callers — list distinct callers (namespaces)
+	// + row count per caller. Powers the Routing Memory page's
+	// caller-selector dropdown (issue #569). Admin-gated: non-admin
+	// callers get back a single-entry response with just their own
+	// caller, so a Tier-C operator can't enumerate which other
+	// callers exist on the deployment.
+	mux.HandleFunc("GET /api/v1/memory/callers", func(w http.ResponseWriter, r *http.Request) {
+		store := memoryStoreFromDeps(deps)
+		if store == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"callers": []any{}})
+			return
+		}
+		all, err := store.ListNamespaces(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "list callers: "+err.Error())
+			return
+		}
+		// Filter to admin-only if the caller isn't admin. Non-admins
+		// still see themselves with their own count (so the UI can
+		// still render the "you have N entries" badge).
+		self := callerSubject(r)
+		isAdmin := false
+		if c := auth.FromContext(r.Context()); c != nil && c.Has(auth.ScopeAdmin) {
+			isAdmin = true
+		}
+		if !isAdmin {
+			filtered := all[:0]
+			for _, nc := range all {
+				if nc.Namespace == self {
+					filtered = append(filtered, nc)
+					break
+				}
+			}
+			all = filtered
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"callers": all})
 	})
 
 	mux.HandleFunc("POST /api/v1/memory/store", func(w http.ResponseWriter, r *http.Request) {

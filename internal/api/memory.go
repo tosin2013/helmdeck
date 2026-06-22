@@ -35,12 +35,13 @@ import (
 )
 
 type memoryDefaultsResponse struct {
-	Scope     string                      `json:"scope"`
-	FetchedAt string                      `json:"fetched_at"`
-	Packs     []packs.ProjectedPack       `json:"packs"`
-	Pipelines []packs.ProjectedPipeline   `json:"pipelines"`
-	Recent    []memoryRecentAuditResponse `json:"recent"`
-	Note      string                      `json:"note,omitempty"`
+	Scope          string                      `json:"scope"`
+	FetchedAt      string                      `json:"fetched_at"`
+	Packs          []packs.ProjectedPack       `json:"packs"`
+	Pipelines      []packs.ProjectedPipeline   `json:"pipelines"`
+	CommonFindings []packs.CommonFinding       `json:"common_findings,omitempty"`
+	Recent         []memoryRecentAuditResponse `json:"recent"`
+	Note           string                      `json:"note,omitempty"`
 }
 
 // memoryRecentAuditResponse is one row in the "recent activity" list
@@ -117,6 +118,7 @@ func registerMemoryRoutes(mux *http.ServeMux, deps Deps) {
 		}
 		resp.Packs = def.Packs
 		resp.Pipelines = def.Pipelines
+		resp.CommonFindings = def.CommonFindings
 		recent, err := recentAudits(r.Context(), store, caller)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "list recent: "+err.Error())

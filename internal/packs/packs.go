@@ -560,7 +560,13 @@ func (e *Engine) Execute(ctx context.Context, pack *Pack, input json.RawMessage)
 		// ADR 047 PR #2: audit hook. Writes one row per Execute call
 		// under the caller's bare namespace (cross-session learning).
 		// Nil-store-safe inside writePackAudit; never fails the call.
-		e.writePackAudit(ctx, pack, input, outcome, e.now().Sub(start))
+		// Output is nil-safe when result is nil (handler errored) —
+		// the findings extractor handles len(output)==0 gracefully.
+		var output json.RawMessage
+		if result != nil {
+			output = result.Output
+		}
+		e.writePackAudit(ctx, pack, input, output, outcome, e.now().Sub(start))
 	}()
 
 	// Step 1: input schema. Validation runs against the raw bytes so a

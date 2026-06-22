@@ -41,9 +41,28 @@ type ProjectedPipeline struct {
 
 // Defaults is the combined projection. Empty slices when no history.
 type Defaults struct {
-	Packs     []ProjectedPack     `json:"packs"`
-	Pipelines []ProjectedPipeline `json:"pipelines"`
+	Packs          []ProjectedPack     `json:"packs"`
+	Pipelines      []ProjectedPipeline `json:"pipelines"`
+	CommonFindings []CommonFinding     `json:"common_findings,omitempty"`
 }
+
+// CommonFinding aggregates one validation-suite finding code across
+// the caller's audit history. Ranked by occurrence_count descending,
+// capped at DefaultsFindingsTopN. Issue #570.
+type CommonFinding struct {
+	Code            string `json:"code"`
+	Pack            string `json:"pack"`
+	Severity        string `json:"severity"`
+	OccurrenceCount int    `json:"occurrence_count"`
+	LastSeenUnix    int64  `json:"last_seen_unix"`
+}
+
+// DefaultsFindingsTopN caps the common_findings list returned in
+// projections. 20 is roomy enough to surface the long tail of
+// codes a Tier C model typically produces (we saw 3 distinct codes
+// in a single empirical lint run), but small enough that an LLM's
+// prompt prefix doesn't drown in them.
+const DefaultsFindingsTopN = 20
 
 // BuildDefaults reads the caller's pack_history/* + pipeline_history/*
 // entries from the store and aggregates them into the projection.
@@ -87,6 +106,7 @@ func BuildDefaults(ctx context.Context, store memory.MemoryStore, caller string)
 
 	out.Packs = projectPackEntries(packAudits)
 	out.Pipelines = projectPipelineEntries(pipeAudits)
+	out.CommonFindings = projectCommonFindings(packAudits)
 	return out, nil
 }
 
@@ -96,8 +116,9 @@ func BuildDefaults(ctx context.Context, store memory.MemoryStore, caller string)
 // store-backed case use BuildDefaults instead.
 func ProjectDefaults(packAudits []PackAudit, pipeAudits []PipelineAudit) Defaults {
 	return Defaults{
-		Packs:     projectPackEntries(packAudits),
-		Pipelines: projectPipelineEntries(pipeAudits),
+		Packs:          projectPackEntries(packAudits),
+		Pipelines:      projectPipelineEntries(pipeAudits),
+		CommonFindings: projectCommonFindings(packAudits),
 	}
 }
 
@@ -152,6 +173,79 @@ func projectPackEntries(audits []PackAudit) []ProjectedPack {
 		out = out[:DefaultsTopN]
 	}
 	return out
+}
+
+// projectCommonFindings aggregates findings across pack audits by
+// `code` — counts occurrences, tracks last_seen, attributes to the
+// pack that emitted the finding. Sorted by occurrence_count desc,
+// capped at DefaultsFindingsTopN.
+//
+// Findings come from ANY audit row regardless of outcome — unlike
+// LearnInputs (which only learns from successful runs), findings ARE
+// the failure signal we want to surface. The LLM should learn to
+// AVOID them, so failure-row findings are exactly what we need.
+//
+// Issue #570 slice 2: this is the data the compose pack's prompt
+// template will read in slice 4 to remind the LLM "you've made
+// these mistakes N times; don't repeat them."
+func projectCommonFindings(audits []PackAudit) []CommonFinding {
+	type acc struct {
+		pack     string
+		severity string
+		count    int
+		lastSeen int64
+	}
+	by := map[string]*acc{}
+	for _, a := range audits {
+		for _, f := range a.Findings {
+			if f.Code == "" {
+				continue
+			}
+			cur, ok := by[f.Code]
+			if !ok {
+				cur = &acc{}
+				by[f.Code] = cur
+			}
+			cur.count++
+			// Pack + severity from the MOST RECENT occurrence — old
+			// runs may attribute the same code to a different pack
+			// over time (rare; mostly stable).
+			if a.AtUnix >= cur.lastSeen {
+				cur.pack = a.Pack
+				cur.severity = f.Severity
+				cur.lastSeen = a.AtUnix
+			}
+		}
+	}
+	out := make([]CommonFinding, 0, len(by))
+	for code, a := range by {
+		out = append(out, CommonFinding{
+			Code:            code,
+			Pack:            a.pack,
+			Severity:        a.severity,
+			OccurrenceCount: a.count,
+			LastSeenUnix:    a.lastSeen,
+		})
+	}
+	// Sort by count desc, then code asc for stable tiebreak.
+	sortCommonFindings(out)
+	if len(out) > DefaultsFindingsTopN {
+		out = out[:DefaultsFindingsTopN]
+	}
+	return out
+}
+
+func sortCommonFindings(s []CommonFinding) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0; j-- {
+			if s[j].OccurrenceCount > s[j-1].OccurrenceCount ||
+				(s[j].OccurrenceCount == s[j-1].OccurrenceCount && s[j].Code < s[j-1].Code) {
+				s[j], s[j-1] = s[j-1], s[j]
+				continue
+			}
+			break
+		}
+	}
 }
 
 func projectPipelineEntries(audits []PipelineAudit) []ProjectedPipeline {

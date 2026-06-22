@@ -158,3 +158,84 @@ func TestExtractLearnableInputs(t *testing.T) {
 		})
 	}
 }
+
+// TestExtractFindings covers the findings extractor (#570 slice 1).
+// Recognized shapes: top-level findings array + nested lint/inspect/
+// validate wrappers.
+func TestExtractFindings(t *testing.T) {
+	cases := []struct {
+		name      string
+		in        string
+		wantCodes []string
+	}{
+		{"empty", ``, nil},
+		{"no-findings", `{"composition_html":"<html/>"}`, nil},
+		{"top-level-array",
+			`{"findings":[{"code":"media_missing_id","severity":"error"}]}`,
+			[]string{"media_missing_id"}},
+		{"lint-wrapper",
+			`{"lint":{"ok":false,"findings":[
+				{"code":"media_missing_id","severity":"error","file":"/x/index.html"},
+				{"code":"google_fonts_import","severity":"error"}
+			]}}`,
+			[]string{"media_missing_id", "google_fonts_import"}},
+		{"inspect-wrapper-uses-issues-key",
+			`{"inspect":{"issues":[
+				{"code":"text_box_overflow","severity":"error","time":12.5}
+			]}}`,
+			[]string{"text_box_overflow"}},
+		{"validate-wrapper-uses-errors-warnings",
+			`{"validate":{"errors":[
+				{"level":"error","text":"CORS blocked","code":"console_error"}
+			],"warnings":[
+				{"level":"warning","text":"deprecated","code":"console_warning"}
+			]}}`,
+			[]string{"console_error", "console_warning"}},
+		{"skip-entries-without-code",
+			`{"findings":[
+				{"code":"real_code","severity":"error"},
+				{"severity":"error"}
+			]}`,
+			[]string{"real_code"}},
+		{"bad-json-returns-nil", `{not json}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractFindings(json.RawMessage(tc.in))
+			if len(got) != len(tc.wantCodes) {
+				t.Fatalf("len = %d, want %d; got=%+v", len(got), len(tc.wantCodes), got)
+			}
+			for i, code := range tc.wantCodes {
+				if got[i].Code != code {
+					t.Errorf("entry %d code = %q, want %q", i, got[i].Code, code)
+				}
+			}
+		})
+	}
+}
+
+// TestExtractFindings_CapsAtMax — load-bearing for the row-size
+// bound. An inspect-style output with 500 issues should produce
+// exactly maxAuditFindings entries.
+func TestExtractFindings_CapsAtMax(t *testing.T) {
+	var entries []string
+	for i := 0; i < 500; i++ {
+		entries = append(entries, `{"code":"text_box_overflow","severity":"warning"}`)
+	}
+	raw := `{"inspect":{"issues":[` + joinStr(entries, ",") + `]}}`
+	got := extractFindings(json.RawMessage(raw))
+	if len(got) != maxAuditFindings {
+		t.Errorf("expected cap at %d, got %d", maxAuditFindings, len(got))
+	}
+}
+
+func joinStr(s []string, sep string) string {
+	if len(s) == 0 {
+		return ""
+	}
+	out := s[0]
+	for _, x := range s[1:] {
+		out += sep + x
+	}
+	return out
+}

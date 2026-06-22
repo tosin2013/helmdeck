@@ -70,7 +70,33 @@ type PackAudit struct {
 	AtUnix      int64             `json:"at_unix"`
 	DurationMs  int64             `json:"duration_ms,omitempty"`
 	LearnInputs map[string]string `json:"learn_inputs,omitempty"`
+	// Findings captures structured rule-violation entries the pack
+	// surfaced (e.g. hyperframes.lint's media_missing_id finding,
+	// av.validate's loudness_lufs check). Kept terse (code + severity
+	// + file) so the audit row stays bounded; full message + fix_hint
+	// live in the pack's sidecar artifact for operators who want the
+	// detail. Capped at maxAuditFindings to defend the row size.
+	// Findings-memory architecture per issue #570.
+	Findings []AuditFinding `json:"findings,omitempty"`
 }
+
+// AuditFinding is the terse per-row finding shape carried in
+// PackAudit. The plain-language `message` + `fix_hint` are NOT here
+// — those live in the pack's full output / sidecar artifact. Memory
+// rows are size-bounded; we store just enough to aggregate.
+type AuditFinding struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	File     string `json:"file,omitempty"`
+}
+
+// maxAuditFindings caps how many findings a single audit row carries.
+// Empirically a lint run produces ~3-20 findings; a full inspect/
+// validate over a 720s composition could in theory produce hundreds.
+// We cap at 50 to keep the encrypted memory row small (~10 KiB upper
+// bound) and prevent a single pack run from monopolizing the audit
+// budget.
+const maxAuditFindings = 50
 
 // PipelineAudit is one pipeline-run audit row.
 type PipelineAudit struct {
@@ -160,11 +186,103 @@ func extractLearnableInputs(input json.RawMessage) map[string]string {
 	return out
 }
 
+// extractFindings looks for structured rule-violation entries in a
+// pack's output JSON. Recognized shapes (both seen empirically in the
+// shipped validation suite):
+//
+//  1. Top-level array: `{"findings": [{"code": "...", "severity": "...", ...}]}`
+//  2. Nested object: `{"lint": {"findings": [...]}}`, `{"inspect": {"issues": [...]}}`,
+//     `{"validate": {"errors": [...], "warnings": [...]}}`
+//
+// Extraction is best-effort and silent on malformed input — the audit
+// hook never fails the pack call. Findings are capped at
+// maxAuditFindings; the rest are dropped. Verbose fields (message,
+// fixHint, snippet, selector, rect, etc.) are NOT included — the
+// full record lives in the pack's sidecar artifact for operators
+// who want detail. The audit row carries the code + severity + file
+// only, which is what aggregation downstream needs.
+//
+// Findings-memory architecture per issue #570.
+func extractFindings(output json.RawMessage) []AuditFinding {
+	if len(output) == 0 {
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(output, &obj); err != nil {
+		return nil
+	}
+	var out []AuditFinding
+	// Shape 1: top-level "findings" array
+	if raw, ok := obj["findings"]; ok {
+		out = appendFindingsFromRaw(out, raw)
+	}
+	// Shape 2: nested {wrapper: {findings/issues/errors/warnings: [...]}}
+	// Matches the lint/inspect/validate output shapes.
+	for _, wrapper := range []string{"lint", "inspect", "validate"} {
+		raw, ok := obj[wrapper]
+		if !ok {
+			continue
+		}
+		var inner map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &inner); err != nil {
+			continue
+		}
+		// inspect uses `issues`, validate uses `errors`/`warnings`,
+		// lint uses `findings` — try all four.
+		for _, field := range []string{"findings", "issues", "errors", "warnings"} {
+			if arrRaw, ok := inner[field]; ok {
+				out = appendFindingsFromRaw(out, arrRaw)
+			}
+		}
+	}
+	if len(out) > maxAuditFindings {
+		out = out[:maxAuditFindings]
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func appendFindingsFromRaw(out []AuditFinding, raw json.RawMessage) []AuditFinding {
+	var arr []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return out
+	}
+	for _, item := range arr {
+		f := AuditFinding{}
+		if c, ok := item["code"]; ok {
+			_ = json.Unmarshal(c, &f.Code)
+		}
+		if s, ok := item["severity"]; ok {
+			_ = json.Unmarshal(s, &f.Severity)
+		}
+		// validate's errors/warnings entries use `level` instead of `severity`.
+		if f.Severity == "" {
+			if l, ok := item["level"]; ok {
+				_ = json.Unmarshal(l, &f.Severity)
+			}
+		}
+		if file, ok := item["file"]; ok {
+			_ = json.Unmarshal(file, &f.File)
+		}
+		// Skip entries with no useful code — keeps the audit row tight.
+		if f.Code == "" {
+			continue
+		}
+		out = append(out, f)
+		if len(out) >= maxAuditFindings {
+			return out
+		}
+	}
+	return out
+}
+
 // writePackAudit records one pack-execution audit row under the
 // caller's bare namespace. Failure is logged-and-ignored — never
 // fails the pack call. Gated by the caller (Engine.Execute) checking
 // e.memory != nil before invoking.
-func (e *Engine) writePackAudit(ctx context.Context, pack *Pack, input json.RawMessage, outcome string, duration time.Duration) {
+func (e *Engine) writePackAudit(ctx context.Context, pack *Pack, input, output json.RawMessage, outcome string, duration time.Duration) {
 	if e.memory == nil || pack == nil || pack.NoAudit {
 		return
 	}
@@ -177,6 +295,7 @@ func (e *Engine) writePackAudit(ctx context.Context, pack *Pack, input json.RawM
 		AtUnix:      now.Unix(),
 		DurationMs:  duration.Milliseconds(),
 		LearnInputs: extractLearnableInputs(input),
+		Findings:    extractFindings(output),
 	}
 	body, err := json.Marshal(audit)
 	if err != nil {

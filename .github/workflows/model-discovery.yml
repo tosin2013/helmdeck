@@ -88,7 +88,7 @@ jobs:
     # opens an issue when an observational row goes fully dark.
     continue-on-error: ${{ matrix.tier != 'required' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -163,7 +163,7 @@ jobs:
     # table reflects reality (including the failure rows).
     if: always()
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download all per-model reports
         uses: actions/download-artifact@v8

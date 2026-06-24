@@ -18,7 +18,7 @@ jobs:
     name: vet + test + build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -60,7 +60,7 @@ jobs:
     name: golangci-lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.x'
@@ -92,7 +92,7 @@ jobs:
     name: compose config (image-mode + source-build) (#134)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # Compose `config` resolves variables and emits the merged YAML;
       # it exits non-zero on a broken file. Cheap parity check that
       # both install paths interpolate cleanly — does NOT spin up the
@@ -127,7 +127,7 @@ jobs:
     name: goreleaser config check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: '~> v2'
@@ -150,7 +150,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Run Trivy filesystem scan (CRITICAL gate)
         uses: aquasecurity/trivy-action@v0.36.0

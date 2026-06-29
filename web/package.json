@@ -12,9 +12,9 @@
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.17",
-    "@tanstack/react-query": "^5.101.0",
+    "@tanstack/react-query": "^5.101.2",
     "clsx": "^2.1.1",
-    "lucide-react": "^1.21.0",
+    "lucide-react": "^1.22.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.0",
@@ -22,14 +22,14 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.1",
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.0.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^6.0.2",
-    "autoprefixer": "^10.5.0",
-    "postcss": "^8.5.15",
+    "@vitejs/plugin-react": "^6.0.3",
+    "autoprefixer": "^10.5.2",
+    "postcss": "^8.5.16",
     "tailwindcss": "^4.0.0",
     "typescript": "^6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.1.0"
   }
 }

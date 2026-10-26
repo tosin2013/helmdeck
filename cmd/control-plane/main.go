@@ -165,6 +165,13 @@ func main() {
 		} else {
 			memStore = ms
 			logger.Info("universal memory layer enabled (SQLite, AES-256-GCM at rest)")
+			// Opt-in OWASP Agent Memory Guard screening of memory
+			// writes. Unset HELMDECK_AMG_URL = no validation. When AMG
+			// is unreachable, writes fail closed.
+			if amgURL := strings.TrimSpace(os.Getenv("HELMDECK_AMG_URL")); amgURL != "" {
+				memStore = memory.NewValidatingStore(memStore, memory.NewOWASPMemoryMiddleware(amgURL))
+				logger.Info("OWASP Agent Memory Guard enabled for memory writes", "url", amgURL)
+			}
 		}
 	}
 
